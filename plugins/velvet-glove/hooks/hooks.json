@@ -1,0 +1,38 @@
+{
+  "description": "Track changed files and run Velvet Glove before the coding agent stops.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-velvet-glove.sh\" session-start-state",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-velvet-glove.sh\" post-tool",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-velvet-glove.sh\" turn-completion",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

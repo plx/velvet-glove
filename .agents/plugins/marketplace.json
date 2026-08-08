@@ -1,0 +1,20 @@
+{
+  "name": "velvet-glove",
+  "interface": {
+    "displayName": "Velvet Glove"
+  },
+  "plugins": [
+    {
+      "name": "velvet-glove",
+      "source": {
+        "source": "local",
+        "path": "./plugins/velvet-glove"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

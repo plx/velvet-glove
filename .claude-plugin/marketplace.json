@@ -1,0 +1,13 @@
+{
+  "name": "velvet-glove",
+  "description": "Plugins for using Velvet Glove with coding agents.",
+  "owner": {
+    "name": "Velvet Glove maintainers"
+  },
+  "plugins": [
+    {
+      "name": "velvet-glove",
+      "source": "./plugins/velvet-glove"
+    }
+  ]
+}

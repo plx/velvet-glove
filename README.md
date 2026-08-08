@@ -21,6 +21,30 @@ cargo install --locked --git https://github.com/plx/velvet-glove velvet-glove
 For development, `cargo build --release -p velvet-glove` writes the executable
 to `target/release/velvet-glove`.
 
+## Agent plugins
+
+This repository is an experimental plugin marketplace for both Claude Code and
+Codex. Both marketplace entries install the shared `velvet-glove` plugin, which
+registers the deferred SessionStart, PostToolUse, and Stop workflow and includes
+the `working-with-velvet-glove` skill skeleton.
+
+The plugin does not bundle prebuilt executables yet. Install `velvet-glove` and
+Pkl 0.31.1 separately; if `velvet-glove` is not on `PATH`, its launcher warns at
+session start and otherwise exits as a protocol-safe no-op.
+
+```sh
+# Claude Code
+claude plugin marketplace add plx/velvet-glove
+claude plugin install velvet-glove@velvet-glove
+
+# Codex
+codex plugin marketplace add plx/velvet-glove
+codex plugin add velvet-glove@velvet-glove
+```
+
+Codex requires newly installed or changed command hooks to be reviewed before
+they run. Open `/hooks` in the Codex CLI after installing the plugin.
+
 ## Commands
 
 Every invocation explicitly selects its harness and event:
@@ -100,6 +124,13 @@ crates and policy are maintained here.
 ## Validate
 
 ```sh
+# Marketplace, plugin, skill, hook, and launcher checks. Requires the Claude
+# Code and Codex CLIs.
+just validate-plugins
+
+# Complete local pre-PR check, including the plugin checks above.
+just check
+
 cargo fmt --all -- --check
 cargo +1.85.0 check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

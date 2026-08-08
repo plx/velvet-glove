@@ -1,0 +1,27 @@
+{
+  "name": "velvet-glove",
+  "version": "0.1.0",
+  "description": "Track changed files and run configured formatters and linters before Codex stops.",
+  "author": {
+    "name": "Velvet Glove maintainers",
+    "url": "https://github.com/plx"
+  },
+  "homepage": "https://github.com/plx/velvet-glove",
+  "repository": "https://github.com/plx/velvet-glove",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["hooks", "formatting", "linting", "pkl"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Velvet Glove",
+    "shortDescription": "Deferred formatting and linting for coding agents",
+    "longDescription": "Track files changed during a coding session, apply configured automatic fixes at turn completion, and report issues that need manual intervention.",
+    "developerName": "Velvet Glove maintainers",
+    "category": "Developer Tools",
+    "capabilities": ["Hooks", "Formatting", "Linting"],
+    "websiteURL": "https://github.com/plx/velvet-glove",
+    "defaultPrompt": [
+      "Help me install and configure Velvet Glove for this repository.",
+      "Troubleshoot the Velvet Glove hooks in this repository."
+    ]
+  }
+}

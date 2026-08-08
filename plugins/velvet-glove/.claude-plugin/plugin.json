@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "velvet-glove",
+  "displayName": "Velvet Glove",
+  "version": "0.1.0",
+  "description": "Track changed files and run configured formatters and linters before Claude Code stops.",
+  "author": {
+    "name": "Velvet Glove maintainers"
+  },
+  "homepage": "https://github.com/plx/velvet-glove",
+  "repository": "https://github.com/plx/velvet-glove",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["hooks", "formatting", "linting", "pkl"]
+}

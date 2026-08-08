@@ -1,0 +1,4 @@
+interface:
+  display_name: "Working with Velvet Glove"
+  short_description: "Install and configure Velvet Glove hooks"
+  default_prompt: "Use $working-with-velvet-glove to set up or troubleshoot Velvet Glove."
