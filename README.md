@@ -88,8 +88,11 @@ generated example policy is
 
 The embedded catalog contains immediate phases and deferred workflows for a
 broad set of formatters and linters. See the generated
-[built-in workflow audit](docs/builtin-deferred-workflow-audit.md) and the
-[configuration reference](docs/configuration.md).
+[built-in workflow audit](docs/builtin-deferred-workflow-audit.md), the
+[validation coverage report](docs/builtin-validation-coverage.md), and the
+[configuration reference](docs/configuration.md). The coverage report keeps
+schema, rendered-command, and pinned-real-tool evidence separate; existing
+host-dependent fixtures are inventory rather than pinned evidence.
 
 ## Deferred hook suite
 
