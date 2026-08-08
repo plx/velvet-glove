@@ -24,6 +24,7 @@ proptest = "1.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+wait-timeout = "0.2"
 walkdir = "2"
 
 # Velvet Glove owns its policy loader and quality-runner implementation.
