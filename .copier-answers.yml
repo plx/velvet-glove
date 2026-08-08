@@ -14,7 +14,7 @@ harnesses:
 - claude-code
 - codex
 - antigravity
-hookkit_git_rev: 3429c4b30ae765155dbcb314161f50a51171dc23
+hookkit_git_rev: 83c49d46970602e8fb40a8afaeea521dfb7e9b61
 license: MIT OR Apache-2.0
 lowering_policy: best-effort-with-warnings
 output_mode: project

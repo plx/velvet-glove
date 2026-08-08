@@ -1,7 +1,7 @@
 // Velvet Glove quality-hook policy.
 //
-// This package-specific file is passed explicitly to the generated binary;
-// it is not part of HookKit's shared `.agent-hook-kit` discovery chain.
+// Pass this file explicitly with `--config`, or copy it to
+// `.velvet-glove/post-tool-use.pkl` and customize it as project policy.
 amends "Config.pkl"
 import "Builtins.pkl"
 

@@ -4,9 +4,6 @@ use super::cli::{Cli, Command};
 #[rustfmt::skip]
 pub fn run(cli: Cli) -> std::process::ExitCode {
     let harness = cli.harness.id();
-    let config_path = cli
-        .config
-        .unwrap_or_else(crate::scaffold::runners::default_config_path);
     let state_dir = cli
         .state_dir
         .unwrap_or_else(crate::scaffold::runners::default_state_dir);
@@ -14,9 +11,12 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
         Command::PostTool => {
             crate::scaffold::runners::run_file_activity(harness, state_dir)
         }
+        Command::PostToolImmediate => {
+            crate::scaffold::runners::run_immediate(harness, cli.config)
+        }
         Command::TurnCompletion => crate::scaffold::runners::run_turn_completion(
             harness,
-            config_path,
+            cli.config,
             state_dir,
         ),
         Command::SessionStartState => {

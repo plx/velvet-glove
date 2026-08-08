@@ -3,7 +3,7 @@ template_version: "0.1.0-preview.1"
 output_mode: "project"
 starter:
   requested: "deferred_quality"
-  customized: false
+  customized: true
 package:
   name: "velvet-glove"
   binary: "velvet-glove"
@@ -86,7 +86,7 @@ state_capabilities:
 state:
   family: "velvet-glove"
   family_version: 1
-  default_root: "$TMPDIR/agent-hook-kit/generated/velvet-glove/"
+  default_root: "$TMPDIR/velvet-glove/state/"
 lowering_policy: "best-effort-with-warnings"
 
 runner:
@@ -103,5 +103,10 @@ dependency:
   source: "git"
 
   repository: "https://github.com/plx/agent-hook-kit"
-  revision: "3429c4b30ae765155dbcb314161f50a51171dc23"
+  revision: "83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+standalone_migration:
+  local_product_crates:
+    - "hookkit-pkl-config"
+    - "hookkit-tool-runner"
+  unified_immediate_command: "post-tool-immediate"
 generated_ci: ".github/workflows/velvet-glove-hook-ci.yml"

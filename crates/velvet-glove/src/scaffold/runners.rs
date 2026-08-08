@@ -4,22 +4,9 @@ use hookkit_core::HarnessId;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// Repository-relative path to this package's generated quality policy.
-///
-/// Pass this exact path from the hook registration command. Keeping it
-/// explicit prevents this package from taking ownership of a repository's
-/// shared `.agent-hook-kit` discovery configuration.
-#[rustfmt::skip]
-pub fn default_config_path() -> PathBuf {
-    PathBuf::from("crates/velvet-glove/config/velvet-glove.pkl")
-}
-
 /// Package-specific state root shared by the lifecycle producer and consumer.
 pub fn default_state_dir() -> PathBuf {
-    std::env::temp_dir()
-        .join("agent-hook-kit")
-        .join("generated")
-        .join("velvet-glove")
+    std::env::temp_dir().join("velvet-glove").join("state")
 }
 
 /// Record precise session metadata at Claude/Codex SessionStart.
@@ -41,15 +28,26 @@ pub fn run_file_activity(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
     })
 }
 
+/// Run configured quality workflows immediately for one PostToolUse event.
+///
+/// A missing `config_path` deliberately selects Velvet Glove's layered
+/// discovery rooted at the workspace reported by the native hook event.
+pub fn run_immediate(harness: HarnessId, config_path: Option<PathBuf>) -> ExitCode {
+    hookkit_tool_runner::run_runner(hookkit_tool_runner::Cli {
+        harness,
+        config_path,
+    })
+}
+
 /// Reconcile accumulated file activity and run the deferred quality workflows.
 pub fn run_turn_completion(
     harness: HarnessId,
-    config_path: PathBuf,
+    config_path: Option<PathBuf>,
     state_dir: PathBuf,
 ) -> ExitCode {
     hookkit_tool_runner::run_turn_completion_runner(hookkit_tool_runner::TurnCompletionCli {
         harness,
-        config_path: Some(config_path),
+        config_path,
         state_dir: Some(state_dir),
     })
 }

@@ -9,16 +9,17 @@ use std::path::PathBuf;
     about = "Deferred linting and formatting for coding agents"
 )]
 pub struct Cli {
-    /// Harness whose native contract should parse and emit this invocation.
+    /// Coding-agent harness that emitted this native hook event.
     #[arg(long, value_enum)]
     pub harness: Harness,
 
-    /// Package-owned Pkl policy passed explicitly to the HookKit runner.
+    /// Explicit Pkl policy. When omitted, Velvet Glove uses layered
+    /// user/project/local discovery rooted at the hook event's workspace.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
 
-    /// Shared package-specific HookKit state root override.
+    /// Shared Velvet Glove state root override.
     #[arg(long, value_name = "PATH")]
     pub state_dir: Option<PathBuf>,
 
@@ -38,6 +39,23 @@ impl Cli {
 
     /// Validate command/harness compatibility for programmatic callers.
     pub fn validate(self) -> Result<Self, clap::Error> {
+        if self.config.is_some()
+            && matches!(
+                &self.command,
+                Command::PostTool | Command::SessionStartState
+            )
+        {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--config is only valid with post-tool-immediate or turn-completion",
+            ));
+        }
+        if self.state_dir.is_some() && matches!(&self.command, Command::PostToolImmediate) {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--state-dir is not used by post-tool-immediate",
+            ));
+        }
         if matches!(self.harness, Harness::Antigravity)
             && matches!(&self.command, Command::SessionStartState)
         {
@@ -53,10 +71,13 @@ impl Cli {
 /// Selected hook commands. Names remain stable when more hooks are added.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Execute the post tool aligned family.
+    /// Record post-tool file activity for deferred turn-completion checks.
     #[command(name = "post-tool")]
     PostTool,
-    /// Execute the turn completion aligned family.
+    /// Run configured checks immediately for files changed by this tool call.
+    #[command(name = "post-tool-immediate")]
+    PostToolImmediate,
+    /// Reconcile recorded activity and run deferred checks at turn completion.
     #[command(name = "turn-completion")]
     TurnCompletion,
     /// Record an exact Claude Code or Codex session-start lower bound.

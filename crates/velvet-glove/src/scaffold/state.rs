@@ -22,7 +22,7 @@ pub const PACKAGE_STATE_DIRECTORY: &str = "velvet-glove";
 /// Resolve the common state root used by every generated subcommand.
 ///
 /// A `--state-dir` value is passed as `override_dir`. Without one, state is
-/// isolated beneath `$TMPDIR/agent-hook-kit/generated/velvet-glove/`.
+/// isolated beneath `$TMPDIR/velvet-glove/state/`.
 pub fn resolve_state_root(override_dir: Option<&Path>) -> StateRoot {
     let path = override_dir.map_or_else(default_state_directory, Path::to_path_buf);
     StateRoot::new(path)
@@ -43,9 +43,8 @@ pub fn state_family(state: &SessionState) -> Result<StateFamily> {
 
 fn default_state_directory() -> PathBuf {
     std::env::temp_dir()
-        .join("agent-hook-kit")
-        .join("generated")
         .join(PACKAGE_STATE_DIRECTORY)
+        .join("state")
 }
 
 /// Open the package-isolated pending file-activity and reconciliation journals.

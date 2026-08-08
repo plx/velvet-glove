@@ -2,8 +2,9 @@
 
 Deferred linting and formatting for coding agents.
 
-`velvet-glove` is a Rust 2024 hook executable generated from
-`agent-hook-kit`. It always takes an explicit event subcommand.
+`velvet-glove` is a Rust 2024 hook executable bootstrapped from
+[`agent-hook-kit`](https://github.com/plx/agent-hook-kit). It always takes an
+explicit event subcommand.
 Cross-harness commands also require an explicit `--harness` value.
 It never guesses the hook from input JSON.
 
@@ -12,11 +13,15 @@ It never guesses the hook from input JSON.
 ```sh
 velvet-glove \
   --harness <claude|codex|antigravity> \
+  [--config <config-path>] \
+  post-tool-immediate
+velvet-glove \
+  --harness <claude|codex|antigravity> \
   --state-dir <state-directory> \
   post-tool
 velvet-glove \
   --harness <claude|codex|antigravity> \
-  --config <absolute-config-path> \
+  [--config <config-path>] \
   --state-dir <state-directory> \
   turn-completion
 
@@ -30,19 +35,21 @@ Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
 does not edit live Claude Code, Codex, or Antigravity configuration.
 
-The runner requires `pkl` 0.31.1. The generated package
-owns this policy:
+The runner requires `pkl` 0.31.1. Pass `--config` to bypass discovery and use
+one explicit policy. When it is omitted, Velvet Glove discovers canonical
+`.velvet-glove/post-tool-use.pkl` and `post-tool-use.local.pkl` files around
+the event workspace; legacy `.agent-hook-kit` files are read first at lower
+precedence. The generated package includes this example policy:
 
 `crates/velvet-glove/config/velvet-glove.pkl`
 
-Hook processes do not necessarily start in this repository, so use an absolute
-policy path in live registration while retaining this package-owned file. The
-concrete tools and lowering policy are recorded in both the Pkl file and
-`hookkit-template.manifest.yml`.
+Hook processes do not necessarily start in this repository. Use an absolute
+path when registering this package-owned example explicitly, or copy an
+adapted policy to the target repository's `.velvet-glove` directory.
 
 All selected state helpers share this package-specific default root:
 
-`$TMPDIR/agent-hook-kit/generated/velvet-glove/`
+`$TMPDIR/velvet-glove/state/`
 
 Use `--state-dir` to override it. Every coordinated producer and consumer must
 receive the same override. Persisted family/entity versions are visible in
@@ -55,19 +62,18 @@ any of the selected claims, sets, queues, artifacts, or aggregate helpers. The
 stable argument keeps handler edits compatible when state capabilities are
 added later.
 
-Library-owned runner commands have no editable event-handler seam. When a
+Runner commands have no editable event-handler seam. When a
 state capability needs custom application logic beyond the runner's coordinated
 metadata, file-activity, or artifact work, the questionnaire requires another
 selected event with a user-owned handler.
 
 ## Edit policy safely
 
-Files under `src/scaffold/` and the top-level modules in `src/hooks/` are
-Copier-owned wiring. Customize the per-event and per-archetype files in the
-`src/hooks/aligned/`, `native/`, `pre_tool/`, and `state_types/` directories;
-those seams are preserved on recopy, including when selections change. Files
-left behind after deselection are harmless and become active again if that
-choice is reselected.
+This wrapper began as HookKit's `deferred_quality` Copier starter, but the
+migration deliberately changed the generated CLI, dispatch, and runner
+adapters to add immediate execution and discovery. The two local product crates
+are not Copier-managed. Run Copier updates on a branch and review them as a
+three-way migration; a blind recopy can remove these intentional changes.
 
 Generated files under `config/` are also preserved because they are expected
 to become project policy. If you change runner archetype, quality-tool, or
@@ -82,31 +88,23 @@ through the generated adapter instead.
 Run these commands from the generated repository root:
 
 ```sh
-cargo fmt \
-  --manifest-path crates/velvet-glove/Cargo.toml \
-  --all -- --check
-cargo +1.85.0 check \
-  --manifest-path crates/velvet-glove/Cargo.toml \
-  --all-targets
-cargo clippy \
-  --manifest-path crates/velvet-glove/Cargo.toml \
-  --all-targets --all-features -- -D warnings
-cargo test \
-  --manifest-path crates/velvet-glove/Cargo.toml \
-  --all-targets
+cargo fmt --all -- --check
+cargo +1.85.0 check --workspace --all-targets --locked
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets
+
+# Opt-in lane that executes controlled real formatter/linter versions.
+cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
 
-Update this generated project with:
+To compare against a newer template without immediately overwriting the tree:
 
 ```sh
-uvx --from copier==9.17.1 copier update .
 uvx --from copier==9.17.1 copier check-update --quiet .
-uvx --from copier==9.17.1 copier recopy .
 ```
 
-Use `update` for normal smart diffing. `recopy` deliberately regenerates the
-managed tree from recorded answers and is intended for explicit answer/shape
-changes; protected handler seams remain untouched.
+If an update is desired, use Copier's smart diff on a disposable branch and
+manually preserve Velvet Glove's unified-command and local-crate changes.
 
 After the first successful check, commit the repository's resulting
 `Cargo.lock` so the selected HookKit source and transitive dependencies remain
@@ -117,4 +115,11 @@ Changing them moves owned files, answers/workflow names, registration commands,
 or state namespaces; perform that as an explicit migration or a fresh copy,
 not as an ordinary interactive update.
 
-All HookKit crates are pinned to commit `3429c4b30ae765155dbcb314161f50a51171dc23`.
+All HookKit framework crates are pinned to commit
+`83c49d46970602e8fb40a8afaeea521dfb7e9b61`.
+
+The default state namespace intentionally does not import pending generations
+from the old HookKit example. Finish or restart active sessions before changing
+registrations. See the repository-level
+[`docs/migrating-from-agent-hook-kit.md`](../../docs/migrating-from-agent-hook-kit.md)
+for command, config, and state migration details.
