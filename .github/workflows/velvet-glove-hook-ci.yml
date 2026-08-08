@@ -86,3 +86,20 @@ jobs:
             echo "::error file=THIRD_PARTY_LICENSES.md::Out of date. Run scripts/regen-licenses.sh and commit the result." >&2
             exit 1
           fi
+
+  plugins:
+    name: Agent plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install agent plugin validators
+        run: npm install --global @anthropic-ai/claude-code@2.1.220 @openai/codex@0.147.0
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.51.0
+      - name: Validate agent marketplaces and plugins
+        run: just validate-plugins
