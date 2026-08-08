@@ -1,0 +1,27 @@
+// Velvet Glove quality-hook policy.
+//
+// Pass this file explicitly with `--config`, or copy it to
+// `.velvet-glove/post-tool-use.pkl` and customize it as project policy.
+amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {
+  loweringPolicy = "best-effort-with-warnings"
+  // Timestamp reconciliation supplies a best-effort lower bound when the
+  // harness has no exact SessionStart event (currently Antigravity).
+  fileActivity {
+    filesystemMtime = true
+    vcs = "disabled"
+    coverageGapPolicy = "best-effort"
+  }
+}
+
+tools {
+  ["cargoFmt"] = Builtins.cargoFmt
+  ["cargoClippy"] = Builtins.cargoClippy
+}
+
+run = new Listing {
+  "cargoFmt"
+  "cargoClippy"
+}

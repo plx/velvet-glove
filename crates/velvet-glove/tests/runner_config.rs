@@ -1,0 +1,20 @@
+//! The generated runner policy is concrete, nonempty, and evaluable.
+
+#[test]
+fn generated_runner_policy_evaluates_with_selected_tools() {
+    let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config_path = crate_root.join("config/velvet-glove.pkl");
+    let loaded = hookkit_pkl_config::load_explicit(&config_path, crate_root)
+        .expect("generated Pkl policy must evaluate with HookKit's embedded modules");
+
+    assert!(
+        !loaded.config.run.is_empty(),
+        "runner policy must select at least one tool",
+    );
+    for tool in &loaded.config.run {
+        assert!(
+            loaded.config.tools.contains_key(tool),
+            "run-list tool {tool} must have a concrete specification",
+        );
+    }
+}

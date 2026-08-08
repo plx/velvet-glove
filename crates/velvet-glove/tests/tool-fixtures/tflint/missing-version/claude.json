@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"tflint reports issues; inspect diagnostics at <workspace>/.velvet-glove/tflint-agent-hook/test-session_tflint-tool-issues.txt.","hookEventName":"PostToolUse"}}
