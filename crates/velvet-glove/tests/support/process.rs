@@ -133,6 +133,7 @@ fn terminate(child: &mut std::process::Child) {
     {
         let _ = Command::new("/bin/kill")
             .arg("-KILL")
+            .arg("--")
             .arg(format!("-{}", child.id()))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
