@@ -4,6 +4,13 @@ Each fixture exercises one builtin tool against a small on-disk example and
 verifies the runner's harness-specific output. Fixtures are auto-discovered by
 the `tool_fixtures.rs` integration test.
 
+Every `<tool-id>/<example-name>` directory is also declared in the catalog
+[`manifest.json`](../../../hookkit-pkl-config/validation/manifest.json).
+A nonignored manifest test rejects undeclared or missing fixture tools and
+cases. These fixtures remain host-`PATH` dependent, so their presence is
+inventory only: it does not count as rendered-command or pinned-real-tool
+evidence in the generated validation coverage report.
+
 ## Directory layout
 
 ```
@@ -61,3 +68,7 @@ directly without normalization.
 - If `pkl` isn't on PATH, the whole test prints "skipping" and returns.
 - If a tool's executable isn't on PATH, all that tool's fixtures are skipped.
 - Fixtures referencing a tool with no builtin spec are skipped with a notice.
+
+Those skips describe only this legacy opt-in lane. The validation manifest
+records unmet supported-catalog requirements as explicit gaps; a skip here
+never promotes a coverage tier to covered.

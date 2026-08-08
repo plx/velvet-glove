@@ -5,7 +5,7 @@
 //! `ToolSpec` family in `hookkit-tool-runner` so the downstream conversion is
 //! mechanical.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Root configuration loaded from one or more Pkl files.
@@ -583,7 +583,7 @@ impl Default for WorkflowCommand {
 }
 
 /// Inputs whose changes invalidate a prior workflow check.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckScope {
     /// Only changes to the workflow's target files invalidate its check.
@@ -594,7 +594,7 @@ pub enum CheckScope {
 }
 
 /// How candidates are divided into workflow invocations.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InvocationGranularity {
     /// Invoke once for each selected file.
@@ -651,7 +651,7 @@ impl Default for Phase {
 }
 
 /// Semantic execution mode of a tool phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PhaseMode {
     /// Rewrite inputs into canonical formatting.
@@ -665,7 +665,7 @@ pub enum PhaseMode {
 }
 
 /// A single argv element: either a literal string or a placeholder token.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ArgvElement {
     /// A literal argument.
@@ -676,7 +676,7 @@ pub enum ArgvElement {
 
 /// Placeholder tokens for argv expansion. The Pkl side emits these as
 /// `{"type": "Files"}` etc.; we tag on `type` to keep the wire shape readable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ArgToken {
     /// Files selected for the current job.
@@ -696,7 +696,7 @@ pub enum ArgToken {
 }
 
 /// Classification table for tool process exit codes.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExitCodes {
     /// Exit codes indicating a clean result.
@@ -721,7 +721,7 @@ impl Default for ExitCodes {
 }
 
 /// Classification applied to an exit code absent from all configured lists.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UnexpectedExitPolicy {
     /// Treat the result as an execution failure.
@@ -732,7 +732,7 @@ pub enum UnexpectedExitPolicy {
 }
 
 /// Declared file-mutation scope of a phase.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WriteBehavior {
     /// The phase is not expected to modify files.

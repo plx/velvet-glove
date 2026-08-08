@@ -82,7 +82,12 @@ Ruff, Prettier, ESLint, Biome, Cargo fmt, and Cargo Clippy. Each enabled entry
 either has explicit deferred workflows or a validated compatibility
 translation. The generated [built-in workflow audit](builtin-deferred-workflow-audit.md)
 is the authoritative inventory of commands, scopes, invocation granularity,
-and known limitations.
+and known limitations. The separate
+[built-in validation contract](builtin-validation-contract.md) defines the
+minimum evidence required for each capability, and its generated
+[coverage report](builtin-validation-coverage.md) records schema,
+rendered-command, and pinned-real-tool claims without treating missing
+coverage as a successful skip.
 
 ## Deferred reports
 

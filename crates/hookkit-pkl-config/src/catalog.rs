@@ -33,21 +33,22 @@ impl std::error::Error for CatalogValidationError {}
 /// Legacy `phases` remain valid when their compatibility translation pairs
 /// each mutator with a read-only verifier. A mutating-only legacy entry must
 /// carry a nonempty `unverifiedRemedyFallback` explanation; the shipped
-/// catalog intentionally contains no such fallback.
+/// catalog intentionally contains no such fallback. Identity checks apply to
+/// every entry, including disabled drafts.
 pub fn validate_builtin_catalog(
     specs: &BTreeMap<String, ToolSpec>,
 ) -> Result<(), CatalogValidationError> {
     let mut errors = Vec::new();
     let mut tool_ids = BTreeSet::new();
     for (key, spec) in specs {
-        if !spec.enabled {
-            continue;
-        }
         let prefix = format!("{key} ({})", spec.id);
         if spec.id.trim().is_empty() {
             errors.push(format!("{key}: tool id is empty"));
         } else if !tool_ids.insert(spec.id.as_str()) {
             errors.push(format!("{prefix}: duplicate tool id"));
+        }
+        if !spec.enabled {
+            continue;
         }
         if spec.executable.trim().is_empty() {
             errors.push(format!("{prefix}: executable is empty"));
@@ -510,4 +511,55 @@ fn nonempty_or_dash(values: Vec<String>) -> Vec<String> {
 
 fn cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enabled_checker(id: &str) -> ToolSpec {
+        ToolSpec {
+            id: id.into(),
+            display_name: "Checker".into(),
+            executable: "checker".into(),
+            phases: BTreeMap::from([("verify".into(), Phase::default())]),
+            phase_order: vec!["verify".into()],
+            ..ToolSpec::default()
+        }
+    }
+
+    #[test]
+    fn disabled_specs_still_require_nonempty_ids() {
+        let specs = BTreeMap::from([(
+            "disabled".into(),
+            ToolSpec {
+                id: "  ".into(),
+                enabled: false,
+                ..ToolSpec::default()
+            },
+        )]);
+
+        let error = validate_builtin_catalog(&specs).expect_err("empty id must fail");
+
+        assert_eq!(error.errors, ["disabled: tool id is empty"]);
+    }
+
+    #[test]
+    fn duplicate_ids_are_rejected_across_enabled_and_disabled_specs() {
+        let specs = BTreeMap::from([
+            ("enabled".into(), enabled_checker("shared")),
+            (
+                "disabled".into(),
+                ToolSpec {
+                    id: "shared".into(),
+                    enabled: false,
+                    ..ToolSpec::default()
+                },
+            ),
+        ]);
+
+        let error = validate_builtin_catalog(&specs).expect_err("duplicate id must fail");
+
+        assert_eq!(error.errors, ["enabled (shared): duplicate tool id"]);
+    }
 }
