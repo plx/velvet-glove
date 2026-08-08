@@ -52,10 +52,6 @@ const DEFAULT_ISSUES_AGENT: &str =
     "{{ tool }} reports issues; inspect diagnostics at {{ diagnostics_path }}.";
 const DEFAULT_ISSUES_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}.";
 
-const BINARY_NAME: &str = "post-tool-use-agent-hook";
-const TURN_COMPLETION_BINARY_NAME: &str = "turn-completion-agent-hook";
-const SESSION_START_BINARY_NAME: &str = "session-start-state-agent-hook";
-const FILE_ACTIVITY_BINARY_NAME: &str = "file-activity-agent-hook";
 const BATCHED_TOOLS_FAMILY: &str = "velvet-glove.batched-tools";
 
 // ----------------------------------------------------------------------------
@@ -433,7 +429,7 @@ impl Default for ToolMessages {
 // Runner entry points
 // ----------------------------------------------------------------------------
 
-/// CLI options parsed from process args.
+/// Execution options supplied by the Velvet Glove CLI.
 #[derive(Debug, Clone)]
 pub struct Cli {
     /// Harness whose native post-tool event is read from standard input.
@@ -442,7 +438,7 @@ pub struct Cli {
     pub config_path: Option<PathBuf>,
 }
 
-/// CLI options for the stop-time batch runner.
+/// Execution options for the stop-time batch runner.
 #[derive(Debug, Clone)]
 pub struct TurnCompletionCli {
     /// Harness whose native turn-completion event is read from standard input.
@@ -453,7 +449,7 @@ pub struct TurnCompletionCli {
     pub state_dir: Option<PathBuf>,
 }
 
-/// CLI options for the library-owned precise session-start observer.
+/// Execution options for the library-owned precise session-start observer.
 #[derive(Debug, Clone)]
 pub struct SessionStartCli {
     /// Harness whose native session-start event is read from standard input.
@@ -462,286 +458,13 @@ pub struct SessionStartCli {
     pub state_dir: Option<PathBuf>,
 }
 
-/// CLI options for the quiet post-tool file-activity observer.
+/// Execution options for the quiet post-tool file-activity observer.
 #[derive(Debug, Clone)]
 pub struct FileActivityCli {
     /// Harness whose native post-tool event is read from standard input.
     pub harness: HarnessId,
     /// Session-state directory override.
     pub state_dir: Option<PathBuf>,
-}
-
-/// Parse a supported PostToolUse harness and optional shared state root.
-/// `--harness=claude|codex|antigravity` remains a compatibility alias for the
-/// former example binary.
-#[allow(clippy::result_unit_err)]
-pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
-    let mut harness = None;
-    let mut state_dir = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
-            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
-            "--harness" => {
-                let Some(value) = args.next() else {
-                    eprintln!("{}", file_activity_usage());
-                    return Err(());
-                };
-                harness = Some(set_harness(harness, post_tool_harness(&value)?)?);
-            }
-            "--state-dir" => {
-                let Some(path) = args.next() else {
-                    eprintln!("{}", file_activity_usage());
-                    return Err(());
-                };
-                state_dir = Some(PathBuf::from(path));
-            }
-            "--help" | "-h" => {
-                eprintln!("{}", file_activity_usage());
-                return Err(());
-            }
-            _ if arg.starts_with("--harness=") => {
-                harness = Some(set_harness(
-                    harness,
-                    post_tool_harness(arg.trim_start_matches("--harness="))?,
-                )?);
-            }
-            _ if arg.starts_with("--state-dir=") => {
-                state_dir = Some(PathBuf::from(arg.trim_start_matches("--state-dir=")));
-            }
-            _ => {
-                eprintln!("{}", file_activity_usage());
-                return Err(());
-            }
-        }
-    }
-    let Some(harness) = harness else {
-        eprintln!("{}", file_activity_usage());
-        return Err(());
-    };
-    Ok(FileActivityCli { harness, state_dir })
-}
-
-/// Parse `--claude|--codex|--antigravity [--config PATH]` from `std::env::args`.
-#[allow(clippy::result_unit_err)]
-pub fn parse_args() -> Result<Cli, ()> {
-    let mut harness = None;
-    let mut config_path = None;
-    let mut args = std::env::args().skip(1);
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
-            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
-            "--harness" => {
-                let Some(value) = args.next() else {
-                    eprintln!("{}", usage());
-                    return Err(());
-                };
-                harness = Some(set_harness(harness, post_tool_harness(&value)?)?);
-            }
-            "--config" => {
-                let Some(path) = args.next() else {
-                    eprintln!("{}", usage());
-                    return Err(());
-                };
-                config_path = Some(PathBuf::from(path));
-            }
-            "--help" | "-h" => {
-                eprintln!("{}", usage());
-                return Err(());
-            }
-            _ if arg.starts_with("--harness=") => {
-                harness = Some(set_harness(
-                    harness,
-                    post_tool_harness(arg.trim_start_matches("--harness="))?,
-                )?);
-            }
-            _ if arg.starts_with("--config=") => {
-                config_path = Some(PathBuf::from(arg.trim_start_matches("--config=")));
-            }
-            _ => {
-                eprintln!("{}", usage());
-                return Err(());
-            }
-        }
-    }
-
-    let Some(harness) = harness else {
-        eprintln!("{}", usage());
-        return Err(());
-    };
-
-    Ok(Cli {
-        harness,
-        config_path,
-    })
-}
-
-/// Parse the aligned turn-completion runner's harness, config, and state root.
-#[allow(clippy::result_unit_err)]
-pub fn parse_turn_completion_args() -> Result<TurnCompletionCli, ()> {
-    let mut harness = None;
-    let mut config_path = None;
-    let mut state_dir = None;
-    let mut args = std::env::args().skip(1);
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
-            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
-            "--harness" => {
-                let Some(value) = args.next() else {
-                    eprintln!("{}", turn_completion_usage());
-                    return Err(());
-                };
-                harness = Some(set_harness(harness, turn_completion_harness(&value)?)?);
-            }
-            "--config" => {
-                let Some(path) = args.next() else {
-                    eprintln!("{}", turn_completion_usage());
-                    return Err(());
-                };
-                config_path = Some(PathBuf::from(path));
-            }
-            "--state-dir" => {
-                let Some(path) = args.next() else {
-                    eprintln!("{}", turn_completion_usage());
-                    return Err(());
-                };
-                state_dir = Some(PathBuf::from(path));
-            }
-            "--help" | "-h" => {
-                eprintln!("{}", turn_completion_usage());
-                return Err(());
-            }
-            _ if arg.starts_with("--harness=") => {
-                harness = Some(set_harness(
-                    harness,
-                    turn_completion_harness(arg.trim_start_matches("--harness="))?,
-                )?);
-            }
-            _ if arg.starts_with("--config=") => {
-                config_path = Some(PathBuf::from(arg.trim_start_matches("--config=")));
-            }
-            _ if arg.starts_with("--state-dir=") => {
-                state_dir = Some(PathBuf::from(arg.trim_start_matches("--state-dir=")));
-            }
-            _ => {
-                eprintln!("{}", turn_completion_usage());
-                return Err(());
-            }
-        }
-    }
-
-    let Some(harness) = harness else {
-        eprintln!("{}", turn_completion_usage());
-        return Err(());
-    };
-    Ok(TurnCompletionCli {
-        harness,
-        config_path,
-        state_dir,
-    })
-}
-
-/// Parse a supported native SessionStart harness and optional state root.
-#[allow(clippy::result_unit_err)]
-pub fn parse_session_start_args() -> Result<SessionStartCli, ()> {
-    let mut harness = None;
-    let mut state_dir = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
-            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--harness" => {
-                let Some(value) = args.next() else {
-                    eprintln!("{}", session_start_usage());
-                    return Err(());
-                };
-                harness = Some(set_harness(harness, post_tool_harness(&value)?)?);
-            }
-            "--state-dir" => {
-                let Some(path) = args.next() else {
-                    eprintln!("{}", session_start_usage());
-                    return Err(());
-                };
-                state_dir = Some(PathBuf::from(path));
-            }
-            "--help" | "-h" => {
-                eprintln!("{}", session_start_usage());
-                return Err(());
-            }
-            _ if arg.starts_with("--harness=") => {
-                harness = Some(set_harness(
-                    harness,
-                    post_tool_harness(arg.trim_start_matches("--harness="))?,
-                )?);
-            }
-            _ if arg.starts_with("--state-dir=") => {
-                state_dir = Some(PathBuf::from(arg.trim_start_matches("--state-dir=")));
-            }
-            _ => {
-                eprintln!("{}", session_start_usage());
-                return Err(());
-            }
-        }
-    }
-    let Some(harness) = harness else {
-        eprintln!("{}", session_start_usage());
-        return Err(());
-    };
-    Ok(SessionStartCli { harness, state_dir })
-}
-
-fn set_harness(current: Option<HarnessId>, next: HarnessId) -> Result<HarnessId, ()> {
-    if current.is_some() {
-        eprintln!("{}", usage());
-        return Err(());
-    }
-    Ok(next)
-}
-
-fn post_tool_harness(value: &str) -> Result<HarnessId, ()> {
-    match value {
-        "claude" | "claude-code" => Ok(HarnessId::CLAUDE_CODE),
-        "codex" => Ok(HarnessId::CODEX),
-        "antigravity" => Ok(HarnessId::ANTIGRAVITY),
-        _ => Err(()),
-    }
-}
-
-fn turn_completion_harness(value: &str) -> Result<HarnessId, ()> {
-    post_tool_harness(value)
-}
-
-fn usage() -> String {
-    format!(
-        "Usage: {BINARY_NAME} --claude|--codex|--antigravity [--config PATH]\n       {BINARY_NAME} --harness=claude|codex|antigravity [--config PATH]"
-    )
-}
-
-fn file_activity_usage() -> String {
-    format!(
-        "Usage: {FILE_ACTIVITY_BINARY_NAME} --claude|--codex|--antigravity [--state-dir PATH]\n       {FILE_ACTIVITY_BINARY_NAME} --harness=claude|codex|antigravity [--state-dir PATH]"
-    )
-}
-
-fn session_start_usage() -> String {
-    format!(
-        "Usage: {SESSION_START_BINARY_NAME} --claude|--codex [--state-dir PATH]\n       {SESSION_START_BINARY_NAME} --harness=claude|codex [--state-dir PATH]"
-    )
-}
-
-fn turn_completion_usage() -> String {
-    format!(
-        "Usage: {TURN_COMPLETION_BINARY_NAME} --claude|--codex|--antigravity [--config PATH] [--state-dir PATH]\n       {TURN_COMPLETION_BINARY_NAME} --harness=claude|codex|antigravity [--config PATH] [--state-dir PATH]"
-    )
 }
 
 // ----------------------------------------------------------------------------

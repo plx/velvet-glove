@@ -85,3 +85,4 @@ jobs:
           if ! git diff --exit-code -- THIRD_PARTY_LICENSES.md; then
             echo "::error file=THIRD_PARTY_LICENSES.md::Out of date. Run scripts/regen-licenses.sh and commit the result." >&2
             exit 1
+          fi
