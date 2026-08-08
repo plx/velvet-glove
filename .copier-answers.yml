@@ -1,0 +1,33 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY.
+_commit: 83c49d4
+_src_path: https://github.com/plx/agent-hook-kit.git
+aligned_hooks:
+- post_tool
+- turn_completion
+binary_name: velvet-glove
+crate_path: crates/velvet-glove
+dependency_source: git
+description: Deferred linting and formatting for coding agents
+github_actions: true
+harness_mode: cross
+harnesses:
+- claude-code
+- codex
+- antigravity
+hookkit_git_rev: 3429c4b30ae765155dbcb314161f50a51171dc23
+license: MIT OR Apache-2.0
+lowering_policy: best-effort-with-warnings
+output_mode: project
+package_name: velvet-glove
+project_name: Velvet Glove
+quality_config_path: crates/velvet-glove/config/velvet-glove.pkl
+quality_profile: rust
+quality_tools:
+- cargoFmt
+- cargoClippy
+reconciliation_posture: best-effort
+starter: deferred_quality
+state_capabilities:
+- session_metadata
+- run_artifacts
+- file_activity

@@ -1,0 +1,107 @@
+# Resolved generation choices. Copier's answers file remains authoritative.
+template_version: "0.1.0-preview.1"
+output_mode: "project"
+starter:
+  requested: "deferred_quality"
+  customized: false
+package:
+  name: "velvet-glove"
+  binary: "velvet-glove"
+  crate_path: "crates/velvet-glove"
+harness_mode: "cross"
+harnesses:
+
+  - "claude-code"
+
+  - "codex"
+
+  - "antigravity"
+
+requested_hooks:
+
+  - "post_tool"
+
+  - "turn_completion"
+
+effective_hooks:
+
+  - "post_tool"
+
+  - "turn_completion"
+
+  - "session_start_state"
+
+available_aligned_families:
+
+  - "pre_tool"
+
+  - "post_tool"
+
+  - "turn_completion"
+
+portable_output_floors:
+
+  post_tool: "Exact native output arm selected by the handler; the universal safe response is no-op."
+
+  turn_completion: "Allow completion or continue execution with one portable reason; message audiences remain native-specific."
+
+fidelity:
+
+  claude-code:
+    native_session_boundary: "exact"
+    post_tool_input:
+      originating_call_arguments: true
+      tool_result: true
+    post_tool_output_messages: "separate-user-and-agent"
+    turn_completion_output_messages: "separate-user-and-agent"
+
+    file_activity_lower_bound: "exact-session-start"
+
+  codex:
+    native_session_boundary: "exact"
+    post_tool_input:
+      originating_call_arguments: true
+      tool_result: true
+    post_tool_output_messages: "separate-user-and-agent"
+    turn_completion_output_messages: "separate-user-and-agent"
+
+    file_activity_lower_bound: "exact-session-start"
+
+  antigravity:
+    native_session_boundary: "inferred"
+    post_tool_input:
+      originating_call_arguments: true
+      tool_result: false
+    post_tool_output_messages: "none"
+    turn_completion_output_messages: "single-reason"
+
+    file_activity_lower_bound: "inferred-first-observation"
+state_capabilities:
+
+  - "session_metadata"
+
+  - "run_artifacts"
+
+  - "file_activity"
+state:
+  family: "velvet-glove"
+  family_version: 1
+  default_root: "$TMPDIR/agent-hook-kit/generated/velvet-glove/"
+lowering_policy: "best-effort-with-warnings"
+
+runner:
+  config_path: "crates/velvet-glove/config/velvet-glove.pkl"
+  profile: "rust"
+  tools:
+
+    - "cargoFmt"
+
+    - "cargoClippy"
+
+  reconciliation_posture: "best-effort"
+dependency:
+  source: "git"
+
+  repository: "https://github.com/plx/agent-hook-kit"
+  revision: "3429c4b30ae765155dbcb314161f50a51171dc23"
+generated_ci: ".github/workflows/velvet-glove-hook-ci.yml"

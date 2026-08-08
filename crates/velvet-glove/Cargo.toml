@@ -1,0 +1,28 @@
+[package]
+name = "velvet-glove"
+version = "0.1.0"
+edition = "2024"
+description = "Deferred linting and formatting for coding agents"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85.0"
+publish = false
+
+[[bin]]
+name = "velvet-glove"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+hookkit-core = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }
+hookkit-runtime = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }
+hookkit-session-state = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }
+hookkit-file-activity = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }
+hookkit-tool-runner = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }
+hookkit-common = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+
+[dev-dependencies]
+hookkit-pkl-config = { git = "https://github.com/plx/agent-hook-kit", rev = "3429c4b30ae765155dbcb314161f50a51171dc23" }

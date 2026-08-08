@@ -1,0 +1,91 @@
+name: "Velvet Glove hook CI"
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  velvet_glove_hook_checks:
+    name: "velvet-glove hook checks"
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+
+          - macos-latest
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.85.0
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Install stable Rust with lint components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache velvet-glove build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "velvet-glove-hook"
+          workspaces: "crates/velvet-glove -\u003e target"
+
+
+      - name: Install Pkl 0.31.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Darwin) pkl_os=macos ;;
+            Linux) pkl_os=linux ;;
+            *) echo "unsupported Pkl runner OS" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64) pkl_arch=amd64 ;;
+            arm64|aarch64) pkl_arch=aarch64 ;;
+            *) echo "unsupported Pkl runner architecture" >&2; exit 1 ;;
+          esac
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/pkl" \
+            "https://github.com/apple/pkl/releases/download/0.31.1/pkl-${pkl_os}-${pkl_arch}"
+          chmod +x "$RUNNER_TEMP/pkl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+
+      - name: Check the MSRV
+        run: >-
+          cargo +1.85.0 check
+          --manifest-path crates/velvet-glove/Cargo.toml
+          --all-targets
+
+      - name: Check formatting
+        run: >-
+          cargo fmt
+          --manifest-path crates/velvet-glove/Cargo.toml
+          --all
+          -- --check
+
+      - name: Run Clippy
+        run: >-
+          cargo clippy
+          --manifest-path crates/velvet-glove/Cargo.toml
+          --all-targets
+          --all-features
+          -- -D warnings
+
+      - name: Run tests
+        run: >-
+          cargo test
+          --manifest-path crates/velvet-glove/Cargo.toml
+          --all-targets
