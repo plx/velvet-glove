@@ -144,6 +144,7 @@ fn command(
     workspace_arg: bool,
 ) -> ToolPhase {
     let mut args = vec![
+        CommandArgTemplate::literal(fixture.executable.to_string_lossy()),
         CommandArgTemplate::literal(fixture.trace.to_string_lossy()),
         CommandArgTemplate::literal(action),
     ];
@@ -159,7 +160,7 @@ fn command(
         } else {
             PhaseMode::Fix
         },
-        program: Some(fixture.executable.to_string_lossy().into_owned()),
+        program: Some("/bin/sh".into()),
         args,
         exit_codes: ExitCodePolicy {
             clean: vec![0],
