@@ -42,6 +42,11 @@ const TOOL_REAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_REAL_PROGRAM";
 const TOOL_LOGICAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_LOGICAL_PROGRAM";
 const TOOL_TRACE_SENTINEL_ENV: &str = "VELVET_GLOVE_TOOL_TRACE_SENTINEL";
 const TOOL_TRACE_SENTINEL: &str = "real-tool-fixture";
+const PATH_ENV: &str = "PATH";
+const HOME_ENV: &str = "HOME";
+const TMPDIR_ENV: &str = "TMPDIR";
+const XDG_CACHE_HOME_ENV: &str = "XDG_CACHE_HOME";
+const DIFF_OPTIONS_ENV: &str = "DIFF_OPTIONS";
 const NODE_PATH_ENV: &str = "NODE_PATH";
 const ASTRO_TELEMETRY_DISABLED_ENV: &str = "ASTRO_TELEMETRY_DISABLED";
 const CI_ENV: &str = "CI";
@@ -52,6 +57,25 @@ const GITLEAKS_CONFIG_ENV: &str = "GITLEAKS_CONFIG";
 const GITLEAKS_CONFIG_TOML_ENV: &str = "GITLEAKS_CONFIG_TOML";
 const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this";
 const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
+const BUF_POISON_ENV_VALUE: &str = "velvet-glove-buf-adapter-must-clear-this";
+const BUF_CACHE_DIR_ENV: &str = "BUF_CACHE_DIR";
+const BUF_CHILD_PATH: &str = "/usr/bin:/bin";
+const BUF_DIFF_PROGRAM: &str = "/usr/bin/diff";
+const BUF_SCRUBBED_ENV: &[&str] = &[
+    "BUF_ALPHA_SUPPRESS_WARNINGS",
+    "BUF_BETA_COPY_FILES_TO_MEMORY",
+    "BUF_BETA_SUPPRESS_WARNINGS",
+    "BUF_BUFIMAGEUTIL_SHOULD_UPDATE_EXPECTATIONS",
+    "BUF_INPUT_HTTPS_PASSWORD",
+    "BUF_INPUT_HTTPS_USERNAME",
+    "BUF_INPUT_SSH_KEY_FILE",
+    "BUF_INPUT_SSH_KNOWN_HOSTS_FILES",
+    "BUF_TESTING_LEGACY_FEDERATION_REGISTRY",
+    "BUF_TESTING_PUBLIC_REGISTRY",
+    "BUF_TOKEN",
+    "BUF_VELVET_GLOVE_POISON",
+    DEBUG_ENV,
+];
 const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
 const BIOME_SCRUBBED_ENV: &[&str] = &[
     "BIOME_BINARY",
@@ -116,6 +140,15 @@ enum TracePlan {
         leading: &'static [&'static str],
         mode_arguments: &'static [(&'static str, &'static [&'static str])],
         before_files: &'static [&'static str],
+    },
+    PreflightThenNestedModeWorkspaceMarker {
+        nested_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        preflight: &'static [&'static str],
+        leading: &'static [&'static str],
+        mode_arguments: &'static [(&'static str, &'static [&'static str])],
+        before_workspace: &'static [&'static str],
     },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
@@ -186,6 +219,26 @@ const BIOME_TRACE_PLAN: TracePlan = TracePlan::SingleNestedModeFilesMarker {
     before_files: BIOME_ARGUMENTS_BEFORE_FILES,
 };
 
+const BUF_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_BUF_WORKSPACE__";
+const BUF_MODE_ARGUMENTS: &[(&str, &[&str])] = &[
+    ("write", &["--write"]),
+    ("verify", &["--diff", "--exit-code"]),
+];
+const BUF_TRACE_PLAN: TracePlan = TracePlan::PreflightThenNestedModeWorkspaceMarker {
+    nested_program_index: 3,
+    adapter_prefix: &["-I", "-c"],
+    marker: BUF_WORKSPACE_MARKER,
+    preflight: &["config", "ls-modules", "--log-format=text", "--format=json"],
+    leading: &[
+        "format",
+        "--disable-symlinks",
+        "--error-format=text",
+        "--log-format=text",
+    ],
+    mode_arguments: BUF_MODE_ARGUMENTS,
+    before_workspace: &[],
+};
+
 #[derive(Debug)]
 struct ExpectedInvocation {
     targets: &'static [&'static str],
@@ -207,6 +260,8 @@ struct RealToolContractCase {
 #[derive(Debug)]
 struct MutatingToolContractCase {
     remedy_phase_id: &'static str,
+    remedy_mode: PhaseMode,
+    remedy_writes: WriteBehavior,
     remedy_invocations: &'static [ExpectedInvocation],
     final_invocations: &'static [ExpectedInvocation],
     immediate_outcome: ExpectedOutcome,
@@ -536,7 +591,65 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["::error title=format"],
             trace_plan: BIOME_TRACE_PLAN,
         },
-        ("jq" | "asciidoctor" | "astro" | "betterleaks" | "biome", other) => {
+        ("buf-format", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: BUF_TRACE_PLAN,
+        },
+        ("buf-format", "unformatted") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 100,
+                trace_exit_codes: &[0, 100],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.proto.orig ", "example.proto\t<mtime>", "@@ -"],
+            diagnostic_excludes: &[],
+            trace_plan: BUF_TRACE_PLAN,
+        },
+        ("buf-format", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.proto", "proto/selected-clean.proto"],
+                exit_code: 100,
+                trace_exit_codes: &[0, 100],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "example.proto.orig ",
+                "workspace-only.proto.orig ",
+                "\t<mtime>",
+            ],
+            diagnostic_excludes: &["selected-clean.proto.orig"],
+            trace_plan: BUF_TRACE_PLAN,
+        },
+        ("buf-format", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 2,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "velvet-glove-buf-format: buf.yaml module scope omits workspace proto files: excluded/unformatted.proto",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: BUF_TRACE_PLAN,
+        },
+        ("jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no real-tool contract declaration",
                 case.tool
@@ -553,6 +666,8 @@ fn mutating_tool_contract_case(
     let contract = match (case.tool.as_str(), case.case.as_str()) {
         ("biome", "clean") => MutatingToolContractCase {
             remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
             remedy_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 0,
@@ -568,6 +683,8 @@ fn mutating_tool_contract_case(
         },
         ("biome", "autofix") => MutatingToolContractCase {
             remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
             remedy_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 0,
@@ -583,6 +700,8 @@ fn mutating_tool_contract_case(
         },
         ("biome", "source-issue") => MutatingToolContractCase {
             remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
             remedy_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 1,
@@ -598,6 +717,8 @@ fn mutating_tool_contract_case(
         },
         ("biome", "multi-file") => MutatingToolContractCase {
             remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
             remedy_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js", "src/selected-two.js"],
                 exit_code: 0,
@@ -613,6 +734,8 @@ fn mutating_tool_contract_case(
         },
         ("biome", "operational-failure") => MutatingToolContractCase {
             remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
             remedy_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 2,
@@ -622,7 +745,71 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
-        ("biome", other) => {
+        ("buf-format", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("buf-format", "unformatted") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.proto"],
+        },
+        ("buf-format", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.proto", "proto/selected-clean.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.proto", "proto/selected-clean.proto"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.proto", "proto/workspace-only.proto"],
+        },
+        ("buf-format", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.proto"],
+                exit_code: 2,
+                trace_exit_codes: &[0],
+            }],
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("biome" | "buf-format", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
@@ -1046,6 +1233,97 @@ fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
 }
 
 #[test]
+fn mutating_contract_registry_preserves_biome_target_file_writes() {
+    for case_name in [
+        "clean",
+        "autofix",
+        "source-issue",
+        "multi-file",
+        "operational-failure",
+    ] {
+        let contract = mutating_tool_contract_case(&named_fixture_case("biome", case_name))
+            .expect("Biome mutating contract lookup")
+            .expect("Biome mutating contract");
+        assert_eq!(contract.remedy_mode, PhaseMode::Fix);
+        assert_eq!(contract.remedy_writes, WriteBehavior::TargetFiles);
+    }
+}
+
+#[test]
+fn buf_contract_registry_binds_workspace_format_lifecycle() {
+    let multi = named_fixture_case("buf-format", "multi-file");
+    let check = real_tool_contract_case(&multi)
+        .expect("Buf check contract lookup")
+        .expect("Buf check contract");
+    let mutation = mutating_tool_contract_case(&multi)
+        .expect("Buf mutation contract lookup")
+        .expect("Buf mutation contract");
+
+    assert_eq!(check.phase_id, "verify");
+    assert_eq!(check.invocations.len(), 1);
+    assert_eq!(
+        check.invocations[0].targets,
+        &["example.proto", "proto/selected-clean.proto"]
+    );
+    assert_eq!(check.invocations[0].exit_code, 100);
+    assert_eq!(check.invocations[0].trace_exit_codes, &[0, 100]);
+    assert_eq!(check.trace_plan, BUF_TRACE_PLAN);
+    assert_eq!(mutation.remedy_phase_id, "format");
+    assert_eq!(mutation.remedy_mode, PhaseMode::Format);
+    assert_eq!(mutation.remedy_writes, WriteBehavior::Workspace);
+    assert_eq!(
+        mutation.changed_targets,
+        &["example.proto", "proto/workspace-only.proto"]
+    );
+    assert!(
+        !check.targets().contains(&"proto/workspace-only.proto"),
+        "workspace-only mutation must remain outside the event candidates"
+    );
+
+    let failure = named_fixture_case("buf-format", "operational-failure");
+    let failure_check = real_tool_contract_case(&failure)
+        .expect("Buf failure check lookup")
+        .expect("Buf failure check contract");
+    let failure_mutation = mutating_tool_contract_case(&failure)
+        .expect("Buf failure mutation lookup")
+        .expect("Buf failure mutation contract");
+    assert_eq!(failure_check.invocations[0].exit_code, 2);
+    assert_eq!(failure_check.invocations[0].trace_exit_codes, &[0]);
+    assert_eq!(failure_mutation.remedy_invocations[0].exit_code, 2);
+    assert_eq!(
+        failure_mutation.remedy_invocations[0].trace_exit_codes,
+        &[0]
+    );
+    assert!(failure_mutation.final_invocations.is_empty());
+}
+
+#[test]
+fn changed_path_attribution_distinguishes_target_and_workspace_scopes() {
+    let selected = PathBuf::from("/workspace/src/example.proto");
+    let workspace_only = PathBuf::from("/workspace/src/workspace-only.proto");
+    let changed = BTreeSet::from([selected.clone(), workspace_only.clone()]);
+
+    assert_eq!(
+        expected_invocation_changed_paths(
+            WriteBehavior::TargetFiles,
+            &changed,
+            std::slice::from_ref(&selected),
+        ),
+        vec![selected]
+    );
+    for writes in [WriteBehavior::MatchingGlobs, WriteBehavior::Workspace] {
+        assert_eq!(
+            expected_invocation_changed_paths(writes, &changed, &[]),
+            vec![
+                PathBuf::from("/workspace/src/example.proto"),
+                workspace_only.clone(),
+            ]
+        );
+    }
+    assert!(expected_invocation_changed_paths(WriteBehavior::None, &changed, &[]).is_empty());
+}
+
+#[test]
 fn single_child_trace_plan_appends_controlled_trailing_options() {
     let outer_arguments = [
         "--eval",
@@ -1220,6 +1498,132 @@ fn marker_delimited_trace_plan_rejects_ambiguous_shapes() {
 }
 
 #[test]
+fn buf_workspace_trace_plan_binds_preflight_format_argv_and_workspace() {
+    let outer_arguments = [
+        "-I",
+        "-c",
+        "adapter",
+        "buf",
+        "write",
+        BUF_WORKSPACE_MARKER,
+        "/workspace",
+    ]
+    .map(str::to_owned);
+    let targets = [
+        PathBuf::from("/workspace/example.proto"),
+        PathBuf::from("/workspace/proto/selected.proto"),
+    ];
+
+    let (program, invocations) = resolve_trace_invocations(
+        BUF_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[0, 0],
+    )
+    .expect("resolve mode-and-workspace trace");
+
+    assert_eq!(program, "buf");
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[0].targets, targets);
+    assert_eq!(
+        invocations[0].arguments,
+        ["config", "ls-modules", "--log-format=text", "--format=json"]
+    );
+    assert_eq!(invocations[0].exit_code, 0);
+    assert_eq!(invocations[1].targets, targets);
+    assert_eq!(
+        invocations[1].arguments,
+        [
+            "format",
+            "--disable-symlinks",
+            "--error-format=text",
+            "--log-format=text",
+            "--write",
+            "/workspace",
+        ]
+    );
+    assert_eq!(invocations[1].exit_code, 0);
+}
+
+#[test]
+fn buf_workspace_trace_plan_can_stop_after_preflight() {
+    let outer_arguments = [
+        "-I",
+        "-c",
+        "adapter",
+        "buf",
+        "verify",
+        BUF_WORKSPACE_MARKER,
+        "/workspace",
+    ]
+    .map(str::to_owned);
+    let targets = [PathBuf::from("/workspace/example.proto")];
+
+    let (_, invocations) =
+        resolve_trace_invocations(BUF_TRACE_PLAN, "python", &outer_arguments, &targets, &[0])
+            .expect("resolve preflight-only workspace trace");
+
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].targets, targets);
+    assert_eq!(
+        invocations[0].arguments,
+        ["config", "ls-modules", "--log-format=text", "--format=json"]
+    );
+    assert_eq!(invocations[0].exit_code, 0);
+}
+
+#[test]
+fn mode_and_workspace_trace_plan_rejects_ambiguous_or_escaping_workspaces() {
+    let plan = BUF_TRACE_PLAN;
+    let target = [PathBuf::from("/workspace/example.proto")];
+
+    let multiple_workspaces = [
+        "-I",
+        "-c",
+        "adapter",
+        "buf",
+        "verify",
+        BUF_WORKSPACE_MARKER,
+        "/workspace",
+        "/other",
+    ]
+    .map(str::to_owned);
+    let error = resolve_trace_invocations(plan, "python", &multiple_workspaces, &target, &[0])
+        .expect_err("multiple rendered workspaces must fail");
+    assert!(error.contains("exactly one workspace"));
+
+    let relative_workspace = [
+        "-I",
+        "-c",
+        "adapter",
+        "buf",
+        "verify",
+        BUF_WORKSPACE_MARKER,
+        "workspace",
+    ]
+    .map(str::to_owned);
+    let error = resolve_trace_invocations(plan, "python", &relative_workspace, &target, &[0])
+        .expect_err("relative rendered workspace must fail");
+    assert!(error.contains("non-absolute workspace"));
+
+    let escaped_target = [PathBuf::from("/other/example.proto")];
+    let workspace = [
+        "-I",
+        "-c",
+        "adapter",
+        "buf",
+        "verify",
+        BUF_WORKSPACE_MARKER,
+        "/workspace",
+    ]
+    .map(str::to_owned);
+    let error = resolve_trace_invocations(plan, "python", &workspace, &escaped_target, &[0])
+        .expect_err("target outside rendered workspace must fail");
+    assert!(error.contains("targets escape workspace"));
+}
+
+#[test]
 fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
     let root = unique_temp_dir("velvet-glove-astro-trace-environment");
     let node_modules = root.join("node_modules");
@@ -1351,6 +1755,78 @@ fn betterleaks_trace_environment_rejects_inherited_config() {
 }
 
 #[test]
+fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
+    let root = unique_temp_dir("velvet-glove-buf-trace-environment");
+    let shim_dir = root.join("tool-shim");
+    let trace_root = root.join("tool-traces");
+    let record = root.join("record");
+    let cache = root.join("tmp/velvet-glove-buf-cache");
+    std::fs::create_dir_all(&shim_dir).expect("Buf shim directory");
+    std::fs::create_dir_all(&trace_root).expect("Buf trace directory");
+    std::fs::create_dir_all(&record).expect("Buf trace record");
+    std::fs::create_dir_all(&cache).expect("controlled Buf cache");
+    let shim = shim_dir.join("buf");
+    std::fs::write(&shim, "fixture shim\n").expect("Buf shim");
+
+    for (name, value) in [
+        (PATH_ENV, BUF_CHILD_PATH.to_owned()),
+        (HOME_ENV, root.join("home").to_string_lossy().into_owned()),
+        (TMPDIR_ENV, root.join("tmp").to_string_lossy().into_owned()),
+        (
+            XDG_CACHE_HOME_ENV,
+            root.join("xdg-cache").to_string_lossy().into_owned(),
+        ),
+        (DIFF_OPTIONS_ENV, String::new()),
+        (BUF_CACHE_DIR_ENV, cache.to_string_lossy().into_owned()),
+    ] {
+        std::fs::write(record.join(format!("env-{name}")), format!("{value}\n"))
+            .expect("controlled Buf environment record");
+    }
+    for name in BUF_SCRUBBED_ENV {
+        std::fs::write(record.join(format!("env-{name}")), "\n")
+            .expect("scrubbed Buf environment record");
+    }
+    std::fs::write(record.join("program"), format!("{}\n", shim.display()))
+        .expect("absolute Buf shim record");
+    let harness = ToolTraceHarness {
+        shim_dir,
+        trace_root,
+        logical_program: "buf".to_owned(),
+        real_program: root.join("managed/bin/buf"),
+    };
+
+    let environment = verify_buf_trace_environment(&record, &harness)
+        .expect("isolated managed Buf trace environment");
+    assert_eq!(
+        environment.get(PATH_ENV).map(String::as_str),
+        Some(BUF_CHILD_PATH)
+    );
+    assert_eq!(
+        environment.get(BUF_CACHE_DIR_ENV).map(String::as_str),
+        Some(cache.to_string_lossy().as_ref())
+    );
+    assert!(
+        BUF_SCRUBBED_ENV
+            .iter()
+            .all(|name| environment.get(*name).is_some_and(String::is_empty))
+    );
+
+    let dynamic = BUF_SCRUBBED_ENV
+        .last()
+        .expect("dynamic Buf poison environment name");
+    std::fs::write(
+        record.join(format!("env-{dynamic}")),
+        format!("{BUF_POISON_ENV_VALUE}\n"),
+    )
+    .expect("poisoned dynamic Buf environment record");
+    let error = verify_buf_trace_environment(&record, &harness)
+        .expect_err("an inherited future Buf variable must fail closed");
+    assert!(error.contains(dynamic));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn betterleaks_output_requires_adapter_canonicalization() {
     let suffix = "unable to load config, err: open does-not-exist.toml: no such file or directory";
     for clock in ["8:10AM", "12:59PM"] {
@@ -1373,6 +1849,21 @@ fn betterleaks_output_requires_adapter_canonicalization() {
     .expect("unrelated Betterleaks levels must remain untouched");
     verify_tool_output_is_canonical("jq", "synthetic stderr", &format!("8:10AM FTL {suffix}"))
         .expect("the Betterleaks assertion must not rewrite or reject other tools");
+}
+
+#[test]
+fn buf_output_requires_adapter_canonicalization() {
+    let raw =
+        "--- example.proto.orig\t2026-08-09 12:34:56\n+++ example.proto\t2026-08-09 12:34:56\n";
+    let error = verify_tool_output_is_canonical("buf-format", "synthetic stdout", raw)
+        .expect_err("raw Buf diff mtimes must fail closed");
+    assert!(error.contains("dynamic diff mtime"));
+
+    let canonical = "--- example.proto.orig\t<mtime>\n+++ example.proto\t<mtime>\n";
+    verify_tool_output_is_canonical("buf-format", "synthetic stdout", canonical)
+        .expect("adapter-canonicalized Buf diff headers must pass");
+    verify_tool_output_is_canonical("jq", "synthetic stdout", raw)
+        .expect("the Buf assertion must not reject other tools");
 }
 
 #[test]
@@ -2854,16 +3345,39 @@ fn resolve_mutating_tool_contract(
             case.tool, mutation.remedy_phase_id
         )
     })?;
-    if !remedy_phase.enabled || remedy_phase.mode != PhaseMode::Fix {
+    if !remedy_phase.enabled || remedy_phase.mode != mutation.remedy_mode {
         return Err(format!(
-            "{} mutating contract phase {:?} is not an enabled remedy",
+            "{} mutating contract remedy {:?} expected enabled {:?} mode, got enabled={} mode={:?}",
+            case.tool,
+            mutation.remedy_phase_id,
+            mutation.remedy_mode,
+            remedy_phase.enabled,
+            remedy_phase.mode
+        ));
+    }
+    if remedy_phase.writes != mutation.remedy_writes {
+        return Err(format!(
+            "{} mutating contract remedy {:?} expected {:?} writes, got {:?}",
+            case.tool, mutation.remedy_phase_id, mutation.remedy_writes, remedy_phase.writes
+        ));
+    }
+    if mutation.remedy_writes == WriteBehavior::None {
+        return Err(format!(
+            "{} mutating contract remedy {:?} must declare a non-none write scope",
             case.tool, mutation.remedy_phase_id
         ));
     }
-    if remedy_phase.writes != WriteBehavior::TargetFiles {
+    if matches!(
+        mutation.remedy_writes,
+        WriteBehavior::MatchingGlobs | WriteBehavior::Workspace
+    ) && mutation.remedy_invocations.len() != 1
+    {
         return Err(format!(
-            "{} mutating contract remedy {:?} must declare target-files writes, got {:?}",
-            case.tool, mutation.remedy_phase_id, remedy_phase.writes
+            "{} mutating contract remedy {:?} uses {:?} writes across {} invocation groups; declare per-invocation changed paths before extending this harness shape",
+            case.tool,
+            mutation.remedy_phase_id,
+            mutation.remedy_writes,
+            mutation.remedy_invocations.len()
         ));
     }
     let expected_extra_args = contract
@@ -2938,7 +3452,7 @@ fn resolve_mutating_tool_contract(
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    if !changed.is_subset(&targets) {
+    if mutation.remedy_writes == WriteBehavior::TargetFiles && !changed.is_subset(&targets) {
         return Err(format!(
             "{} mutating contract changed targets {changed:?} outside candidates {targets:?}",
             case.tool
@@ -3271,6 +3785,133 @@ fn resolve_trace_invocations(
                 }],
             ))
         }
+        TracePlan::PreflightThenNestedModeWorkspaceMarker {
+            nested_program_index,
+            adapter_prefix,
+            marker,
+            preflight,
+            leading,
+            mode_arguments,
+            before_workspace,
+        } => {
+            if !matches!(expected_exit_codes.len(), 1 | 2) {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter trace for {outer_program} must declare one or two exit codes, got {expected_exit_codes:?}"
+                ));
+            }
+            if nested_program_index != adapter_prefix.len() + 1 {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter trace plan for {outer_program} must place exactly one script between its adapter prefix and nested tool"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode workspace adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(nested_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode workspace adapter {outer_program} has no nested tool at argument {nested_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let mode_index = nested_program_index + 1;
+            let mode = outer_arguments.get(mode_index).ok_or_else(|| {
+                format!(
+                    "preflight-and-mode workspace adapter {outer_program} has no phase mode: {outer_arguments:?}"
+                )
+            })?;
+            let mode_arguments = mode_arguments
+                .iter()
+                .find_map(|(name, arguments)| (*name == mode).then_some(*arguments))
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode workspace adapter {outer_program} has unsupported phase mode {mode:?}"
+                    )
+                })?;
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= mode_index {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter {outer_program} places {marker:?} before phase mode: {outer_arguments:?}"
+                ));
+            }
+            let rendered_workspace = &outer_arguments[(*marker_index + 1)..];
+            let [workspace] = rendered_workspace else {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter {outer_program} requires exactly one workspace after {marker:?}, got {rendered_workspace:?}"
+                ));
+            };
+            let workspace_path = Path::new(workspace);
+            if !workspace_path.is_absolute() {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter {outer_program} rendered a non-absolute workspace {workspace:?}"
+                ));
+            }
+            let outside_workspace = targets
+                .iter()
+                .filter(|target| !target.starts_with(workspace_path))
+                .collect::<Vec<_>>();
+            if !outside_workspace.is_empty() {
+                return Err(format!(
+                    "preflight-and-mode workspace adapter {outer_program} targets escape workspace {workspace:?}: {outside_workspace:?}"
+                ));
+            }
+            let arguments = leading
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .chain(mode_arguments.iter().map(|argument| (*argument).to_owned()))
+                .chain(
+                    outer_arguments[(mode_index + 1)..*marker_index]
+                        .iter()
+                        .cloned(),
+                )
+                .chain(
+                    before_workspace
+                        .iter()
+                        .map(|argument| (*argument).to_owned()),
+                )
+                .chain(std::iter::once(workspace.clone()))
+                .collect();
+            let mut traces = vec![ResolvedTraceInvocation {
+                targets: targets.to_vec(),
+                arguments: preflight
+                    .iter()
+                    .map(|argument| (*argument).to_owned())
+                    .collect(),
+                exit_code: expected_exit_codes[0],
+            }];
+            if let Some(exit_code) = expected_exit_codes.get(1) {
+                traces.push(ResolvedTraceInvocation {
+                    targets: targets.to_vec(),
+                    arguments,
+                    exit_code: *exit_code,
+                });
+            }
+            Ok((trace_program, traces))
+        }
         TracePlan::TrailingOptionsAdapter {
             preflight,
             validation,
@@ -3422,6 +4063,29 @@ impl ToolTraceHarness {
             .map_err(|error| format!("create tool shim directory {shim_dir:?}: {error}"))?;
         std::fs::create_dir_all(&trace_root)
             .map_err(|error| format!("create tool trace directory {trace_root:?}: {error}"))?;
+        if logical_program == "buf" {
+            let diff = Path::new(BUF_DIFF_PROGRAM);
+            let metadata = std::fs::metadata(diff).map_err(|error| {
+                format!("inspect Buf adapter diff prerequisite {diff:?}: {error}")
+            })?;
+            if !metadata.is_file() {
+                return Err(format!(
+                    "Buf trace requires the adapter's fixed diff executable at {BUF_DIFF_PROGRAM}"
+                ));
+            }
+            #[cfg(unix)]
+            if metadata.permissions().mode() & 0o111 == 0 {
+                return Err(format!(
+                    "Buf trace requires an executable adapter diff prerequisite at {BUF_DIFF_PROGRAM}"
+                ));
+            }
+            for directory in ["home", "tmp/velvet-glove-buf-cache", "xdg-cache"] {
+                let path = workspace.root.join(directory);
+                std::fs::create_dir_all(&path).map_err(|error| {
+                    format!("create controlled Buf environment directory {path:?}: {error}")
+                })?;
+            }
+        }
         let shim = shim_dir.join(logical_program);
         std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
             .map_err(|error| format!("write tool trace shim {shim:?}: {error}"))?;
@@ -3478,6 +4142,23 @@ impl ToolTraceHarness {
             command.env(RAYON_NUM_THREADS_ENV, BIOME_POISON_ENV_VALUE);
             for name in BIOME_SCRUBBED_ENV {
                 command.env(name, BIOME_POISON_ENV_VALUE);
+            }
+        }
+        if self.logical_program == "buf" {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "Buf trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            command
+                .env(HOME_ENV, root.join("home"))
+                .env(TMPDIR_ENV, root.join("tmp"))
+                .env(XDG_CACHE_HOME_ENV, root.join("xdg-cache"))
+                .env(DIFF_OPTIONS_ENV, BUF_POISON_ENV_VALUE)
+                .env(BUF_CACHE_DIR_ENV, BUF_POISON_ENV_VALUE);
+            for name in BUF_SCRUBBED_ENV {
+                command.env(name, BUF_POISON_ENV_VALUE);
             }
         }
         Ok(())
@@ -3599,6 +4280,20 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if trace_program == "buf" {
+            let controlled = verify_buf_trace_environment(&record, harness)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
+        let prerequisites = if trace_program == "buf" {
+            serde_json::json!({"diff": BUF_DIFF_PROGRAM})
+        } else {
+            serde_json::json!({})
+        };
         records.push(serde_json::json!({
             "logicalProgram": trace_program,
             "shimProgram": program,
@@ -3607,6 +4302,7 @@ fn verify_tool_trace_invocations(
             "argv": expected.arguments,
             "candidateFiles": expected.targets,
             "environment": environment,
+            "prerequisites": prerequisites,
             "execution": "pass-through",
             "exitCode": expected.exit_code,
         }));
@@ -3741,6 +4437,75 @@ fn verify_biome_trace_environment(record: &Path) -> Result<BTreeMap<String, Stri
             ));
         }
         environment.insert((*name).to_owned(), value);
+    }
+    Ok(environment)
+}
+
+fn verify_buf_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+) -> Result<BTreeMap<String, String>, String> {
+    let root = harness.trace_root.parent().ok_or_else(|| {
+        format!(
+            "Buf trace root has no controlled environment parent: {:?}",
+            harness.trace_root
+        )
+    })?;
+    let home = root.join("home");
+    let tmpdir = root.join("tmp");
+    let xdg_cache = root.join("xdg-cache");
+    let cache = tmpdir.join("velvet-glove-buf-cache");
+    let mut environment = BTreeMap::new();
+    for (name, expected) in [
+        (PATH_ENV, BUF_CHILD_PATH.to_owned()),
+        (HOME_ENV, home.to_string_lossy().into_owned()),
+        (TMPDIR_ENV, tmpdir.to_string_lossy().into_owned()),
+        (XDG_CACHE_HOME_ENV, xdg_cache.to_string_lossy().into_owned()),
+        (DIFF_OPTIONS_ENV, String::new()),
+        (BUF_CACHE_DIR_ENV, cache.to_string_lossy().into_owned()),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "Buf trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in BUF_SCRUBBED_ENV {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "Buf trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    let cache_metadata = std::fs::symlink_metadata(&cache)
+        .map_err(|error| format!("inspect controlled Buf cache {cache:?}: {error}"))?;
+    if !cache_metadata.is_dir() || cache_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "controlled Buf cache must be a real directory: {cache:?}"
+        ));
+    }
+    let program = PathBuf::from(read_record(record, "program")?);
+    if !program.is_absolute() {
+        return Err(format!(
+            "Buf adapter must execute an absolute managed tool path, got {program:?}"
+        ));
+    }
+    let observed_program = program
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced Buf program {program:?}: {error}"))?;
+    let expected_program = harness
+        .shim_dir
+        .join("buf")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize managed Buf trace shim: {error}"))?;
+    if observed_program != expected_program {
+        return Err(format!(
+            "Buf adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
+        ));
     }
     Ok(environment)
 }
@@ -4666,6 +5431,24 @@ fn verify_deferred_native(
     Ok(())
 }
 
+fn expected_invocation_changed_paths(
+    writes: WriteBehavior,
+    expected_changed: &BTreeSet<PathBuf>,
+    invocation_targets: &[PathBuf],
+) -> Vec<PathBuf> {
+    match writes {
+        WriteBehavior::TargetFiles => invocation_targets
+            .iter()
+            .filter(|target| expected_changed.contains(*target))
+            .cloned()
+            .collect(),
+        WriteBehavior::MatchingGlobs | WriteBehavior::Workspace => {
+            expected_changed.iter().cloned().collect()
+        }
+        WriteBehavior::None => Vec::new(),
+    }
+}
+
 fn verify_mutating_deferred_summary(
     case: &FixtureCase,
     contract: &RealToolContractCase,
@@ -4685,6 +5468,11 @@ fn verify_mutating_deferred_summary(
         .changed_targets
         .iter()
         .map(|relative| canonical_project(&project.join(relative)))
+        .collect::<BTreeSet<_>>();
+    let expected_result_paths = expected_targets
+        .iter()
+        .chain(expected_changed.iter())
+        .cloned()
         .collect::<BTreeSet<_>>();
 
     let result = require_json_object(summary, "result")?;
@@ -4732,11 +5520,18 @@ fn verify_mutating_deferred_summary(
                         case.tool, phase.phase, invocation.targets
                     )
                 })?;
-            let changed = invocation
+            let changed = expected_invocation_changed_paths(
+                mutation.remedy_writes,
+                &expected_changed,
+                &invocation.targets,
+            );
+            let files = invocation
                 .targets
                 .iter()
-                .filter(|target| expected_changed.contains(*target))
+                .chain(changed.iter())
                 .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>();
             require_json_string(artifact, "toolId", &case.tool)?;
             require_json_string(artifact, "workflowId", mutation.remedy_phase_id)?;
@@ -4746,7 +5541,7 @@ fn verify_mutating_deferred_summary(
             require_json_string(artifact, "program", &phase.resolved.outer_program)?;
             require_string_array(artifact, "arguments", &invocation.arguments)?;
             require_json_path(artifact, "workingDirectory", &cwd)?;
-            require_path_array(artifact, "files", &invocation.targets)?;
+            require_path_array(artifact, "files", &files)?;
             require_path_array(artifact, "candidateFiles", &invocation.targets)?;
             require_path_array(artifact, "changedFiles", &changed)?;
             let contents = artifact
@@ -4826,12 +5621,11 @@ fn verify_mutating_deferred_summary(
                     case.tool, invocation.targets
                 )
             })?;
-        let changed = invocation
-            .targets
-            .iter()
-            .filter(|target| expected_changed.contains(*target))
-            .cloned()
-            .collect::<Vec<_>>();
+        let changed = expected_invocation_changed_paths(
+            mutation.remedy_writes,
+            &expected_changed,
+            &invocation.targets,
+        );
         require_json_string(report, "toolId", &case.tool)?;
         require_json_string(report, "workflowId", mutation.remedy_phase_id)?;
         require_path_array(report, "candidateFiles", &invocation.targets)?;
@@ -4850,7 +5644,7 @@ fn verify_mutating_deferred_summary(
     let operational = require_json_object_value(result, "operationalProblems")?;
     match expectation.outcome {
         ExpectedOutcome::Clean | ExpectedOutcome::Issues => {
-            if files.len() != expected_targets.len() || !operational.is_empty() {
+            if files.len() != expected_result_paths.len() || !operational.is_empty() {
                 return Err(format!(
                     "{} mutating deferred normal result shape mismatch: files={files:?}, operational={operational:?}",
                     case.tool
@@ -4862,7 +5656,7 @@ fn verify_mutating_deferred_summary(
                 (ExpectedOutcome::Issues, _) => "manual-fixes-needed",
                 (ExpectedOutcome::OperationalFailure, _) => unreachable!(),
             };
-            for target in &expected_targets {
+            for target in &expected_result_paths {
                 let file = files
                     .values()
                     .find(|file| json_path_equals(file, "path", target))
@@ -6789,19 +7583,38 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
 }
 
 fn verify_tool_output_is_canonical(tool: &str, context: &str, text: &str) -> Result<(), String> {
-    if tool != "betterleaks" {
+    if tool == "buf-format" {
+        for (line_index, line) in text.lines().enumerate() {
+            if !(line.starts_with("--- ") || line.starts_with("+++ ")) {
+                continue;
+            }
+            let Some((_, mtime)) = line.rsplit_once('\t') else {
+                return Err(format!(
+                    "buf-format {context} retained a diff header without a canonical mtime on line {}: {line:?}",
+                    line_index + 1
+                ));
+            };
+            if mtime != "<mtime>" {
+                return Err(format!(
+                    "buf-format {context} retained a dynamic diff mtime on line {} ({mtime:?}); the adapter must emit <mtime> before the harness captures output",
+                    line_index + 1
+                ));
+            }
+        }
         return Ok(());
     }
-    const FATAL_SEPARATOR: &str = " FTL ";
-    for (line_index, line) in text.lines().enumerate() {
-        let Some((timestamp, _)) = line.split_once(FATAL_SEPARATOR) else {
-            continue;
-        };
-        if is_betterleaks_console_time(timestamp) {
-            return Err(format!(
-                "betterleaks {context} retained a dynamic console clock on line {} ({timestamp:?}); the adapter must emit <time> FTL before the harness captures output",
-                line_index + 1
-            ));
+    if tool == "betterleaks" {
+        const FATAL_SEPARATOR: &str = " FTL ";
+        for (line_index, line) in text.lines().enumerate() {
+            let Some((timestamp, _)) = line.split_once(FATAL_SEPARATOR) else {
+                continue;
+            };
+            if is_betterleaks_console_time(timestamp) {
+                return Err(format!(
+                    "betterleaks {context} retained a dynamic console clock on line {} ({timestamp:?}); the adapter must emit <time> FTL before the harness captures output",
+                    line_index + 1
+                ));
+            }
         }
     }
     Ok(())

@@ -1,0 +1,3 @@
+syntax="proto3";
+package fixture.failure.excluded.v1;
+message Excluded{string name=1;}
