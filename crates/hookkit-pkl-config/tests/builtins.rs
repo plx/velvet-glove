@@ -444,7 +444,7 @@ fn ruff_builtin_matches_rust_spec() {
 }
 
 #[test]
-fn prettier_builtin_has_expected_extensions() {
+fn prettier_adapter_locks_completion_config_and_target_scope() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
     let prettier = spec(&specs, "prettier");
@@ -458,29 +458,132 @@ fn prettier_builtin_has_expected_extensions() {
     assert!(include.contains(&"*.vue".to_string()));
     assert!(include.contains(&"*.json".to_string()));
     assert!(include.contains(&"*.md".to_string()));
+    assert!(include.contains(&"*.vue".to_string()));
+    assert!(!include.contains(&"*.astro".to_string()));
+    assert!(!include.contains(&"*.svelte".to_string()));
 
     let format = prettier.phases.get("format").expect("format");
-    assert_argv(
-        format,
-        vec![
-            literal("--write"),
-            token(ArgToken::ExtraArgs),
-            token(ArgToken::Files),
-        ],
+    assert_eq!(format.program.as_deref(), Some("python"));
+    assert_eq!(format.argv.len(), 9);
+    assert_eq!(format.argv[0], literal("-I"));
+    assert_eq!(format.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &format.argv[2] else {
+        panic!("Prettier adapter must be a literal Python program")
+    };
+    for required in [
+        "__VELVET_GLOVE_PRETTIER_FILES__",
+        "phase not in (\"format\", \"verify\")",
+        "SAFE_CLI_OPTIONS",
+        "SAFE_CONFIG_OPTIONS",
+        "option can bypass the controlled contract",
+        "explicit config must be JSON",
+        "validate_config(document",
+        "validated_config_bytes",
+        "overrides are unsupported because config is copied outside the project",
+        "tempfile.gettempdir",
+        "temporary root must be outside the project",
+        "tempfile.mkdtemp",
+        "os.fchmod(private_fd, 0o600)",
+        "os.unlink(private_config_path)",
+        "os.rmdir(private_config_dir)",
+        "contains unsupported option",
+        "info.st_nlink != 1",
+        "selected paths repeat or alias one file",
+        "child_args = [node, tool, f\"--config={config_for_child}\"]",
+        "--list-different",
+        "--write",
+        "--log-level=error",
+        "--no-editorconfig",
+        "--ignore-path=/dev/null",
+        "--with-node-modules",
+        "--no-color",
+        "environment = {}",
+        "\"PATH\": \"/usr/bin:/bin\"",
+        "\"LANG\": \"C\"",
+        "\"LC_ALL\": \"C\"",
+        "\"TZ\": \"UTC\"",
+        "\"TERM\": \"dumb\"",
+        "selectors.DefaultSelector",
+        "start_new_session=True",
+        "class AdapterSignal(BaseException)",
+        "os.killpg(process.pid, signum)",
+        "signal.SIGKILL",
+        "def process_group_exists",
+        "def sweep_process_group",
+        "native Prettier left same-group descendants after child exit",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "def drain_blocked_signals",
+        "sanitize_private_output(stdout_bytes)",
+        "sanitize_private_output(stderr_bytes)",
+        "sanitize_private_error(adapter_error)",
+        "os.path.basename(candidate).startswith(\"velvet-glove-prettier-config-\")",
+        "Keep handled signals blocked through diagnostics and process exit",
+        "combined output exceeded",
+        "def validated_list_different",
+        "native_status == 0",
+        "native_status != 1 or native_stderr",
+        "native Prettier format preflight",
+        "child_arguments(config_for_child, \"list\")",
+        "child_arguments(config_for_child, \"write\")",
+        "phase == \"verify\" and returncode == 1",
+        "list-different output repeats files",
+        "list-different output names a file outside the selection",
+        "prettier: formatting differs:",
+        "native Prettier exited {returncode} without valid completion evidence",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "Prettier adapter omits {required:?}"
+        );
+    }
+    assert!(
+        adapter
+            .find("child_arguments(config_for_child, \"list\")")
+            .expect("format preflight invocation")
+            < adapter
+                .find("child_arguments(config_for_child, \"write\")")
+                .expect("format write invocation"),
+        "Prettier format must finish its read-only list-different preflight before write"
     );
-    assert_exit_codes(&format.exit_codes, &[0], &[], &[]);
+    assert!(
+        adapter
+            .find("os.unlink(private_config_path)")
+            .expect("private config cleanup")
+            < adapter
+                .find("signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)")
+                .expect("cleanup signal cutoff")
+            && adapter
+                .find("signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)")
+                .expect("cleanup signal cutoff")
+                < adapter
+                    .find("for signum, handler in previous_handlers.items()")
+                    .expect("signal handler restoration"),
+        "Prettier must retain handlers through private cleanup and establish a signal cutoff before restoring them"
+    );
+    assert!(!adapter.contains("os.environ.copy"));
+    assert_eq!(format.argv[3], literal("node"));
+    assert_eq!(format.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(format.argv[5], literal("format"));
+    assert_eq!(format.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(format.argv[7], literal("__VELVET_GLOVE_PRETTIER_FILES__"));
+    assert_eq!(format.argv[8], token(ArgToken::Files));
+    assert_exit_codes(&format.exit_codes, &[0], &[], &[2]);
     assert_eq!(format.writes, WriteBehavior::TargetFiles);
 
     let verify = prettier.phases.get("verify").expect("verify");
-    assert_argv(
-        verify,
-        vec![
-            literal("--check"),
-            token(ArgToken::ExtraArgs),
-            token(ArgToken::Files),
-        ],
-    );
-    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[]);
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    assert_eq!(verify.argv[2], format.argv[2]);
+    assert_eq!(verify.argv[3], literal("node"));
+    assert_eq!(verify.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[5], literal("verify"));
+    assert_eq!(verify.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(verify.argv[7], literal("__VELVET_GLOVE_PRETTIER_FILES__"));
+    assert_eq!(verify.argv[8], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(prettier.phase_order, vec!["format", "verify"]);
 }
 
 #[test]

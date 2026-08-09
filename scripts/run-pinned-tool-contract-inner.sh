@@ -44,6 +44,7 @@ cargo_clippy_toolchain_identity=$(pinned_component_install_identity \
 export VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT
 VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT=$(pinned_component_cache_root \
   "$state_dir" cargo-clippy-toolchain-1.97.1 "$cargo_clippy_toolchain_identity")
+export VELVET_GLOVE_FIXTURE_PRETTIER_ROOT="$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6"
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -85,6 +86,20 @@ rust_197_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("cargo-clippy") != null or index("cargo-fmt") != null' >/dev/null; then
   rust_197_selected=true
 fi
+prettier_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("prettier") != null' >/dev/null; then
+  prettier_selected=true
+fi
+shared_node_selected=false
+if jq -e --argjson tools "$tool_ids" '
+  any(.recipes[];
+      (.toolId as $tool | $tools | index($tool)) != null
+      and .environmentId == "macos-arm64-node")' "$registry" >/dev/null; then
+  shared_node_selected=true
+fi
+prettier_node="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/node/bin/node"
+prettier_npm_cli="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
+prettier_cli="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/package/node_modules/prettier/bin/prettier.cjs"
 
 while IFS= read -r program; do
   resolved=
@@ -92,6 +107,24 @@ while IFS= read -r program; do
     case $program in
       cargo | cargo-clippy | cargo-fmt | clippy-driver | rustc | rustdoc | rustfmt)
         resolved="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/$program"
+        ;;
+    esac
+  fi
+  if [[ -z $resolved && $prettier_selected == true ]]; then
+    case $program in
+      prettier-node)
+        resolved="$prettier_node"
+        ;;
+      prettier-npm)
+        resolved="$prettier_npm_cli"
+        ;;
+      prettier)
+        resolved="$prettier_cli"
+        ;;
+      node)
+        if [[ $shared_node_selected == false ]]; then
+          resolved="$prettier_node"
+        fi
         ;;
     esac
   fi
@@ -153,6 +186,7 @@ while IFS= read -r probe; do
   expected=$(printf '%s\n' "$probe" | jq -r '.probe.expected')
   probe_argv=()
   rust_197_probe=false
+  prettier_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
   done < <(printf '%s\n' "$probe" | jq -r '.probe.argv[]')
@@ -180,9 +214,38 @@ while IFS= read -r probe; do
         ;;
     esac
   fi
+  if [[ $prettier_selected == true ]]; then
+    case $owner in
+      prettier-node)
+        probe_argv=("$prettier_node" "${probe_argv[@]:1}")
+        prettier_probe=true
+        ;;
+      prettier-npm)
+        probe_argv=("$prettier_node" "$prettier_npm_cli" "${probe_argv[@]:1}")
+        prettier_probe=true
+        ;;
+      prettier)
+        probe_argv=("$prettier_node" "$prettier_cli" "${probe_argv[@]:1}")
+        prettier_probe=true
+        ;;
+    esac
+  fi
   set +e
   if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
+  elif [[ $prettier_probe == true ]]; then
+    observed=$(env -i \
+      "HOME=$HOME" \
+      "USER=${USER:-runner}" \
+      "LANG=C" \
+      "LC_ALL=C" \
+      "TZ=UTC" \
+      "TERM=dumb" \
+      "PATH=/usr/bin:/bin" \
+      "NO_COLOR=1" \
+      "CLICOLOR=0" \
+      "FORCE_COLOR=0" \
+      "${probe_argv[@]}" 2>&1)
   else
     observed=$("${probe_argv[@]}" 2>&1)
   fi

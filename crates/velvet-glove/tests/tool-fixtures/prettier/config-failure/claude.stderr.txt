@@ -1,0 +1,11 @@
+error: Prettier: phase `format` failed; diagnostics: <workspace>/.velvet-glove/prettier-agent-hook/test-session_prettier-tool_prettier-tool-failure.txt
+Prettier failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: python -I -c <prettier-adapter> node <prettier-cli> format --print-width=wide __VELVET_GLOVE_PRETTIER_FILES__ <workspace>/example.js
+status: Some(2)
+classification: Some(Failure)
+stderr:
+[error] Invalid --print-width value. Expected an integer, but received null.
+velvet-glove-prettier: native Prettier format preflight exited 1 without valid list-different evidence
+artifact: <workspace>/.velvet-glove/prettier-agent-hook/test-session_prettier-tool_prettier-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

@@ -149,14 +149,15 @@ just tool-case jq multi-file-fragments
 just tool-case astro multi-file-project
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
+just tool-case prettier multi-file
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Fourteen behavior-rich contracts across ten environments: jq data formats,
-# Buf data formats, Node, Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security, and
-# native macOS.
+# Fifteen behavior-rich contracts across eleven environments: jq data formats,
+# Buf data formats, shared Node, dedicated Prettier, Python, Go, Rust, Cargo
+# Clippy/Fmt, Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -209,6 +210,18 @@ files, conservative candidate attribution, an untouched unselected sentinel,
 and clean idempotent repeats. Provenance, integrity, command, mutation, and
 security limitations are recorded in the
 [Biome contract](docs/pinned-tool-environments.md#biome-validation-contract).
+
+The dedicated Prettier lane pins Prettier 3.9.6 in a one-package npm graph and
+runs it only through checksum-pinned Node 24.19.0 with bundled npm 11.17.0. Its
+isolated adapter disables implicit configuration, ignores, plugins,
+EditorConfig, cache, and pragma discovery; accepts only a narrow data-only JSON
+configuration and option set; and requires a complete read-only
+`--list-different` batch before any write. The four-case matrix proves clean,
+dirty, configuration-failure, and mixed multi-file behavior on both immediate
+and compatibility-deferred surfaces. Exact provenance, signal and descendant
+cleanup, private-config handling, and the remaining file-replacement and late
+partial-write limitations are in the
+[Prettier contract](docs/pinned-tool-environments.md#prettier-validation-contract).
 
 The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
 stdout as the formatting signal while preserving native status-two failure
