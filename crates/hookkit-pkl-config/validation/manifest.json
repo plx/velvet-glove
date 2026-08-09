@@ -784,10 +784,15 @@
                   "role": "phase",
                   "mode": "verify",
                   "reusesImmediatePhase": null,
-                  "program": "asciidoctor",
+                  "program": "ruby",
                   "argv": [
-                    "--failure-level=WARNING",
-                    "--out-file=/dev/null",
+                    "-ropen3",
+                    "-e",
+                    "tool = ARGV.shift\nunless tool\n  warn \"velvet-glove-asciidoctor: missing tool executable\"\n  exit 2\nend\nunsupported = ARGV.find do |argument|\n  short = argument.start_with?(\"-\") && !argument.start_with?(\"--\")\n  argument == \"--\" ||\n    (short && (argument.include?(\"h\") || argument.include?(\"V\") || argument.include?(\"v\") || argument.include?(\"q\") || argument.include?(\"?\"))) ||\n    argument.start_with?(\"--h\") || argument.start_with?(\"--v\") || argument.start_with?(\"--q\")\nend\nif unsupported\n  warn \"velvet-glove-asciidoctor: unsupported argument #{unsupported.inspect} would bypass validation or diagnostic evidence\"\n  exit 2\nend\nbegin\n  stdout, stderr, status = Open3.capture3(tool, *ARGV, \"--safe-mode=safe\", \"--failure-level=FATAL\", \"--out-file=/dev/null\")\n  unless status.success?\n    $stdout.write(stdout)\n    $stderr.write(stderr)\n    exit 2\n  end\n  exec(tool, *ARGV, \"--safe-mode=safe\", \"--failure-level=WARNING\", \"--out-file=/dev/null\")\nrescue SystemCallError => error\n  warn \"velvet-glove-asciidoctor: #{error.message}\"\n  exit 2\nend",
+                    "--",
+                    {
+                      "type": "ToolExecutable"
+                    },
                     {
                       "type": "ExtraArgs"
                     },
@@ -802,7 +807,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -868,10 +875,15 @@
                   "role": "workflow-check",
                   "mode": "verify",
                   "reusesImmediatePhase": "verify",
-                  "program": "asciidoctor",
+                  "program": "ruby",
                   "argv": [
-                    "--failure-level=WARNING",
-                    "--out-file=/dev/null",
+                    "-ropen3",
+                    "-e",
+                    "tool = ARGV.shift\nunless tool\n  warn \"velvet-glove-asciidoctor: missing tool executable\"\n  exit 2\nend\nunsupported = ARGV.find do |argument|\n  short = argument.start_with?(\"-\") && !argument.start_with?(\"--\")\n  argument == \"--\" ||\n    (short && (argument.include?(\"h\") || argument.include?(\"V\") || argument.include?(\"v\") || argument.include?(\"q\") || argument.include?(\"?\"))) ||\n    argument.start_with?(\"--h\") || argument.start_with?(\"--v\") || argument.start_with?(\"--q\")\nend\nif unsupported\n  warn \"velvet-glove-asciidoctor: unsupported argument #{unsupported.inspect} would bypass validation or diagnostic evidence\"\n  exit 2\nend\nbegin\n  stdout, stderr, status = Open3.capture3(tool, *ARGV, \"--safe-mode=safe\", \"--failure-level=FATAL\", \"--out-file=/dev/null\")\n  unless status.success?\n    $stdout.write(stdout)\n    $stderr.write(stderr)\n    exit 2\n  end\n  exec(tool, *ARGV, \"--safe-mode=safe\", \"--failure-level=WARNING\", \"--out-file=/dev/null\")\nrescue SystemCallError => error\n  warn \"velvet-glove-asciidoctor: #{error.message}\"\n  exit 2\nend",
+                    "--",
+                    {
+                      "type": "ToolExecutable"
+                    },
                     {
                       "type": "ExtraArgs"
                     },
@@ -886,7 +898,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -911,19 +925,28 @@
           ]
         }
       },
-      "fixtureCases": [],
+      "fixtureCases": [
+        "clean",
+        "missing-include",
+        "multi-file",
+        "operational-failure"
+      ],
       "dependencies": {
         "provisioningGroup": "ruby",
         "primaryExecutable": "asciidoctor",
-        "programOverrides": [],
+        "programOverrides": [
+          "ruby"
+        ],
         "wrapperExecutables": []
       },
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 12
+          "status": "recorded",
+          "url": "https://github.com/asciidoctor/asciidoctor/releases/tag/v2.0.26",
+          "version": "2.0.26",
+          "installationSource": "Asciidoctor 2.0.26 pure-Ruby gem locked by SHA-256 in validation/provisioning/ruby/Gemfile.lock",
+          "versionCommand": ["asciidoctor", "--version"]
         }
       },
       "constraints": {
@@ -955,7 +978,7 @@
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -974,13 +997,15 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No probe-backed immediate rendered-command contract is recorded for this target.",
-          "trackingIssue": 7
+          "references": [
+            "cargo:test/run_all_tool_fixtures[asciidoctor/immediate-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -999,13 +1024,23 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 12
+          "references": [
+            "recipe:asciidoctor-macos-arm64",
+            "artifact:clean/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:clean/fixtures/report.json#asciidoctor/clean/immediate",
+            "artifact:missing-include/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:missing-include/fixtures/report.json#asciidoctor/missing-include/immediate",
+            "artifact:multi-file/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:multi-file/fixtures/report.json#asciidoctor/multi-file/immediate",
+            "artifact:operational-failure/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:operational-failure/fixtures/report.json#asciidoctor/operational-failure/immediate"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -1024,13 +1059,15 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No probe-backed deferred rendered-command contract is recorded for this target.",
-          "trackingIssue": 8
+          "references": [
+            "cargo:test/run_all_tool_fixtures[asciidoctor/compatibility-deferred-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -1049,9 +1086,19 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 12
+          "references": [
+            "recipe:asciidoctor-macos-arm64",
+            "artifact:clean/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:clean/fixtures/report.json#asciidoctor/clean/deferred",
+            "artifact:missing-include/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:missing-include/fixtures/report.json#asciidoctor/missing-include/deferred",
+            "artifact:multi-file/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:multi-file/fixtures/report.json#asciidoctor/multi-file/deferred",
+            "artifact:operational-failure/pinned-environment.json#asciidoctor-2.0.26",
+            "artifact:operational-failure/fixtures/report.json#asciidoctor/operational-failure/deferred"
+          ],
+          "reason": null,
+          "trackingIssue": null
         }
       ],
       "exceptions": []

@@ -338,6 +338,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     assert_eq!(
         recipe_tools,
         BTreeSet::from([
+            "asciidoctor",
             "black",
             "go-fmt",
             "jq",

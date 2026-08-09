@@ -1,6 +1,7 @@
 GEM
   remote: https://rubygems.org/
   specs:
+    asciidoctor (2.0.26)
     ast (2.4.3)
     base64 (0.2.0)
     benchmark (0.4.0)
@@ -31,6 +32,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  asciidoctor (= 2.0.26)
   base64 (= 0.2.0)
   benchmark (= 0.4.0)
   ostruct (= 0.6.1)
@@ -40,6 +42,7 @@ DEPENDENCIES
   rubocop-ast (= 1.18.0)
 
 CHECKSUMS
+  asciidoctor (2.0.26) sha256=16e3accf1fc206bbd6335848649d7fd65f31d2daa60d85af13d47a8ee4b071c1
   ast (2.4.3) sha256=954615157c1d6a382bc27d690d973195e79db7f55e9765ac7c481c60bdb4d383
   base64 (0.2.0)
   benchmark (0.4.0) sha256=0f12f8c495545e3710c3e4f0480f63f06b4c842cc94cec7f33a956f5180e874a

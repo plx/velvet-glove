@@ -430,7 +430,7 @@
             "https://rubygems.org/downloads/{name}-{version}.gem"
           ],
           "environment": {
-            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache"
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
           },
           "network": "required",
           "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
@@ -439,13 +439,13 @@
           "id": "bundle-install",
           "argv": ["bundle", "install", "--local", "--jobs", "4"],
           "environment": {
-            "BUNDLE_APP_CONFIG": "{state}/ruby-contract-1.30.1/config",
-            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache",
+            "BUNDLE_APP_CONFIG": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config",
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache",
             "BUNDLE_DEPLOYMENT": "1",
             "BUNDLE_FROZEN": "1",
             "BUNDLE_GEMFILE": "{repository}/crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile",
             "BUNDLE_PATH__SYSTEM": "true",
-            "BUNDLE_USER_HOME": "{state}/ruby-contract-1.30.1/user"
+            "BUNDLE_USER_HOME": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
           },
           "network": "denied",
           "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
@@ -455,7 +455,7 @@
           "argv": ["bundle", "lock", "--local"],
           "environment": {
             "BUNDLE_APP_CONFIG": "{runHome}/tmp/ruby-lock-check/config",
-            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache",
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache",
             "BUNDLE_GEMFILE": "{runHome}/tmp/ruby-lock-check/Gemfile",
             "BUNDLE_PATH__SYSTEM": "true",
             "BUNDLE_USER_HOME": "{runHome}/tmp/ruby-lock-check/user"
@@ -464,23 +464,24 @@
           "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
         },
         {
-          "id": "rubocop-binstubs",
+          "id": "ruby-tool-binstubs",
           "argv": [
             "bundle",
             "binstubs",
+            "asciidoctor",
             "rubocop",
             "--path",
-            "{state}/ruby-contract-1.30.1/bin",
+            "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin",
             "--force"
           ],
           "environment": {
-            "BUNDLE_APP_CONFIG": "{state}/ruby-contract-1.30.1/config",
-            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache",
+            "BUNDLE_APP_CONFIG": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config",
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache",
             "BUNDLE_DEPLOYMENT": "1",
             "BUNDLE_FROZEN": "1",
             "BUNDLE_GEMFILE": "{repository}/crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile",
             "BUNDLE_PATH__SYSTEM": "true",
-            "BUNDLE_USER_HOME": "{state}/ruby-contract-1.30.1/user"
+            "BUNDLE_USER_HOME": "{state}/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
           },
           "network": "denied",
           "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
@@ -616,6 +617,25 @@
       "caseExecutables": ["rustfmt"],
       "cases": ["clean", "unformatted"],
       "representativeCase": "unformatted"
+    },
+    {
+      "id": "asciidoctor-macos-arm64",
+      "toolId": "asciidoctor",
+      "environmentId": "macos-arm64-ruby",
+      "version": "2.0.26",
+      "installationSource": "Asciidoctor 2.0.26 pure-Ruby gem locked by SHA-256 in validation/provisioning/ruby/Gemfile.lock",
+      "integrity": {
+        "kind": "bundler-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+      },
+      "probe": {
+        "argv": ["asciidoctor", "--version"],
+        "match": "prefix",
+        "expected": "Asciidoctor 2.0.26 ["
+      },
+      "caseExecutables": ["asciidoctor"],
+      "cases": ["clean", "missing-include", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
     },
     {
       "id": "rubocop-macos-arm64",

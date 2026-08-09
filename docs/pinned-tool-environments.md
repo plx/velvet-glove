@@ -7,7 +7,8 @@ single command:
 just tool-case jq multi-file-fragments
 ```
 
-Run the behavior-rich representative contract for all seven environments with:
+Run all eight behavior-rich representative contracts across seven environments
+with:
 
 ```sh
 just tool-representatives
@@ -64,7 +65,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.3 | mise SHA-256 | `go-fmt/unformatted` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
-| Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `rubocop/autocorrect-strings` |
+| Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
 | native macOS | SwiftLint 0.65.0 | mise SHA-256 | `swiftlint/manual-issue` |
 
 ### jq validation contract
@@ -103,6 +104,63 @@ coverage additionally runs `clean`, `invalid`, and `operational-failure`; each
 case covers both Claude and Codex immediate hooks and the
 compatibility-translated deferred lifecycle.
 
+### Asciidoctor validation contract
+
+The Ruby environment pins the dependency-free, pure-Ruby
+[Asciidoctor 2.0.26 gem](https://rubygems.org/downloads/asciidoctor-2.0.26.gem)
+at SHA-256
+`16e3accf1fc206bbd6335848649d7fd65f31d2daa60d85af13d47a8ee4b071c1`.
+The official [v2.0.26 release](https://github.com/asciidoctor/asciidoctor/releases/tag/v2.0.26)
+resolves to commit `0b99b39c9df884d4aec13bba45f03cdbab505769`.
+The upstream tag, commit, and gem are unsigned, so the committed RubyGems
+package checksum is the integrity guard. The exact product probe prefix is
+`Asciidoctor 2.0.26 [`; its second line describes the pinned Ruby runtime and
+is intentionally not treated as version identity.
+
+The evaluated outer phase is:
+
+```text
+ruby -ropen3 -e <adapter> -- asciidoctor {extra-args} {files}
+```
+
+It traces these nested commands, with the enforced options appended last so
+configured extra arguments cannot override them:
+
+```text
+asciidoctor {extra-args} {files} --safe-mode=safe --failure-level=FATAL --out-file=/dev/null
+asciidoctor {extra-args} {files} --safe-mode=safe --failure-level=WARNING --out-file=/dev/null
+```
+
+The adapter rejects `--`, help/version early exits, verbose forms that can
+devolve into a version-only success, and quiet-mode diagnostic suppression as
+operational failures so configured arguments cannot turn the validator into a
+successful no-op or erase its evidence.
+
+Asciidoctor's documented CLI status space uses zero for success and one for
+syntax, usage, configuration, document-processing, and unexpected failures.
+The adapter first runs the same batch silently at a FATAL threshold. A failed
+preflight is emitted once and remapped to status two (operational failure); a
+successful preflight is followed by the WARNING-threshold pass, where status
+one represents document diagnostics. Retained traces prove both nested
+invocations and the evaluated outer command. The four contract cases cover a
+clean document, a stable missing-include diagnostic, a mixed multi-document
+batch with conservative attribution, and an invalid backend that must be
+operational.
+Both immediate execution and the compatibility-translated deferred lifecycle
+run twice without changing source files.
+
+Safe mode permits local includes while rejecting lexical ancestor includes.
+It is not a full filesystem sandbox: upstream documents that symlink targets
+can bypass the safe-mode jail. The controlled temporary home, denied network,
+explicit configuration, and process timeout therefore remain part of the
+contract. Documents that intentionally include `../shared-partial.adoc` are a
+known limitation of this conservative default.
+The preflight buffers its child output and processes clean or source-issue
+documents twice; custom Asciidoctor extensions with side effects would likewise
+run twice and are outside this built-in contract. A fatal document diagnostic
+is indistinguishable from a fatal CLI/configuration failure in the upstream
+status model and is therefore conservatively classified as operational.
+
 The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
@@ -123,18 +181,19 @@ direct-archive and selected dependency-lock digests, sandbox backend, active
 network-denial result, and outcome. The fixture harness writes its stable
 surface-level report to `artifacts/fixtures/report.json`; the environment record
 binds that report by SHA-256, while timestamped report copies preserve run
-history. Successful jq runs also retain their exact invocation traces,
-workspace snapshots and diffs, diagnostic artifacts, and repeated deferred
-summaries below `artifacts/fixtures/jq/`. Override the state and artifact roots
-with `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
+history. Successful fully instrumented contract runs also retain their exact
+invocation traces, workspace snapshots and diffs, diagnostic artifacts, and
+repeated deferred summaries below the tool's `artifacts/fixtures/` directory.
+Override the state and artifact roots with
+`VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These seven smoke contracts establish the reproducible environment substrate;
+These eight smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
-and semantic case has evidence; jq is covered only after its complete four-case
-matrix passes. Linux, Intel, and full-catalog scheduling remain separate
-follow-up work.
+and semantic case has evidence; jq and Asciidoctor are covered only after each
+complete four-case matrix passes. Linux, Intel, and full-catalog scheduling
+remain separate follow-up work.
 
 ## Updating a pin
 

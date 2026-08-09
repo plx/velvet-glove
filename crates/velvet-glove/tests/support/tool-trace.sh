@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-: "${VELVET_GLOVE_JQ_TRACE_DIR:?missing jq trace directory}"
-: "${VELVET_GLOVE_JQ_REAL_PROGRAM:?missing real jq program}"
-: "${VELVET_GLOVE_JQ_LOGICAL_PROGRAM:?missing logical jq program}"
-: "${VELVET_GLOVE_JQ_TRACE_SENTINEL:?missing jq trace sentinel}"
+: "${VELVET_GLOVE_TOOL_TRACE_DIR:?missing tool trace directory}"
+: "${VELVET_GLOVE_TOOL_REAL_PROGRAM:?missing real tool program}"
+: "${VELVET_GLOVE_TOOL_LOGICAL_PROGRAM:?missing logical tool program}"
+: "${VELVET_GLOVE_TOOL_TRACE_SENTINEL:?missing tool trace sentinel}"
 
-invocations_dir="$VELVET_GLOVE_JQ_TRACE_DIR/invocations"
+invocations_dir="$VELVET_GLOVE_TOOL_TRACE_DIR/invocations"
 /bin/mkdir -p "$invocations_dir"
 
 index=1
@@ -16,8 +16,9 @@ done
 record="$invocations_dir/$(printf '%04d' "$index")"
 
 printf '%s\n' "$0" >"$record/program"
-printf '%s\n' "$VELVET_GLOVE_JQ_LOGICAL_PROGRAM" >"$record/logical-program"
-printf '%s\n' "$VELVET_GLOVE_JQ_REAL_PROGRAM" >"$record/real-program"
+printf '%s\n' "$VELVET_GLOVE_TOOL_LOGICAL_PROGRAM" >"$record/logical-program"
+printf '%s\n' "$VELVET_GLOVE_TOOL_REAL_PROGRAM" >"$record/real-program"
+printf '%s\n' 'pass-through' >"$record/execution"
 pwd -P >"$record/cwd"
 printf '%s\n' "$#" >"$record/argc"
 printf '%s\n' "${LANG-}" >"$record/env-LANG"
@@ -26,7 +27,7 @@ printf '%s\n' "${TZ-}" >"$record/env-TZ"
 printf '%s\n' "${NO_COLOR-}" >"$record/env-NO_COLOR"
 printf '%s\n' "${CLICOLOR-}" >"$record/env-CLICOLOR"
 printf '%s\n' "${FORCE_COLOR-}" >"$record/env-FORCE_COLOR"
-printf '%s\n' "$VELVET_GLOVE_JQ_TRACE_SENTINEL" >"$record/env-VELVET_GLOVE_JQ_TRACE_SENTINEL"
+printf '%s\n' "$VELVET_GLOVE_TOOL_TRACE_SENTINEL" >"$record/env-VELVET_GLOVE_TOOL_TRACE_SENTINEL"
 
 argument_index=0
 for argument in "$@"; do
@@ -35,7 +36,7 @@ for argument in "$@"; do
 done
 
 set +e
-"$VELVET_GLOVE_JQ_REAL_PROGRAM" "$@"
+"$VELVET_GLOVE_TOOL_REAL_PROGRAM" "$@"
 status=$?
 set -e
 printf '%s\n' "$status" >"$record/status"

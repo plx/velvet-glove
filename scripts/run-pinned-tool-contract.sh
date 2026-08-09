@@ -61,6 +61,8 @@ case $artifact_dir in
   *) artifact_dir="$repository_root/$artifact_dir" ;;
 esac
 mkdir -p "$state_dir" "$artifact_dir"
+state_dir=$(CDPATH='' cd -- "$state_dir" && pwd -P)
+artifact_dir=$(CDPATH='' cd -- "$artifact_dir" && pwd -P)
 run_home=$(mktemp -d "/private/tmp/velvet-glove-pinned.XXXXXX")
 rust_extract_dir=
 ruby_extract_dir=
@@ -407,7 +409,7 @@ fi
 
 if needs_group ruby; then
   ruby_archive=$(fetch_component_archive ruby)
-  ruby_root="$state_dir/ruby-runtime-3.4.10-rubocop-1.30.1"
+  ruby_root="$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1"
   ruby_identity=$(component_integrity_json ruby)
   if [[ -e $ruby_root && ! -d $ruby_root ]]; then
     echo "error: controlled Ruby root is not a directory: $ruby_root" >&2
@@ -440,7 +442,7 @@ if needs_group ruby; then
   verify_macho_closure "$ruby_root" ruby
 
   echo "==> Installing the checksum-locked pure-Ruby Bundler graph"
-  ruby_contract_root="$state_dir/ruby-contract-1.30.1"
+  ruby_contract_root="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1"
   mkdir -p \
     "$ruby_contract_root/bin" \
     "$ruby_contract_root/cache" \
@@ -505,8 +507,8 @@ if needs_group ruby; then
         puts match.captures.join("\t") if match
       end
     ' "$provisioning_dir/ruby/Gemfile.lock")
-  if [[ $ruby_gem_count -ne 12 ]]; then
-    echo "error: expected 12 checksum-locked Ruby gem packages, found $ruby_gem_count" >&2
+  if [[ $ruby_gem_count -ne 13 ]]; then
+    echo "error: expected 13 checksum-locked Ruby gem packages, found $ruby_gem_count" >&2
     exit 1
   fi
   ruby_env=(
@@ -543,7 +545,8 @@ if needs_group ruby; then
   env -i "${provisioning_env[@]}" \
     "PATH=$ruby_root/bin:/usr/bin:/bin" \
     "${ruby_env[@]}" \
-    "$ruby_root/bin/bundle" binstubs rubocop --path "$ruby_contract_root/bin" --force
+    "$ruby_root/bin/bundle" binstubs asciidoctor rubocop \
+      --path "$ruby_contract_root/bin" --force
   native_bundles_after=$(find "$ruby_root" -type f -name '*.bundle' -print | LC_ALL=C sort)
   if [[ $native_bundles_after != "$native_bundles_before" ]]; then
     echo "error: Ruby bootstrap unexpectedly changed the native-extension closure" >&2

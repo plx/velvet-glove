@@ -34,14 +34,14 @@ export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null
 export NPM_CONFIG_USERCONFIG=/dev/null
 export PIP_CONFIG_FILE=/dev/null
-export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-1.30.1/config"
-export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-1.30.1/cache"
+export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
+export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
 export BUNDLE_DEPLOYMENT=1
 export BUNDLE_FROZEN=1
 export BUNDLE_GEMFILE="$provisioning_dir/ruby/Gemfile"
 export BUNDLE_PATH__SYSTEM=true
-export BUNDLE_USER_HOME="$state_dir/ruby-contract-1.30.1/user"
-export PATH="$state_dir/ruby-contract-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
+export BUNDLE_USER_HOME="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
+export PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
 
 mkdir -p "$artifact_dir" "$artifact_dir/fixtures" "$CARGO_TARGET_DIR" "$TMPDIR"
 observed_file="$TMPDIR/observed-versions.jsonl"

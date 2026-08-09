@@ -94,8 +94,8 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run all seven pinned representative environments with `just
-tool-representatives`. See the
+Run all eight pinned representative contracts across seven environments with
+`just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
 denial, and evidence output.
@@ -128,8 +128,9 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq cases are retained too: they
-include exact pass-through program/argv/cwd/environment traces, complete
-workspace snapshots and diffs for repeated immediate runs, and two independent
-compatibility-deferred summaries plus their semantic idempotence comparison.
-Other successful case workspaces are removed.
+alongside it. Successful jq and Asciidoctor contract cases are retained too.
+Their evidence includes exact pass-through program/argv/cwd/environment traces
+(including Asciidoctor's nested FATAL preflight and WARNING validation),
+complete workspace snapshots and diffs for repeated immediate runs, and two
+independent compatibility-deferred summaries plus their semantic idempotence
+comparison. Other successful case workspaces are removed.
