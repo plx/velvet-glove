@@ -272,7 +272,7 @@ const CONTEXTLINT_POISONED_ENV: &[&str] = &[
 const DCLINT_FILES_MARKER: &str = "__VELVET_GLOVE_DCLINT_FILES__";
 const DCLINT_PRIVATE_CONFIG_ARGUMENT: &str = "--config=<private-config>";
 const DCLINT_PRIVATE_CONFIG_SHA256: &str =
-    "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356";
+    "a7dcae6e1d0ec043aeeb03cb1a654fdc8369bc9cd467964a788ed78b034df178";
 const DCLINT_POISON_ENV_VALUE: &str = "velvet-glove-dclint-adapter-must-clear-this";
 const DCLINT_SCRUBBED_ENV: &[&str] = &[
     "DCLINT_CONFIG",
@@ -9478,7 +9478,7 @@ fn verify_dclint_private_config_argument(
     assert_record(record, "dclint-config-kind", "file")?;
     assert_record(record, "dclint-config-mode", "600")?;
     assert_record(record, "dclint-config-links", "1")?;
-    assert_record(record, "dclint-config-bytes", "3")?;
+    assert_record(record, "dclint-config-bytes", "166")?;
     assert_record(record, "dclint-config-sha256", DCLINT_PRIVATE_CONFIG_SHA256)?;
     assert_record(
         record,
@@ -13254,6 +13254,7 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
         const ORPHAN_LATE_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_ORPHAN_LATE";
         const UNSELECTED_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_UNSELECTED";
         const DIRECTORY_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_DIRECTORY";
+        const CONFIG_CAPTURE_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_CONFIG_CAPTURE";
         const CUTOFF_READY_ENV: &str = "VELVET_GLOVE_DCLINT_CUTOFF_READY";
         const CUTOFF_RELEASE_ENV: &str = "VELVET_GLOVE_DCLINT_CUTOFF_RELEASE";
 
@@ -13323,6 +13324,7 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
             let orphan_late_path = root.join("normal-exit-orphan.late");
             let unselected = project.join("unselected.yml");
             let retained_directory = project.join("retained-directory");
+            let config_capture = root.join("normalized-config.json");
             std::fs::write(&dirty, b"dirty\n")
                 .map_err(|error| format!("write dclint lifecycle dirty target: {error}"))?;
             std::fs::write(&selected_clean, b"clean\n")
@@ -13367,7 +13369,8 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                     .env(ORPHAN_PID_ENV, &orphan_pid_path)
                     .env(ORPHAN_LATE_ENV, &orphan_late_path)
                     .env(UNSELECTED_ENV, &unselected)
-                    .env(DIRECTORY_ENV, &retained_directory);
+                    .env(DIRECTORY_ENV, &retained_directory)
+                    .env(CONFIG_CAPTURE_ENV, &config_capture);
                 run_with_timeout(
                     &mut process,
                     b"",
@@ -13647,6 +13650,21 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                     r#"{"rules":{},"rules":{}}"#,
                     "duplicate JSON key",
                 ),
+                (
+                    "incomplete-top-level-order",
+                    r#"{"rules":{"top-level-properties-order":[2,{"customOrder":["services"]}]}}"#,
+                    "customOrder must be an exact permutation",
+                ),
+                (
+                    "duplicate-service-key-groups",
+                    r#"{"rules":{"service-keys-order":[2,{"groups":{"Core Definitions":["image"],"Other":["image"]}}]}}"#,
+                    "service key 'image' is assigned to multiple groups",
+                ),
+                (
+                    "duplicate-effective-service-key-groups",
+                    r#"{"rules":{"service-keys-order":[2,{"groups":{"Other":["image"]}}]}}"#,
+                    "service key 'image' is assigned to multiple groups",
+                ),
             ] {
                 let config = configs.join(format!("{label}.json"));
                 std::fs::write(&config, format!("{contents}\n"))
@@ -13665,6 +13683,122 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                     ));
                 }
             }
+            let safe_top_level_order = serde_json::json!([
+                "x-properties",
+                "version",
+                "name",
+                "include",
+                "services",
+                "models",
+                "networks",
+                "volumes",
+                "secrets",
+                "configs"
+            ]);
+            let custom_top_level_order = serde_json::json!([
+                "models",
+                "services",
+                "name",
+                "x-properties",
+                "include",
+                "version",
+                "configs",
+                "secrets",
+                "volumes",
+                "networks"
+            ]);
+            let custom_order_config = configs.join("complete-top-level-order.json");
+            std::fs::write(
+                &custom_order_config,
+                serde_json::to_vec(&serde_json::json!({
+                    "rules": {
+                        "top-level-properties-order": [
+                            2,
+                            {"customOrder": custom_top_level_order.clone()}
+                        ]
+                    }
+                }))
+                .map_err(|error| format!("serialize dclint complete custom order: {error}"))?,
+            )
+            .map_err(|error| format!("write dclint complete custom order: {error}"))?;
+            let custom_order_before = fingerprint(&custom_order_config)?;
+            let custom_order_extra =
+                vec!["--config=configs/complete-top-level-order.json".to_owned()];
+            let output = run(
+                "config-complete-top-level-order",
+                "capture-config",
+                &custom_order_extra,
+                &[&selected_clean],
+            )?;
+            assert_outcome("config-complete-top-level-order", &output, 0, "")?;
+            let captured: JsonValue = serde_json::from_slice(
+                &std::fs::read(&config_capture)
+                    .map_err(|error| format!("read normalized custom-order config: {error}"))?,
+            )
+            .map_err(|error| format!("parse normalized custom-order config: {error}"))?;
+            if read_invocations()?.len() != 1
+                || captured["rules"]["top-level-properties-order"][0] != 2
+                || captured["rules"]["top-level-properties-order"][1]["customOrder"]
+                    != custom_top_level_order
+                || fingerprint(&custom_order_config)? != custom_order_before
+            {
+                return Err(format!(
+                    "dclint did not preserve the severity and exact complete user top-level order: {captured}"
+                ));
+            }
+
+            let numeric_order_config = configs.join("numeric-top-level-order.json");
+            std::fs::write(
+                &numeric_order_config,
+                br#"{"rules":{"top-level-properties-order":2}}"#,
+            )
+            .map_err(|error| format!("write dclint numeric top-level order: {error}"))?;
+            let numeric_order_extra =
+                vec!["--config=configs/numeric-top-level-order.json".to_owned()];
+            let output = run(
+                "config-numeric-top-level-order",
+                "capture-config",
+                &numeric_order_extra,
+                &[&selected_clean],
+            )?;
+            assert_outcome("config-numeric-top-level-order", &output, 0, "")?;
+            let captured: JsonValue = serde_json::from_slice(
+                &std::fs::read(&config_capture)
+                    .map_err(|error| format!("read normalized numeric-order config: {error}"))?,
+            )
+            .map_err(|error| format!("parse normalized numeric-order config: {error}"))?;
+            if read_invocations()?.len() != 1
+                || captured["rules"]["top-level-properties-order"][0] != 2
+                || captured["rules"]["top-level-properties-order"][1]["customOrder"]
+                    != safe_top_level_order
+            {
+                return Err(format!(
+                    "dclint did not replace its destructive numeric-enabled default order: {captured}"
+                ));
+            }
+
+            let output = run(
+                "config-default-top-level-order",
+                "capture-config",
+                &[],
+                &[&selected_clean],
+            )?;
+            assert_outcome("config-default-top-level-order", &output, 0, "")?;
+            let captured: JsonValue = serde_json::from_slice(
+                &std::fs::read(&config_capture)
+                    .map_err(|error| format!("read normalized default-order config: {error}"))?,
+            )
+            .map_err(|error| format!("parse normalized default-order config: {error}"))?;
+            if read_invocations()?.len() != 1
+                || captured["rules"]["top-level-properties-order"][0] != 1
+                || captured["rules"]["top-level-properties-order"][1]["customOrder"]
+                    != safe_top_level_order
+            {
+                return Err(format!(
+                    "dclint did not replace its destructive native default top-level order: {captured}"
+                ));
+            }
+
             let config_regular = configs.join("regular.json");
             let config_hardlink = configs.join("hardlink.json");
             let config_symlink = configs.join("symlink.json");
@@ -13821,6 +13955,87 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                 }
                 std::fs::remove_file(&target)
                     .map_err(|error| format!("remove dclint control-path target: {error}"))?;
+            }
+
+            let run_with_tmpdir =
+                |label: &str, temporary_value: &OsStr| -> Result<BoundedOutput, String> {
+                    std::fs::write(&invoked, b"").map_err(|error| {
+                        format!("clear dclint {label} TMPDIR invocation log: {error}")
+                    })?;
+                    let mut command = Command::new(&python);
+                    command
+                        .args(["-I", "-c", adapter])
+                        .arg(&fake_tool)
+                        .arg("verify")
+                        .arg(&project)
+                        .arg(DCLINT_FILES_MARKER)
+                        .arg(&selected_clean)
+                        .current_dir(&project)
+                        .env(TMPDIR_ENV, temporary_value)
+                        .env(MODE_ENV, "clean")
+                        .env(INVOKED_ENV, &invoked);
+                    run_with_timeout(
+                        &mut command,
+                        b"",
+                        timeout.min(Duration::from_secs(5)),
+                        &evidence.join(label),
+                    )
+                    .map_err(|error| format!("run dclint {label} TMPDIR probe: {error}"))
+                };
+            let tmp_alias = root.join("tmp-alias");
+            std::os::unix::fs::symlink(&private_tmp, &tmp_alias)
+                .map_err(|error| format!("create dclint TMPDIR alias: {error}"))?;
+            let tmp_alias_spelling = format!("{}/", tmp_alias.display());
+            let alias_output = run_with_tmpdir("tmpdir-alias", tmp_alias_spelling.as_ref())?;
+            assert_outcome("tmpdir-alias", &alias_output, 0, "")?;
+            let alias_calls = read_invocations()?;
+            let alias_config = alias_calls
+                .first()
+                .and_then(|call| {
+                    call.iter()
+                        .find_map(|argument| argument.strip_prefix("--config="))
+                })
+                .map(PathBuf::from);
+            if alias_calls.len() != 1
+                || alias_config
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    != Some(private_tmp.as_path())
+            {
+                return Err(format!(
+                    "dclint did not canonicalize its existing symlink/trailing-slash TMPDIR before child launch: {alias_calls:?}"
+                ));
+            }
+            std::fs::remove_file(&tmp_alias)
+                .map_err(|error| format!("remove dclint TMPDIR alias: {error}"))?;
+
+            let missing_tmp = root.join("missing-tmp");
+            for (label, temporary_value, expected_stderr) in [
+                (
+                    "tmpdir-relative",
+                    OsStr::new("relative-tmp"),
+                    "velvet-glove-dclint: TMPDIR must name an existing absolute directory\n",
+                ),
+                (
+                    "tmpdir-missing",
+                    missing_tmp.as_os_str(),
+                    "velvet-glove-dclint: TMPDIR must resolve to an existing accessible directory\n",
+                ),
+            ] {
+                let output = run_with_tmpdir(label, temporary_value)?;
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || output.stderr != expected_stderr.as_bytes()
+                    || !read_invocations()?.is_empty()
+                {
+                    return Err(format!(
+                        "dclint {label} TMPDIR rejection was not deterministic and pre-spawn: status={:?}; stdout={:?}; stderr={:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
             }
 
             let output_cap_before = fingerprint(&selected_clean)?;

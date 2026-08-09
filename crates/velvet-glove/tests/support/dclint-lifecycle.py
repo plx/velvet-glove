@@ -12,6 +12,7 @@ ORPHAN_PID = os.environ.get("VELVET_GLOVE_DCLINT_LIFECYCLE_ORPHAN_PID")
 ORPHAN_LATE = os.environ.get("VELVET_GLOVE_DCLINT_LIFECYCLE_ORPHAN_LATE")
 UNSELECTED = os.environ.get("VELVET_GLOVE_DCLINT_LIFECYCLE_UNSELECTED")
 RETAINED_DIRECTORY = os.environ.get("VELVET_GLOVE_DCLINT_LIFECYCLE_DIRECTORY")
+CONFIG_CAPTURE = os.environ.get("VELVET_GLOVE_DCLINT_LIFECYCLE_CONFIG_CAPTURE")
 
 
 def record_invocation():
@@ -136,6 +137,12 @@ if MODE == "non-finite-json":
 if MODE == "config-swap":
     with open(SOURCE_CONFIG, "wb") as output:
         output.write(b'{"quiet":true}\n')
+    emit([report_record(path, []) for path in files], 0)
+if MODE == "capture-config":
+    with open(config_path(), "rb") as source:
+        contents = source.read()
+    with open(CONFIG_CAPTURE, "wb") as output:
+        output.write(contents)
     emit([report_record(path, []) for path in files], 0)
 if MODE == "private-config-destroy":
     private = config_path()

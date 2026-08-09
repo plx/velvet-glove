@@ -1,6 +1,11 @@
+x-runtime:
+  source: fixture
 name: fixture-autofix
 services:
   alpha:
     image: alpine:3.20
   zebra:
     image: nginx:1.27.0
+models:
+  assistant:
+    model: ai/example

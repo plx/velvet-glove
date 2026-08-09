@@ -54,28 +54,42 @@ dclintAdapter: String = #"""
       "invalid-schema": False,
       "unknown-error": False,
   }
-  SERVICE_KEY_GROUPS = {
-      "Core Definitions",
-      "Service Dependencies",
-      "Data Management and Configuration",
-      "Environment Configuration",
-      "Networking",
-      "Runtime Behavior",
-      "Operational Metadata",
-      "Security and Execution Context",
-      "Other",
+  SERVICE_KEY_DEFAULT_GROUPS = {
+      "Core Definitions": ["image", "build", "container_name"],
+      "Service Dependencies": ["depends_on"],
+      "Data Management and Configuration": [
+          "volumes",
+          "volumes_from",
+          "configs",
+          "secrets",
+      ],
+      "Environment Configuration": ["environment", "env_file"],
+      "Networking": ["ports", "networks", "network_mode", "extra_hosts"],
+      "Runtime Behavior": [
+          "command",
+          "entrypoint",
+          "working_dir",
+          "restart",
+          "healthcheck",
+      ],
+      "Operational Metadata": ["logging", "labels"],
+      "Security and Execution Context": ["user", "isolation"],
+      "Other": [],
   }
-  TOP_LEVEL_KEYS = {
-      "x-*",
+  SERVICE_KEY_GROUPS = set(SERVICE_KEY_DEFAULT_GROUPS)
+  TOP_LEVEL_ORDER = (
+      "x-properties",
       "version",
       "name",
       "include",
       "services",
+      "models",
       "networks",
       "volumes",
       "secrets",
       "configs",
-  }
+  )
+  TOP_LEVEL_KEYS = set(TOP_LEVEL_ORDER)
 
 
   class ContractError(Exception):
@@ -204,11 +218,24 @@ dclintAdapter: String = #"""
               groups = options["groups"]
               if not isinstance(groups, dict):
                   reject("dclint service-key groups option is not an object")
+              effective_groups = dict(SERVICE_KEY_DEFAULT_GROUPS)
               for group, keys in groups.items():
                   safe_text(group, "dclint service-key group")
                   if group not in SERVICE_KEY_GROUPS:
                       reject(f"dclint service-key group is unsupported: {group!r}")
-                  string_list(keys, f"dclint service-key group {group!r}")
+                  effective_groups[group] = string_list(
+                      keys, f"dclint service-key group {group!r}"
+                  )
+              assigned_groups = {}
+              for group, keys in effective_groups.items():
+                  for key in keys:
+                      previous = assigned_groups.get(key)
+                      if previous is not None:
+                          reject(
+                              f"dclint service key {key!r} is assigned to multiple groups: "
+                              f"{previous!r} and {group!r}"
+                          )
+                      assigned_groups[key] = group
           if "groupOrder" in options:
               string_list(options["groupOrder"], "dclint groupOrder", SERVICE_KEY_GROUPS)
       elif rule == "top-level-properties-order":
@@ -216,7 +243,14 @@ dclintAdapter: String = #"""
           if unknown:
               reject(f"dclint rule {rule!r} has unknown options: {sorted(unknown)!r}")
           if "customOrder" in options:
-              string_list(options["customOrder"], "dclint customOrder", TOP_LEVEL_KEYS)
+              order = string_list(
+                  options["customOrder"], "dclint customOrder", TOP_LEVEL_KEYS
+              )
+              if set(order) != TOP_LEVEL_KEYS:
+                  reject(
+                      "dclint customOrder must be an exact permutation of the "
+                      "pinned Compose top-level key order"
+                  )
       elif options:
           reject(f"dclint rule {rule!r} does not have controlled options")
 
@@ -252,6 +286,36 @@ dclintAdapter: String = #"""
               validate_rule_options(rule, value[1])
               continue
           reject(f"dclint config rule {rule!r} has an unsupported value")
+
+
+  def normalize_config(config):
+      validate_config(config)
+      rules = config.setdefault("rules", {})
+      rule = "top-level-properties-order"
+      safe_options = {"customOrder": list(TOP_LEVEL_ORDER)}
+      value = rules.get(rule)
+      if value is None:
+          rules[rule] = [1, safe_options]
+      elif type(value) is int:
+          if value in (1, 2):
+              rules[rule] = [value, safe_options]
+      else:
+          severity, options = value
+          if severity in (1, 2) and "customOrder" not in options:
+              normalized_options = dict(options)
+              normalized_options["customOrder"] = list(TOP_LEVEL_ORDER)
+              rules[rule] = [severity, normalized_options]
+      return config
+
+
+  def normalized_config_bytes(raw, label):
+      config = normalize_config(parse_json(raw, label))
+      encoded = (
+          json.dumps(config, ensure_ascii=True, separators=(",", ":")) + "\n"
+      ).encode("ascii")
+      if len(encoded) > CONFIG_LIMIT:
+          reject(f"{label} exceeds the normalized {CONFIG_LIMIT}-byte limit")
+      return encoded
 
 
   def inspect_file(path, label, limit):
@@ -728,34 +792,38 @@ dclintAdapter: String = #"""
           reject(f"generated config is not mode 0600: {path}")
       if snapshot["data"] != expected_data:
           reject("generated config does not match its validated source bytes")
-      config = parse_json(snapshot["data"], "generated config")
-      validate_config(config)
+      if normalized_config_bytes(snapshot["data"], "generated config") != snapshot["data"]:
+          reject("generated config is not in its normalized safe form")
       return snapshot
 
 
   def create_private_config(contents, project_root):
       temporary = os.environ.get("TMPDIR")
-      if temporary:
-          safe_path_text(temporary, "TMPDIR")
-      if (
-          not temporary
-          or not os.path.isabs(temporary)
-          or os.path.normpath(temporary) != temporary
-          or os.path.realpath(temporary) != temporary
-      ):
-          reject("TMPDIR must name a normalized absolute directory without symlink traversal")
+      if not temporary:
+          reject("TMPDIR must name an existing absolute directory")
+      safe_path_text(temporary, "TMPDIR")
+      if not os.path.isabs(temporary):
+          reject("TMPDIR must name an existing absolute directory")
+      try:
+          temporary = os.path.realpath(temporary)
+          safe_path_text(temporary, "resolved TMPDIR")
+          if not os.path.isabs(temporary) or os.path.normpath(temporary) != temporary:
+              reject("resolved TMPDIR is not normalized and absolute")
+          info = os.lstat(temporary)
+          if not stat.S_ISDIR(info.st_mode):
+              reject(f"TMPDIR is not a real directory: {temporary}")
+          with os.scandir(temporary):
+              pass
+      except ContractError:
+          raise
+      except (OSError, ValueError):
+          reject("TMPDIR must resolve to an existing accessible directory")
       try:
           inside_project = os.path.commonpath((project_root, temporary)) == project_root
       except ValueError:
           inside_project = False
       if inside_project:
           reject("TMPDIR must be outside the retained project root")
-      try:
-          info = os.lstat(temporary)
-          if not stat.S_ISDIR(info.st_mode):
-              reject(f"TMPDIR is not a real directory: {temporary}")
-      except OSError as error:
-          reject(f"cannot inspect TMPDIR {temporary}: {error}")
       directory = None
       try:
           directory = tempfile.mkdtemp(prefix="velvet-glove-dclint-", dir=temporary)
@@ -791,7 +859,7 @@ dclintAdapter: String = #"""
 
   def resolve_config(project_root, extra_args):
       if not extra_args:
-          contents = b"{}\n"
+          contents = normalized_config_bytes(b"{}\n", "default dclint config")
           path, directory = create_private_config(contents, project_root)
           return path, directory, validate_private_config(path, contents), None, None
       if len(extra_args) != 1:
@@ -821,12 +889,12 @@ dclintAdapter: String = #"""
       if any(component in SKIPPED_DIRECTORIES for component in relative.split("/")):
           reject("config path is beneath a retained-workspace skipped directory")
       snapshot = inspect_file(path, "config", CONFIG_LIMIT)
-      validate_config(parse_json(snapshot["data"], "dclint config"))
-      private_path, directory = create_private_config(snapshot["data"], project_root)
+      contents = normalized_config_bytes(snapshot["data"], "dclint config")
+      private_path, directory = create_private_config(contents, project_root)
       return (
           private_path,
           directory,
-          validate_private_config(private_path, snapshot["data"]),
+          validate_private_config(private_path, contents),
           path,
           snapshot,
       )
@@ -1310,6 +1378,7 @@ dclintAdapter: String = #"""
               source_config_path,
               source_config_snapshot,
           ) = resolve_config(project_root, extra_args)
+          environment["TMPDIR"] = os.path.dirname(private_config_dir)
           if source_config_path is not None:
               assert_config_unchanged(
                   source_config_path, source_config_snapshot, "source config"
