@@ -1,0 +1,10 @@
+error: ESLint: phase `fix` failed; diagnostics: <workspace>/.velvet-glove/eslint-agent-hook/test-session_eslint-tool_eslint-tool-failure.txt
+ESLint failure diagnostics:
+== phase fix failed (exit Some(2)) ==
+[fix] command: python -I -c <eslint-adapter> node <eslint-cli> fix __VELVET_GLOVE_ESLINT_FILES__ <workspace>/example.js
+status: Some(2)
+classification: Some(Failure)
+stderr:
+velvet-glove-eslint: .velvet-glove-eslint.json contains unsupported keys: ['plugins']
+artifact: <workspace>/.velvet-glove/eslint-agent-hook/test-session_eslint-tool_eslint-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

@@ -1,0 +1,15 @@
+warning: ESLint: issues remain; diagnostics: <workspace>/.velvet-glove/eslint-agent-hook/test-session_eslint-tool_eslint-tool-issues.txt
+ESLint diagnostics:
+[fix] command: python -I -c <eslint-adapter> node <eslint-cli> fix __VELVET_GLOVE_ESLINT_FILES__ <workspace>/example.js
+status: Some(1)
+classification: Some(Issues)
+stderr:
+[{"errorCount":1,"fatalErrorCount":1,"filePath":"example.js","fixableErrorCount":0,"fixableWarningCount":0,"messages":[{"column":23,"fatal":true,"line":1,"message":"Parsing error: Unexpected token ;","ruleId":null,"severity":2}],"warningCount":0}]
+
+[verify] command: python -I -c <eslint-adapter> node <eslint-cli> verify __VELVET_GLOVE_ESLINT_FILES__ <workspace>/example.js
+status: Some(1)
+classification: Some(Issues)
+stderr:
+[{"errorCount":1,"fatalErrorCount":1,"filePath":"example.js","fixableErrorCount":0,"fixableWarningCount":0,"messages":[{"column":23,"fatal":true,"line":1,"message":"Parsing error: Unexpected token ;","ruleId":null,"severity":2}],"warningCount":0}]
+artifact: <workspace>/.velvet-glove/eslint-agent-hook/test-session_eslint-tool_eslint-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

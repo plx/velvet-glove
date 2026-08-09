@@ -87,6 +87,8 @@ const VACUUM_LOADER_SCRUBBED_ENV: &[&str] = &[
 const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
 const PRETTIER_POISON_ENV_VALUE: &str = "velvet-glove-prettier-adapter-must-clear-this";
 const PRETTIER_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_PRETTIER_ROOT";
+const ESLINT_POISON_ENV_VALUE: &str = "velvet-glove-eslint-adapter-must-clear-this";
+const ESLINT_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_ESLINT_ROOT";
 const CONTEXTLINT_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT";
 const DCLINT_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_DCLINT_ROOT";
 const PRETTIER_CHILD_PATH: &str = "/usr/bin:/bin";
@@ -105,6 +107,34 @@ const PRETTIER_SCRUBBED_ENV: &[&str] = &[
     "PRETTIER_EXPERIMENTAL_CLI",
     "PRETTIER_PERF_REPEAT",
     "PRETTIER_VELVET_GLOVE_POISON",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "LD_VELVET_GLOVE_POISON",
+];
+const ESLINT_CHILD_PATH: &str = "/usr/bin:/bin";
+const ESLINT_SCRUBBED_ENV: &[&str] = &[
+    DEBUG_ENV,
+    "ESLINT_USE_FLAT_CONFIG",
+    "ESLINT_CODE_PATH",
+    "ESLINT_VELVET_GLOVE_POISON",
+    "NODE_DEBUG",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_NO_WARNINGS",
+    "NODE_OPTIONS",
+    NODE_PATH_ENV,
+    "NODE_PENDING_DEPRECATION",
+    "NODE_REPL_HISTORY",
+    "NODE_V8_COVERAGE",
+    "NODE_VELVET_GLOVE_POISON",
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_userconfig",
+    "SSL_CERT_FILE",
     "DYLD_FALLBACK_LIBRARY_PATH",
     "DYLD_FALLBACK_FRAMEWORK_PATH",
     "DYLD_FRAMEWORK_PATH",
@@ -397,6 +427,7 @@ enum TracePlan {
         mode_arguments: &'static [(&'static str, &'static [&'static str])],
         before_files: &'static [&'static str],
     },
+    EslintPrivateModeFilesMarker,
     PreflightThenNestedModeWorkspaceMarker {
         nested_program_index: usize,
         adapter_prefix: &'static [&'static str],
@@ -569,6 +600,11 @@ const PRETTIER_TRACE_PLAN: TracePlan = TracePlan::PairedNodeModeFilesMarker {
     mode_arguments: PRETTIER_MODE_ARGUMENTS,
     before_files: PRETTIER_ARGUMENTS_BEFORE_FILES,
 };
+
+const ESLINT_FILES_MARKER: &str = "__VELVET_GLOVE_ESLINT_FILES__";
+const ESLINT_TRACE_PLAN: TracePlan = TracePlan::EslintPrivateModeFilesMarker;
+const ESLINT_PRIVATE_ROOT_PLACEHOLDER: &str = "<eslint-private>";
+const ESLINT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-eslint-";
 
 const BUF_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_BUF_WORKSPACE__";
 const BUF_MODE_ARGUMENTS: &[(&str, &[&str])] = &[
@@ -1085,6 +1121,75 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_contains: &["biome.json", "configuration resulted in errors"],
             diagnostic_excludes: &["::error title=format"],
             trace_plan: BIOME_TRACE_PLAN,
+        },
+        ("eslint", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: ESLINT_TRACE_PLAN,
+        },
+        ("eslint", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["\"fatalErrorCount\":1", "\"filePath\":\"example.js\""],
+            diagnostic_excludes: &[],
+            trace_plan: ESLINT_TRACE_PLAN,
+        },
+        ("eslint", "autofix") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["\"ruleId\":\"semi\"", "\"filePath\":\"example.js\""],
+            diagnostic_excludes: &[],
+            trace_plan: ESLINT_TRACE_PLAN,
+        },
+        ("eslint", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[
+                    "example.js",
+                    "src/selected-clean.mjs",
+                    "src/selected-common.cjs",
+                ],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["\"ruleId\":\"semi\"", "\"filePath\":\"example.js\""],
+            diagnostic_excludes: &["unselected-sentinel.cjs"],
+            trace_plan: ESLINT_TRACE_PLAN,
+        },
+        ("eslint", "config-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 2,
+                trace_exit_codes: &[],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["contains unsupported keys", "plugins"],
+            diagnostic_excludes: &[],
+            trace_plan: ESLINT_TRACE_PLAN,
         },
         ("prettier", "clean") => RealToolContractCase {
             phase_id: "verify",
@@ -1638,6 +1743,112 @@ fn mutating_tool_contract_case(
                 targets: &["src/example.js"],
                 exit_code: 2,
                 trace_exit_codes: &[1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("eslint", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("eslint", "source-issue") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1, 1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            immediate_outcome: ExpectedOutcome::Issues,
+            changed_targets: &[],
+        },
+        ("eslint", "autofix") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[1, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.js"],
+        },
+        ("eslint", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &[
+                    "example.js",
+                    "src/selected-clean.mjs",
+                    "src/selected-common.cjs",
+                ],
+                exit_code: 0,
+                trace_exit_codes: &[1, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &[
+                    "example.js",
+                    "src/selected-clean.mjs",
+                    "src/selected-common.cjs",
+                ],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &[
+                    "example.js",
+                    "src/selected-clean.mjs",
+                    "src/selected-common.cjs",
+                ],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.js"],
+        },
+        ("eslint", "config-failure") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 2,
+                trace_exit_codes: &[],
             }],
             repeat_remedy_invocations: None,
             final_invocations: &[],
@@ -3688,6 +3899,55 @@ fn tool_trace_shim_dispatches_distinct_program_bindings() {
 }
 
 #[test]
+fn tool_trace_shim_does_not_treat_prettier_config_as_eslint_private_state() {
+    let root = unique_temp_dir("velvet-glove-prettier-config-trace-test");
+    let shim_dir = root.join("shims");
+    let trace_dir = root.join("trace");
+    std::fs::create_dir_all(&shim_dir).expect("trace shim directory");
+    std::fs::create_dir_all(&trace_dir).expect("trace record directory");
+
+    let shim = shim_dir.join("node");
+    let real = root.join("real-node");
+    std::fs::write(&shim, include_bytes!("support/tool-trace.sh")).expect("trace shim");
+    std::fs::write(&real, "#!/bin/sh\nexit 0\n").expect("real Node fixture");
+    std::fs::write(
+        shim_dir.join("node.real-program"),
+        format!("{}\n", real.display()),
+    )
+    .expect("real Node binding");
+    #[cfg(unix)]
+    for executable in [&shim, &real] {
+        let mut permissions = std::fs::metadata(executable)
+            .expect("executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(executable, permissions).expect("executable permissions");
+    }
+
+    let status = Command::new(&shim)
+        .args([
+            "--config=/dev/null",
+            "--no-editorconfig",
+            "--ignore-path=/dev/null",
+            "--with-node-modules",
+            "--no-color",
+            "--",
+            "example.js",
+        ])
+        .env(TOOL_TRACE_DIR_ENV, &trace_dir)
+        .env(TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL)
+        .status()
+        .expect("trace Prettier-shaped Node invocation");
+    assert_eq!(status.code(), Some(0));
+
+    let invocations = sorted_entries(&trace_dir.join("invocations")).expect("trace records");
+    assert_eq!(invocations.len(), 1);
+    assert!(!invocations[0].path().join("eslint-private-root").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
     let root = unique_temp_dir("velvet-glove-astro-trace-environment");
     let node_modules = root.join("node_modules");
@@ -3722,9 +3982,11 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        eslint_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
         dclint_toolchain: None,
+        eslint: false,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -3786,9 +4048,11 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        eslint_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
         dclint_toolchain: None,
+        eslint: false,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -3869,9 +4133,11 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        eslint_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
         dclint_toolchain: None,
+        eslint: false,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -3937,9 +4203,11 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        eslint_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
         dclint_toolchain: None,
+        eslint: false,
     };
 
     let environment = verify_gofmt_trace_environment(&record, &harness)
@@ -4280,6 +4548,19 @@ fn dclint_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated ESLint adapter adversarial lifecycle; requires controlled Python"]
+fn eslint_evaluated_adapter_adversarial_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("eslint")
+        .unwrap_or_else(|| panic!("builtin catalog has no ESLint spec"));
+    verify_eslint_adapter_adversarial_lifecycle(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     let options = HarnessOptions::from_environment().unwrap_or_else(|error| panic!("{error}"));
@@ -4337,6 +4618,11 @@ fn run_all_tool_fixtures() {
         verify_dclint_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("dclint adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "eslint") {
+        verify_eslint_adapter_adversarial_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("eslint adapter adversarial lifecycle probe: pass");
     }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -4973,9 +5259,9 @@ fn run_fixture_case_inner(
                 .iter()
                 .map(|invocation| invocation.program.clone())
                 .collect::<BTreeSet<_>>();
-            if programs.is_empty() {
-                programs.insert(contract.trace_program.clone());
-            }
+            // A fail-closed adapter may reject before its expected child runs;
+            // keep the shim armed so zero invocations is positive evidence.
+            programs.insert(contract.trace_program.clone());
             ToolTraceHarness::prepare(case, workspace, &programs)
         })
         .transpose()?;
@@ -6915,6 +7201,117 @@ fn resolve_trace_invocations(
             }
             Ok((trace_program, traces))
         }
+        TracePlan::EslintPrivateModeFilesMarker => {
+            let [
+                isolated,
+                command,
+                adapter,
+                node_program,
+                tool_program,
+                mode,
+                suffix @ ..,
+            ] = outer_arguments
+            else {
+                return Err(format!(
+                    "ESLint adapter trace has an incomplete outer command: {outer_arguments:?}"
+                ));
+            };
+            if isolated != "-I"
+                || command != "-c"
+                || adapter.is_empty()
+                || node_program != "node"
+                || !Path::new(tool_program).is_absolute()
+            {
+                return Err(format!(
+                    "ESLint adapter trace expected isolated Python, logical Node, and an absolute managed CLI: {outer_arguments:?}"
+                ));
+            }
+            let [marker, rendered_files @ ..] = suffix else {
+                return Err("ESLint adapter trace has no file marker".to_owned());
+            };
+            if marker != ESLINT_FILES_MARKER {
+                return Err(format!(
+                    "ESLint adapter trace rejects every forwarded argument before its file marker: {suffix:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "ESLint adapter trace file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let native_modes = match (mode.as_str(), expected_exit_codes.len()) {
+                ("verify" | "fix", 0) => Vec::new(),
+                ("verify", 1) => vec!["verify"],
+                ("fix", 2) => vec!["verify", "dry-run"],
+                ("fix", 3) => vec!["verify", "dry-run", "fix"],
+                ("fix", 4) => vec!["verify", "dry-run", "fix", "verify"],
+                _ => {
+                    return Err(format!(
+                        "ESLint adapter trace mode {mode:?} has invalid exit-code sequence {expected_exit_codes:?}"
+                    ));
+                }
+            };
+            let private_root = PathBuf::from(ESLINT_PRIVATE_ROOT_PLACEHOLDER);
+            let config = private_root.join("eslint.config.cjs");
+            let suppressions = private_root.join("suppressions.json");
+            let mut traces = Vec::with_capacity(native_modes.len());
+            for (index, (native_mode, exit_code)) in native_modes
+                .into_iter()
+                .zip(expected_exit_codes)
+                .enumerate()
+            {
+                let native_files = if native_mode == "fix" {
+                    expected_files
+                        .first()
+                        .cloned()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    expected_files.clone()
+                };
+                let mut arguments = vec![
+                    tool_program.clone(),
+                    "--format=json".to_owned(),
+                    "--no-color".to_owned(),
+                    "--no-config-lookup".to_owned(),
+                    format!("--config={}", config.display()),
+                    "--no-ignore".to_owned(),
+                    "--no-warn-ignored".to_owned(),
+                    "--no-inline-config".to_owned(),
+                    "--max-warnings=0".to_owned(),
+                    "--concurrency=off".to_owned(),
+                    "--cache".to_owned(),
+                    "--cache-strategy=content".to_owned(),
+                    format!(
+                        "--cache-location={}",
+                        private_root
+                            .join(format!("cache-{index}/.eslintcache"))
+                            .display()
+                    ),
+                    format!("--suppressions-location={}", suppressions.display()),
+                    "--pass-on-unpruned-suppressions".to_owned(),
+                ];
+                match native_mode {
+                    "dry-run" => arguments.push("--fix-dry-run".to_owned()),
+                    "fix" => arguments.push("--fix".to_owned()),
+                    "verify" => {}
+                    _ => unreachable!("ESLint native mode was constructed above"),
+                }
+                arguments.push("--".to_owned());
+                arguments.extend(native_files.iter().cloned());
+                traces.push(ResolvedTraceInvocation {
+                    program: node_program.clone(),
+                    targets: native_files.into_iter().map(PathBuf::from).collect(),
+                    arguments,
+                    exit_code: *exit_code,
+                });
+            }
+            Ok((node_program.clone(), traces))
+        }
         TracePlan::PreflightThenNestedModeWorkspaceMarker {
             nested_program_index,
             adapter_prefix,
@@ -8075,6 +8472,108 @@ impl PrettierToolchain {
 }
 
 #[derive(Clone)]
+struct EslintToolchain {
+    root: PathBuf,
+    node: PathBuf,
+    cli: PathBuf,
+}
+
+impl EslintToolchain {
+    fn resolve_if_configured() -> Result<Option<Self>, String> {
+        let Some(requested_root) = std::env::var_os(ESLINT_ROOT_ENV) else {
+            return Ok(None);
+        };
+        Self::resolve(PathBuf::from(requested_root)).map(Some)
+    }
+
+    fn resolve(requested_root: PathBuf) -> Result<Self, String> {
+        if !requested_root.is_absolute() {
+            return Err(format!(
+                "{ESLINT_ROOT_ENV} must be an absolute directory, got {requested_root:?}"
+            ));
+        }
+        let requested_metadata = std::fs::symlink_metadata(&requested_root).map_err(|error| {
+            format!("inspect {ESLINT_ROOT_ENV} root {requested_root:?}: {error}")
+        })?;
+        if !requested_metadata.is_dir() || requested_metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{ESLINT_ROOT_ENV} must name a real directory, got {requested_root:?}"
+            ));
+        }
+        let root = requested_root.canonicalize().map_err(|error| {
+            format!("canonicalize {ESLINT_ROOT_ENV} root {requested_root:?}: {error}")
+        })?;
+        let node = require_executable(&root.join("node/bin/node"), "ESLint Node runtime")?;
+        let cli = require_readable_file(
+            &root.join("package/node_modules/eslint/bin/eslint.js"),
+            "ESLint JavaScript CLI",
+        )?;
+        for (label, path) in [("Node runtime", &node), ("ESLint CLI", &cli)] {
+            if !path.starts_with(&root) {
+                return Err(format!(
+                    "managed ESLint {label} escapes {ESLINT_ROOT_ENV} {root:?}: {path:?}"
+                ));
+            }
+        }
+
+        let package_path = root.join("package/package.json");
+        let lock_path = root.join("package/package-lock.json");
+        let package: JsonValue = serde_json::from_slice(
+            &std::fs::read(&package_path)
+                .map_err(|error| format!("read managed ESLint package manifest: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed ESLint package manifest: {error}"))?;
+        if package["engines"]["node"] != "24.19.0"
+            || package["engines"]["npm"] != "11.17.0"
+            || package["dependencies"]["eslint"] != "10.8.1"
+        {
+            return Err(format!(
+                "managed ESLint package manifest does not pin Node 24.19.0, npm 11.17.0, and ESLint 10.8.1: {package_path:?}"
+            ));
+        }
+        let lock: JsonValue = serde_json::from_slice(
+            &std::fs::read(&lock_path)
+                .map_err(|error| format!("read managed ESLint npm lock: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed ESLint npm lock: {error}"))?;
+        let locked = &lock["packages"]["node_modules/eslint"];
+        if lock["lockfileVersion"] != 3
+            || lock["packages"][""]["engines"]["node"] != "24.19.0"
+            || lock["packages"][""]["engines"]["npm"] != "11.17.0"
+            || lock["packages"][""]["dependencies"]["eslint"] != "10.8.1"
+            || locked["version"] != "10.8.1"
+            || locked["resolved"] != "https://registry.npmjs.org/eslint/-/eslint-10.8.1.tgz"
+            || locked["integrity"]
+                != "sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ=="
+        {
+            return Err(format!(
+                "managed ESLint npm lock does not contain the exact 10.8.1 registry artifact: {lock_path:?}"
+            ));
+        }
+
+        let identity_path = root.join(".velvet-glove-artifacts.json");
+        let identity: JsonValue = serde_json::from_slice(
+            &std::fs::read(&identity_path)
+                .map_err(|error| format!("read managed ESLint identity: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed ESLint identity: {error}"))?;
+        if identity["node"]["id"] != "eslint-node"
+            || identity["node"]["version"] != "24.19.0"
+            || identity["node"]["integrity"]["sha256"]
+                != "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+            || identity["npm"]["id"] != "eslint-npm"
+            || identity["npm"]["version"] != "11.17.0"
+            || identity["eslint"]["version"] != "10.8.1"
+        {
+            return Err(format!(
+                "managed ESLint identity does not bind the declared Node/npm/ESLint closure: {identity_path:?}"
+            ));
+        }
+        Ok(Self { root, node, cli })
+    }
+}
+
+#[derive(Clone)]
 struct ContextlintToolchain {
     root: PathBuf,
     node: PathBuf,
@@ -8557,9 +9056,11 @@ struct ToolTraceHarness {
     cargo_clippy_toolchain: Option<CargoClippyToolchain>,
     cargo_fmt_toolchain: Option<CargoFmtToolchain>,
     prettier_toolchain: Option<PrettierToolchain>,
+    eslint_toolchain: Option<EslintToolchain>,
     contextlint_toolchain: Option<ContextlintToolchain>,
     contextlint: bool,
     dclint_toolchain: Option<DclintToolchain>,
+    eslint: bool,
 }
 
 impl ToolTraceHarness {
@@ -8585,6 +9086,11 @@ impl ToolTraceHarness {
         let cargo_fmt_toolchain = cargo_fmt_toolchain.transpose()?;
         let prettier_toolchain = if case.tool == "prettier" {
             PrettierToolchain::resolve_if_configured()?
+        } else {
+            None
+        };
+        let eslint_toolchain = if case.tool == "eslint" {
+            EslintToolchain::resolve_if_configured()?
         } else {
             None
         };
@@ -8629,6 +9135,11 @@ impl ToolTraceHarness {
                 "node" if prettier_toolchain.is_some() => prettier_toolchain
                     .as_ref()
                     .expect("checked Prettier toolchain")
+                    .node
+                    .clone(),
+                "node" if eslint_toolchain.is_some() => eslint_toolchain
+                    .as_ref()
+                    .expect("checked ESLint toolchain")
                     .node
                     .clone(),
                 "node" if contextlint_toolchain.is_some() => contextlint_toolchain
@@ -8685,6 +9196,19 @@ impl ToolTraceHarness {
             }
         }
         let contextlint = case.tool == "contextlint";
+        let eslint = case.tool == "eslint";
+        if eslint {
+            for directory in [
+                "eslint-tmp",
+                "eslint-outer-poison-home",
+                "eslint-outer-poison-cache",
+            ] {
+                let path = workspace.root.join(directory);
+                std::fs::create_dir_all(&path).map_err(|error| {
+                    format!("create controlled ESLint environment directory {path:?}: {error}")
+                })?;
+            }
+        }
         if contextlint {
             for directory in [
                 "contextlint-tmp",
@@ -8730,9 +9254,11 @@ impl ToolTraceHarness {
             cargo_clippy_toolchain,
             cargo_fmt_toolchain,
             prettier_toolchain,
+            eslint_toolchain,
             contextlint_toolchain,
             contextlint,
             dclint_toolchain,
+            eslint,
         })
     }
 
@@ -8808,6 +9334,29 @@ impl ToolTraceHarness {
                     command.env_remove(name);
                 } else {
                     command.env(name, PRETTIER_POISON_ENV_VALUE);
+                }
+            }
+        }
+        if self.eslint {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "ESLint trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            command
+                .env(HOME_ENV, root.join("eslint-outer-poison-home"))
+                .env(TMPDIR_ENV, root.join("eslint-tmp"))
+                .env(XDG_CACHE_HOME_ENV, root.join("eslint-outer-poison-cache"))
+                .env("TERM", ESLINT_POISON_ENV_VALUE)
+                .env(CI_ENV, ESLINT_POISON_ENV_VALUE)
+                .env("NODE_DISABLE_COLORS", ESLINT_POISON_ENV_VALUE)
+                .env("UV_THREADPOOL_SIZE", ESLINT_POISON_ENV_VALUE);
+            for name in ESLINT_SCRUBBED_ENV {
+                if name.starts_with("DYLD_") || name.starts_with("LD_") {
+                    command.env_remove(name);
+                } else {
+                    command.env(name, ESLINT_POISON_ENV_VALUE);
                 }
             }
         }
@@ -9002,6 +9551,16 @@ fn verify_tool_trace_invocations(
         } else {
             None
         };
+        let eslint_private_root = if trace_program == "node" && harness.eslint {
+            resolve_eslint_private_trace_root(&record, &expected.arguments)?
+        } else {
+            None
+        };
+        let private_state = if let Some(private_root) = eslint_private_root.as_deref() {
+            verify_eslint_private_trace_state(&record, harness, project, private_root)?
+        } else {
+            serde_json::json!({})
+        };
         let expected_cwd = if trace_program == "node" && harness.contextlint {
             let indices = expected
                 .arguments
@@ -9023,6 +9582,7 @@ fn verify_tool_trace_invocations(
                 &expected,
                 &recorded_cwd,
                 contextlint_private_root.as_deref(),
+                eslint_private_root.as_deref(),
             )?
         } else {
             cwd.to_string_lossy().into_owned()
@@ -9045,6 +9605,7 @@ fn verify_tool_trace_invocations(
                 argument,
                 &recorded_cwd,
                 contextlint_private_root.as_deref(),
+                eslint_private_root.as_deref(),
             )?;
             if trace_program == "dclint" && argument == DCLINT_PRIVATE_CONFIG_ARGUMENT {
                 let actual = read_record(&record, &format!("argv-{index}"))?;
@@ -9109,7 +9670,9 @@ fn verify_tool_trace_invocations(
             }
         }
         if trace_program == "node" {
-            let controlled = if harness.contextlint {
+            let controlled = if harness.eslint {
+                verify_eslint_trace_environment(&record)?
+            } else if harness.contextlint {
                 verify_contextlint_trace_environment(&record, harness)?
             } else {
                 verify_prettier_trace_environment(&record)?
@@ -9217,6 +9780,8 @@ fn verify_tool_trace_invocations(
                 "network": "fixed-deny-flags",
                 "privateRootRemoved": true,
             })
+        } else if trace_program == "node" && harness.eslint {
+            eslint_trace_prerequisites(harness, expected)?
         } else if trace_program == "node" && harness.contextlint {
             contextlint_trace_prerequisites(harness, expected)?
         } else if trace_program == "buf" {
@@ -9245,12 +9810,13 @@ fn verify_tool_trace_invocations(
         } else {
             recorded_cwd.clone()
         };
-        let evidence_arguments = if trace_program == "node" && harness.contextlint {
-            expected.arguments.clone()
-        } else {
-            recorded_arguments
-        };
-        records.push(serde_json::json!({
+        let evidence_arguments =
+            if trace_program == "node" && (harness.contextlint || harness.eslint) {
+                expected.arguments.clone()
+            } else {
+                recorded_arguments
+            };
+        let mut trace_record = serde_json::json!({
             "logicalProgram": trace_program,
             "shimProgram": program,
             "realProgram": real_program,
@@ -9261,7 +9827,14 @@ fn verify_tool_trace_invocations(
             "prerequisites": prerequisites,
             "execution": "pass-through",
             "exitCode": expected.exit_code,
-        }));
+        });
+        if harness.eslint {
+            trace_record
+                .as_object_mut()
+                .expect("trace record is a JSON object")
+                .insert("privateState".to_owned(), private_state);
+        }
+        records.push(trace_record);
     }
     for (index, expected) in expected_invocations.iter().enumerate() {
         if expected.program != "dclint"
@@ -9372,10 +9945,64 @@ fn resolve_contextlint_private_trace_root(
     Ok(candidates.into_iter().next())
 }
 
+fn resolve_eslint_private_trace_root(
+    record: &Path,
+    expected_arguments: &[String],
+) -> Result<Option<String>, String> {
+    if !expected_arguments
+        .iter()
+        .any(|argument| argument.contains(ESLINT_PRIVATE_ROOT_PLACEHOLDER))
+    {
+        return Ok(None);
+    }
+    let mut candidates = BTreeSet::new();
+    for (index, expected) in expected_arguments.iter().enumerate() {
+        if !expected.contains(ESLINT_PRIVATE_ROOT_PLACEHOLDER) {
+            continue;
+        }
+        if expected.matches(ESLINT_PRIVATE_ROOT_PLACEHOLDER).count() != 1 {
+            return Err(format!(
+                "ESLint trace argument contains its private-root placeholder more than once: {expected:?}"
+            ));
+        }
+        let (prefix, suffix) = expected
+            .split_once(ESLINT_PRIVATE_ROOT_PLACEHOLDER)
+            .expect("placeholder presence was checked");
+        let actual = read_record(record, &format!("argv-{index}"))?;
+        let candidate = actual
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+            .ok_or_else(|| {
+                format!(
+                    "ESLint trace argument {index} cannot bind expected private path shape {expected:?} to {actual:?}"
+                )
+            })?;
+        let candidate_path = Path::new(candidate);
+        if !candidate_path.is_absolute()
+            || !candidate_path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with(ESLINT_PRIVATE_ROOT_PREFIX))
+        {
+            return Err(format!(
+                "ESLint trace argument {index} bound an invalid private root {candidate_path:?}"
+            ));
+        }
+        candidates.insert(candidate.to_owned());
+    }
+    if candidates.len() != 1 {
+        return Err(format!(
+            "ESLint trace did not bind one consistent private root: {candidates:?}"
+        ));
+    }
+    Ok(candidates.into_iter().next())
+}
+
 fn resolve_dynamic_trace_argument(
     argument: &str,
     recorded_cwd: &str,
     contextlint_private_root: Option<&str>,
+    eslint_private_root: Option<&str>,
 ) -> Result<String, String> {
     let cwd = Path::new(recorded_cwd);
     if argument.contains(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER) {
@@ -9396,6 +10023,17 @@ fn resolve_dynamic_trace_argument(
             contextlint_private_root,
             1,
         ));
+    }
+    if argument.contains(ESLINT_PRIVATE_ROOT_PLACEHOLDER) {
+        let eslint_private_root = eslint_private_root.ok_or_else(|| {
+            format!("ESLint dynamic trace path has no validated private root: {argument:?}")
+        })?;
+        if argument.matches(ESLINT_PRIVATE_ROOT_PLACEHOLDER).count() != 1 {
+            return Err(format!(
+                "ESLint dynamic trace argument contains its private-root placeholder more than once: {argument:?}"
+            ));
+        }
+        return Ok(argument.replacen(ESLINT_PRIVATE_ROOT_PLACEHOLDER, eslint_private_root, 1));
     }
     let Some(suffix) = argument.strip_prefix(CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER) else {
         return Ok(argument.to_owned());
@@ -9421,6 +10059,130 @@ fn resolve_dynamic_trace_argument(
         .join(suffix.trim_start_matches('/'))
         .to_string_lossy()
         .into_owned())
+}
+
+fn verify_eslint_private_trace_state(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    project: &Path,
+    private_root: &str,
+) -> Result<JsonValue, String> {
+    let recorded_root = read_record(record, "eslint-private-root")?;
+    if recorded_root != private_root {
+        return Err(format!(
+            "ESLint trace private root mismatch: arguments bound {private_root:?}, metadata recorded {recorded_root:?}"
+        ));
+    }
+    let root = Path::new(private_root);
+    let expected_parent = harness
+        .trace_root
+        .parent()
+        .ok_or_else(|| "ESLint trace root has no controlled parent".to_owned())?
+        .join("eslint-tmp")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize controlled ESLint temporary root: {error}"))?;
+    if root.parent() != Some(expected_parent.as_path())
+        || root.starts_with(project)
+        || !root
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with(ESLINT_PRIVATE_ROOT_PREFIX))
+    {
+        return Err(format!(
+            "ESLint private state escaped its controlled temporary root: {root:?}"
+        ));
+    }
+    for (name, expected) in [
+        ("eslint-private-root-mode", "700"),
+        ("eslint-config-mode", "600"),
+        ("eslint-suppressions-mode", "600"),
+        ("eslint-cache-directory-mode", "700"),
+        ("eslint-cache-kind", "file"),
+        ("eslint-cache-mode", "600"),
+    ] {
+        let actual = read_record(record, name)?;
+        if actual != expected {
+            return Err(format!(
+                "ESLint private trace requires {name}={expected:?}, got {actual:?}"
+            ));
+        }
+    }
+    let suppressions = std::fs::read(record.join("eslint-suppressions.json"))
+        .map_err(|error| format!("read traced ESLint suppressions: {error}"))?;
+    if suppressions != b"{}\n" {
+        return Err(format!(
+            "ESLint private suppressions drifted from the exact empty object: {suppressions:?}"
+        ));
+    }
+    let config_bytes = std::fs::read(record.join("eslint-config.cjs"))
+        .map_err(|error| format!("read traced ESLint private config: {error}"))?;
+    let config_text = std::str::from_utf8(&config_bytes)
+        .map_err(|error| format!("traced ESLint config is not UTF-8: {error}"))?;
+    let config_json = config_text
+        .strip_prefix("'use strict';\nmodule.exports = ")
+        .and_then(|value| value.strip_suffix(";\n"))
+        .ok_or_else(|| "traced ESLint config is not the exact data-only CJS envelope".to_owned())?;
+    let config: JsonValue = serde_json::from_str(config_json)
+        .map_err(|error| format!("parse traced ESLint data-only config: {error}"))?;
+    let rules = serde_json::json!({
+        "eqeqeq": 2,
+        "no-debugger": 2,
+        "no-undef": 2,
+        "no-unused-vars": 2,
+        "no-var": 2,
+        "prefer-const": 2,
+        "semi": [2, "always"],
+    });
+    let expected_config = serde_json::json!([
+        {
+            "files": ["**/*.js", "**/*.mjs"],
+            "languageOptions": {"ecmaVersion": "latest", "sourceType": "module"},
+            "linterOptions": {
+                "noInlineConfig": true,
+                "reportUnusedDisableDirectives": "error",
+            },
+            "rules": rules.clone(),
+        },
+        {
+            "files": ["**/*.cjs"],
+            "languageOptions": {"ecmaVersion": "latest", "sourceType": "commonjs"},
+            "linterOptions": {
+                "noInlineConfig": true,
+                "reportUnusedDisableDirectives": "error",
+            },
+            "rules": rules,
+        },
+    ]);
+    if config != expected_config {
+        return Err(format!(
+            "ESLint private config escaped the built-in data-only rule contract: {config}"
+        ));
+    }
+    let cache_location = PathBuf::from(read_record(record, "eslint-cache-location")?);
+    if !cache_location.starts_with(root)
+        || cache_location.file_name() != Some(OsStr::new(".eslintcache"))
+        || !cache_location
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with("cache-"))
+    {
+        return Err(format!(
+            "ESLint cache escaped its private root: {cache_location:?}"
+        ));
+    }
+    Ok(serde_json::json!({
+        "root": ESLINT_PRIVATE_ROOT_PLACEHOLDER,
+        "rootMode": "0700",
+        "config": config,
+        "configMode": "0600",
+        "suppressions": {},
+        "suppressionsMode": "0600",
+        "cache": cache_location
+            .to_string_lossy()
+            .replace(private_root, ESLINT_PRIVATE_ROOT_PLACEHOLDER),
+        "cacheMode": "0600",
+    }))
 }
 
 fn verify_astro_trace_environment(
@@ -9549,6 +10311,38 @@ fn verify_prettier_trace_environment(record: &Path) -> Result<BTreeMap<String, S
     Ok(environment)
 }
 
+fn verify_eslint_trace_environment(record: &Path) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    for (name, expected) in [
+        (PATH_ENV, ESLINT_CHILD_PATH),
+        (CI_ENV, "1"),
+        ("TERM", "dumb"),
+        ("NODE_DISABLE_COLORS", "1"),
+        ("UV_THREADPOOL_SIZE", "1"),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "ESLint trace requires {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in [HOME_ENV, TMPDIR_ENV, XDG_CACHE_HOME_ENV]
+        .into_iter()
+        .chain(ESLINT_SCRUBBED_ENV.iter().copied())
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "ESLint trace must clear inherited project, Node, npm, ESLint, and loader state; got {name}={value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    Ok(environment)
+}
+
 fn prettier_trace_prerequisites(
     harness: &ToolTraceHarness,
     expected: &ResolvedTraceInvocation,
@@ -9577,6 +10371,45 @@ fn prettier_trace_prerequisites(
         "root": toolchain.root,
         "node": toolchain.node,
         "prettierCli": toolchain.cli,
+    }))
+}
+
+fn eslint_trace_prerequisites(
+    harness: &ToolTraceHarness,
+    expected: &ResolvedTraceInvocation,
+) -> Result<JsonValue, String> {
+    let Some(toolchain) = &harness.eslint_toolchain else {
+        return Ok(serde_json::json!({
+            "eslint": "10.8.1",
+            "node": "24.19.0",
+            "npm": "11.17.0",
+            "configuration": "private data-derived CJS; built-in rules only",
+        }));
+    };
+    let real_node = harness
+        .programs
+        .get("node")
+        .ok_or_else(|| "ESLint trace has no managed Node binding".to_owned())?;
+    if real_node != &toolchain.node {
+        return Err(format!(
+            "ESLint trace bound Node {:?}, expected dedicated runtime {:?}",
+            real_node, toolchain.node
+        ));
+    }
+    if expected.arguments.first().map(PathBuf::from).as_ref() != Some(&toolchain.cli) {
+        return Err(format!(
+            "ESLint trace did not pass the dedicated managed CLI as Node argv[0]: expected {:?}, got {:?}",
+            toolchain.cli,
+            expected.arguments.first()
+        ));
+    }
+    Ok(serde_json::json!({
+        "root": toolchain.root,
+        "node": toolchain.node,
+        "eslintCli": toolchain.cli,
+        "eslint": "10.8.1",
+        "npm": "11.17.0",
+        "configuration": "private data-derived CJS; built-in rules only",
     }))
 }
 
@@ -12232,6 +13065,17 @@ fn resolve_prettier_fixture_cli() -> Result<PathBuf, String> {
         .map_err(|error| format!("canonicalize managed Prettier CLI {requested:?}: {error}"))
 }
 
+fn resolve_eslint_fixture_cli() -> Result<PathBuf, String> {
+    if let Some(toolchain) = EslintToolchain::resolve_if_configured()? {
+        return Ok(toolchain.cli);
+    }
+    let requested = resolve_program("eslint")
+        .ok_or_else(|| "ESLint fixture could not resolve its managed CLI".to_owned())?;
+    requested
+        .canonicalize()
+        .map_err(|error| format!("canonicalize managed ESLint CLI {requested:?}: {error}"))
+}
+
 fn resolve_contextlint_fixture_cli() -> Result<PathBuf, String> {
     if let Some(toolchain) = ContextlintToolchain::resolve_if_configured()? {
         return Ok(toolchain.cli);
@@ -12290,9 +13134,11 @@ fn write_pkl_config(
         } else {
             String::new()
         };
-        let executable_override = if matches!(tool, "prettier" | "contextlint") {
+        let executable_override = if matches!(tool, "prettier" | "eslint" | "contextlint") {
             let executable = if tool == "prettier" {
                 resolve_prettier_fixture_cli()?
+            } else if tool == "eslint" {
+                resolve_eslint_fixture_cli()?
             } else {
                 resolve_contextlint_fixture_cli()?
             };
@@ -12486,6 +13332,20 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
         let mut missing = Vec::new();
         if !matches!(PrettierToolchain::resolve_if_configured(), Ok(Some(_))) {
             missing.push(PRETTIER_ROOT_ENV.to_owned());
+        }
+        if resolve_program("python").is_none() {
+            missing.push("python".to_owned());
+        }
+        return if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(missing)
+        };
+    }
+    if spec.id == "eslint" && std::env::var_os(ESLINT_ROOT_ENV).is_some() {
+        let mut missing = Vec::new();
+        if !matches!(EslintToolchain::resolve_if_configured(), Ok(Some(_))) {
+            missing.push(ESLINT_ROOT_ENV.to_owned());
         }
         if resolve_program("python").is_none() {
             missing.push("python".to_owned());
@@ -16422,6 +17282,445 @@ fn read_pid_file(path: &Path, label: &str) -> Result<u32, String> {
         .map_err(|error| format!("parse {label} PID {value:?}: {error}"))
 }
 
+#[cfg(unix)]
+fn verify_eslint_adapter_adversarial_lifecycle(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    let phase = spec
+        .phases
+        .get("verify")
+        .ok_or_else(|| "ESLint adversarial probe lacks a verify phase".to_owned())?;
+    let [
+        ArgvElement::Literal(isolated),
+        ArgvElement::Literal(command),
+        ArgvElement::Literal(adapter),
+        ArgvElement::Literal(node_name),
+        ArgvElement::Token(ArgToken::ToolExecutable),
+        ArgvElement::Literal(mode),
+        ArgvElement::Token(ArgToken::ExtraArgs),
+        ArgvElement::Literal(marker),
+        ArgvElement::Token(ArgToken::Files),
+    ] = phase.argv.as_slice()
+    else {
+        return Err("ESLint adversarial probe could not extract the evaluated adapter".to_owned());
+    };
+    if isolated != "-I"
+        || command != "-c"
+        || node_name != "node"
+        || mode != "verify"
+        || marker != ESLINT_FILES_MARKER
+    {
+        return Err(format!(
+            "ESLint adversarial probe found unexpected evaluated argv shape: {:?}",
+            phase.argv
+        ));
+    }
+    let python_program = phase
+        .program
+        .as_deref()
+        .ok_or_else(|| "ESLint adversarial probe lacks an adapter program".to_owned())?;
+    let python = resolve_program(python_program)
+        .ok_or_else(|| format!("ESLint adversarial probe cannot resolve {python_program:?}"))?
+        .canonicalize()
+        .map_err(|error| format!("canonicalize ESLint probe Python: {error}"))?;
+
+    let requested_root = unique_temp_dir("velvet-glove-eslint-adversarial");
+    let project = requested_root.join("project");
+    let temporary = requested_root.join("private-temp");
+    std::fs::create_dir_all(&project)
+        .map_err(|error| format!("create ESLint adversarial project: {error}"))?;
+    std::fs::create_dir_all(&temporary)
+        .map_err(|error| format!("create ESLint adversarial temporary root: {error}"))?;
+    let project = project
+        .canonicalize()
+        .map_err(|error| format!("canonicalize ESLint adversarial project: {error}"))?;
+    let temporary = temporary
+        .canonicalize()
+        .map_err(|error| format!("canonicalize ESLint adversarial temporary root: {error}"))?;
+    let result = (|| {
+        let target = project.join("example.js");
+        std::fs::write(&target, "export const answer = 42;\n")
+            .map_err(|error| format!("write ESLint adversarial target: {error}"))?;
+        let fake_cli = project.join("eslint.js");
+        std::fs::write(
+            &fake_cli,
+            "throw new Error('must run through paired Node');\n",
+        )
+        .map_err(|error| format!("write ESLint adversarial fake CLI: {error}"))?;
+        let source_config = project.join(".velvet-glove-eslint.json");
+        std::fs::write(&source_config, "{\"rules\":{\"semi\":\"off\"}}\n")
+            .map_err(|error| format!("write ESLint safe data config: {error}"))?;
+
+        let captured_config = requested_root.join("captured-config.cjs");
+        let captured_suppressions = requested_root.join("captured-suppressions.json");
+        let captured_root = requested_root.join("captured-private-root");
+        let captured_modes = requested_root.join("captured-modes");
+        let captured_environment = requested_root.join("captured-environment");
+        let node_marker = requested_root.join("node-ran");
+        let success_node = requested_root.join("paired-node-success");
+        write_executable_probe(
+            &success_node,
+            &format!(
+                r#"#!/bin/sh
+set -eu
+: > '{node_marker}'
+config=''
+suppressions=''
+last=''
+for argument in "$@"; do
+  last=$argument
+  case $argument in
+    --config=*) config=${{argument#--config=}} ;;
+    --suppressions-location=*) suppressions=${{argument#--suppressions-location=}} ;;
+  esac
+done
+[ -n "$config" ] && [ -n "$suppressions" ] || exit 91
+/bin/cp "$config" '{captured_config}'
+/bin/cp "$suppressions" '{captured_suppressions}'
+/usr/bin/dirname "$config" > '{captured_root}'
+{{
+  /usr/bin/stat -f '%Lp' "$(/usr/bin/dirname "$config")"
+  /usr/bin/stat -f '%Lp' "$config"
+  /usr/bin/stat -f '%Lp' "$suppressions"
+}} > '{captured_modes}'
+{{
+  printf 'PATH=%s\n' "${{PATH-}}"
+  printf 'LANG=%s\n' "${{LANG-}}"
+  printf 'LC_ALL=%s\n' "${{LC_ALL-}}"
+  printf 'TZ=%s\n' "${{TZ-}}"
+  printf 'TERM=%s\n' "${{TERM-}}"
+  printf 'CI=%s\n' "${{CI-}}"
+  printf 'HOME=%s\n' "${{HOME-}}"
+  printf 'TMPDIR=%s\n' "${{TMPDIR-}}"
+  printf 'NODE_OPTIONS=%s\n' "${{NODE_OPTIONS-}}"
+  printf 'ESLINT_USE_FLAT_CONFIG=%s\n' "${{ESLINT_USE_FLAT_CONFIG-}}"
+}} > '{captured_environment}'
+printf '{{"plugins":{{}}}}\n' > '{source_config}'
+printf '[{{"filePath":"%s","messages":[],"suppressedMessages":[],"errorCount":0,"fatalErrorCount":0,"warningCount":0,"fixableErrorCount":0,"fixableWarningCount":0}}]\n' "$last"
+"#,
+                node_marker = shell_probe_path(&node_marker)?,
+                captured_config = shell_probe_path(&captured_config)?,
+                captured_suppressions = shell_probe_path(&captured_suppressions)?,
+                captured_root = shell_probe_path(&captured_root)?,
+                captured_modes = shell_probe_path(&captured_modes)?,
+                captured_environment = shell_probe_path(&captured_environment)?,
+                source_config = shell_probe_path(&source_config)?,
+            ),
+        )?;
+        let output = run_eslint_adapter_probe(
+            &python,
+            adapter,
+            &success_node,
+            &fake_cli,
+            "verify",
+            &[],
+            &[&target],
+            &project,
+            &temporary,
+            timeout,
+            &requested_root.join("capture-safe-config"),
+        )?;
+        if output.status.code() != Some(0) || !output.stdout.is_empty() || !output.stderr.is_empty()
+        {
+            return Err(format!(
+                "ESLint data-config probe failed: status={:?} stdout={:?} stderr={:?}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let private_config = std::fs::read_to_string(&captured_config)
+            .map_err(|error| format!("read captured ESLint private config: {error}"))?;
+        if !private_config.starts_with("'use strict';\nmodule.exports = [")
+            || !private_config.contains("\"semi\":[0,\"always\"]")
+            || private_config.contains("plugins")
+            || std::fs::read(&captured_suppressions)
+                .map_err(|error| format!("read captured ESLint suppressions: {error}"))?
+                != b"{}\n"
+            || std::fs::read_to_string(&captured_modes)
+                .map_err(|error| format!("read captured ESLint private modes: {error}"))?
+                != "700\n600\n600\n"
+        {
+            return Err("ESLint child did not receive exact private data-only state".to_owned());
+        }
+        let private_root = PathBuf::from(
+            std::fs::read_to_string(&captured_root)
+                .map_err(|error| format!("read captured ESLint private root: {error}"))?
+                .trim(),
+        );
+        if private_root.parent() != Some(temporary.as_path())
+            || private_root.exists()
+            || !private_root
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with(ESLINT_PRIVATE_ROOT_PREFIX))
+        {
+            return Err(format!(
+                "ESLint private root escaped or survived cleanup: {private_root:?}"
+            ));
+        }
+        let expected_environment = concat!(
+            "PATH=/usr/bin:/bin\n",
+            "LANG=C\n",
+            "LC_ALL=C\n",
+            "TZ=UTC\n",
+            "TERM=dumb\n",
+            "CI=1\n",
+            "HOME=\n",
+            "TMPDIR=\n",
+            "NODE_OPTIONS=\n",
+            "ESLINT_USE_FLAT_CONFIG=\n",
+        );
+        if std::fs::read_to_string(&captured_environment)
+            .map_err(|error| format!("read captured ESLint environment: {error}"))?
+            != expected_environment
+        {
+            return Err("ESLint child environment was not fully controlled".to_owned());
+        }
+        if std::fs::read_to_string(&source_config)
+            .map_err(|error| format!("read swapped ESLint source config: {error}"))?
+            != "{\"plugins\":{}}\n"
+        {
+            return Err("ESLint source-config swap probe did not execute".to_owned());
+        }
+
+        let reject_marker = requested_root.join("reject-node-ran");
+        let reject_node = requested_root.join("paired-node-reject");
+        write_executable_probe(
+            &reject_node,
+            &format!(
+                "#!/bin/sh\nset -eu\n: > '{}'\nexit 0\n",
+                shell_probe_path(&reject_marker)?
+            ),
+        )?;
+        std::fs::write(&source_config, "{\"rules\":{}}\n")
+            .map_err(|error| format!("restore safe ESLint data config: {error}"))?;
+        let rejected = run_eslint_adapter_probe(
+            &python,
+            adapter,
+            &reject_node,
+            &fake_cli,
+            "verify",
+            &["--plugin=./executed.cjs"],
+            &[&target],
+            &project,
+            &temporary,
+            timeout,
+            &requested_root.join("capture-extra-arg-reject"),
+        )?;
+        if rejected.status.code() != Some(2)
+            || reject_marker.exists()
+            || !String::from_utf8_lossy(&rejected.stderr)
+                .contains("extra arguments are unsupported")
+        {
+            return Err("ESLint extra argument was not rejected before Node".to_owned());
+        }
+        std::fs::write(&source_config, "{\"plugins\":{}}\n")
+            .map_err(|error| format!("write rejected ESLint plugin config: {error}"))?;
+        let rejected = run_eslint_adapter_probe(
+            &python,
+            adapter,
+            &reject_node,
+            &fake_cli,
+            "verify",
+            &[],
+            &[&target],
+            &project,
+            &temporary,
+            timeout,
+            &requested_root.join("capture-plugin-config-reject"),
+        )?;
+        if rejected.status.code() != Some(2)
+            || reject_marker.exists()
+            || !String::from_utf8_lossy(&rejected.stderr).contains("unsupported keys")
+        {
+            return Err("ESLint executable/plugin config was not rejected before Node".to_owned());
+        }
+
+        std::fs::write(&source_config, "{\"rules\":{}}\n")
+            .map_err(|error| format!("restore ESLint signal config: {error}"))?;
+        verify_eslint_adapter_signal_cleanup(
+            &python,
+            adapter,
+            &fake_cli,
+            &target,
+            &project,
+            &temporary,
+            &requested_root,
+            timeout,
+        )?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&requested_root);
+    result
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn run_eslint_adapter_probe(
+    python: &Path,
+    adapter: &str,
+    node: &Path,
+    tool: &Path,
+    phase: &str,
+    extra_args: &[&str],
+    targets: &[&Path],
+    project: &Path,
+    temporary: &Path,
+    timeout: Duration,
+    capture: &Path,
+) -> Result<BoundedOutput, String> {
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(node)
+        .arg(tool)
+        .arg(phase)
+        .args(extra_args)
+        .arg(ESLINT_FILES_MARKER)
+        .args(targets)
+        .current_dir(project)
+        .env(TMPDIR_ENV, temporary)
+        .env("NODE_OPTIONS", ESLINT_POISON_ENV_VALUE)
+        .env("NODE_PATH", ESLINT_POISON_ENV_VALUE)
+        .env("ESLINT_USE_FLAT_CONFIG", ESLINT_POISON_ENV_VALUE)
+        .env("ESLINT_VELVET_GLOVE_POISON", ESLINT_POISON_ENV_VALUE);
+    run_with_timeout(&mut command, &[], timeout, capture)
+        .map_err(|error| format!("run ESLint adapter probe: {error}"))
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_eslint_adapter_signal_cleanup(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    target: &Path,
+    project: &Path,
+    temporary: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let private_root_record = root.join("signal-private-root");
+    let child_pid_record = root.join("signal-child-pid");
+    let descendant_pid_record = root.join("signal-descendant-pid");
+    let ready = root.join("signal-ready");
+    let signal_node = root.join("paired-node-signal");
+    write_executable_probe(
+        &signal_node,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+trap 'exit 0' HUP INT TERM
+for argument in "$@"; do
+  case $argument in --config=*) /usr/bin/dirname "${{argument#--config=}}" > '{private_root_record}' ;; esac
+done
+(
+  trap '' HUP INT TERM
+  : > '{ready}'
+  while :; do :; done
+) &
+printf '%s\n' "$!" > '{descendant_pid_record}'
+printf '%s\n' "$$" > '{child_pid_record}'
+while [ ! -f '{ready}' ]; do :; done
+while :; do :; done
+"#,
+            private_root_record = shell_probe_path(&private_root_record)?,
+            ready = shell_probe_path(&ready)?,
+            descendant_pid_record = shell_probe_path(&descendant_pid_record)?,
+            child_pid_record = shell_probe_path(&child_pid_record)?,
+        ),
+    )?;
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(&signal_node)
+        .arg(fake_cli)
+        .arg("verify")
+        .arg(ESLINT_FILES_MARKER)
+        .arg(target)
+        .current_dir(project)
+        .env(TMPDIR_ENV, temporary)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn ESLint signal-cleanup adapter: {error}"))?;
+    let outer_pid = outer.id();
+    let deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+    while !(private_root_record.is_file()
+        && child_pid_record.is_file()
+        && descendant_pid_record.is_file()
+        && ready.is_file())
+    {
+        if let Some(status) = outer
+            .try_wait()
+            .map_err(|error| format!("poll ESLint signal-cleanup adapter: {error}"))?
+        {
+            return Err(format!(
+                "ESLint signal-cleanup adapter exited {status:?} before becoming ready"
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err("ESLint signal-cleanup child did not become ready".to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let child_pid = read_pid_file(&child_pid_record, "ESLint signal child")?;
+    let descendant_pid = read_pid_file(&descendant_pid_record, "ESLint signal descendant")?;
+    let private_root = PathBuf::from(
+        std::fs::read_to_string(&private_root_record)
+            .map_err(|error| format!("read ESLint signal private root: {error}"))?
+            .trim(),
+    );
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process_group(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!("send SIGTERM to ESLint adapter: {term:?}"));
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(outer.wait_with_output());
+    });
+    let output = receiver
+        .recv_timeout(timeout.min(Duration::from_secs(5)))
+        .map_err(|error| format!("signaled ESLint adapter did not finish: {error}"))?
+        .map_err(|error| format!("wait for signaled ESLint adapter: {error}"))?;
+    let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+    let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+    let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+    if output.status.code() != Some(2)
+        || child_alive
+        || descendant_alive
+        || group_alive
+        || private_root.exists()
+        || !String::from_utf8_lossy(&output.stderr).contains("received signal 15")
+    {
+        let _ = signal_process_group(child_pid, "KILL");
+        return Err(format!(
+            "ESLint signal cleanup mismatch: status={:?} child={child_alive} descendant={descendant_alive} group={group_alive} private_exists={} stdout={:?} stderr={:?}",
+            output.status.code(),
+            private_root.exists(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_eslint_adapter_adversarial_lifecycle(
+    _spec: &ToolSpec,
+    _timeout: Duration,
+) -> Result<(), String> {
+    Ok(())
+}
+
 fn verify_prettier_adapter_adversarial_contract(
     spec: &ToolSpec,
     timeout: Duration,
@@ -20169,6 +21468,11 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
     for alias in prettier_cli_aliases {
         output = output.replace(&alias, "<prettier-cli>");
     }
+    let mut eslint_cli_aliases = eslint_cli_path_aliases();
+    eslint_cli_aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
+    for alias in eslint_cli_aliases {
+        output = output.replace(&alias, "<eslint-cli>");
+    }
     output = normalize_prettier_adapter_commands(output);
     output
         .split('\n')
@@ -20222,6 +21526,25 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
             output = output.replace(script, "<inline-script>");
         }
     }
+    if case.tool == "eslint" {
+        let adapter_scripts = case
+            .spec
+            .phases
+            .values()
+            .flat_map(|phase| phase.argv.iter())
+            .filter_map(|argument| match argument {
+                ArgvElement::Literal(script)
+                    if script.contains(ESLINT_FILES_MARKER) && script.contains('\n') =>
+                {
+                    Some(script)
+                }
+                ArgvElement::Literal(_) | ArgvElement::Token(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for script in adapter_scripts {
+            output = output.replace(script, "<eslint-adapter>");
+        }
+    }
     output
 }
 
@@ -20256,6 +21579,31 @@ fn contextlint_cli_path_aliases() -> Vec<String> {
         paths.push(PathBuf::from(root).join("package/node_modules/@contextlint/cli/dist/index.js"));
     }
     if let Ok(path) = resolve_contextlint_fixture_cli() {
+        paths.push(path);
+    }
+
+    let mut aliases = Vec::new();
+    for path in paths {
+        let rendered = path.to_string_lossy().into_owned();
+        if !rendered.is_empty() && !aliases.contains(&rendered) {
+            aliases.push(rendered);
+        }
+        if let Ok(canonical) = path.canonicalize() {
+            let canonical = canonical.to_string_lossy().into_owned();
+            if !aliases.contains(&canonical) {
+                aliases.push(canonical);
+            }
+        }
+    }
+    aliases
+}
+
+fn eslint_cli_path_aliases() -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(root) = std::env::var_os(ESLINT_ROOT_ENV) {
+        paths.push(PathBuf::from(root).join("package/node_modules/eslint/bin/eslint.js"));
+    }
+    if let Some(path) = resolve_program("eslint") {
         paths.push(path);
     }
 

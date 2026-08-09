@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "ESLint changed example.js; re-read changed files before editing further."
+  }
+}

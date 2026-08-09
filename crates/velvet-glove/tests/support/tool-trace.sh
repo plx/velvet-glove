@@ -66,6 +66,9 @@ if [ "$logical_program" = node ]; then
   printf '%s\n' "${PRETTIER_EXPERIMENTAL_CLI-}" >"$record/env-PRETTIER_EXPERIMENTAL_CLI"
   printf '%s\n' "${PRETTIER_PERF_REPEAT-}" >"$record/env-PRETTIER_PERF_REPEAT"
   printf '%s\n' "${PRETTIER_VELVET_GLOVE_POISON-}" >"$record/env-PRETTIER_VELVET_GLOVE_POISON"
+  printf '%s\n' "${ESLINT_USE_FLAT_CONFIG-}" >"$record/env-ESLINT_USE_FLAT_CONFIG"
+  printf '%s\n' "${ESLINT_CODE_PATH-}" >"$record/env-ESLINT_CODE_PATH"
+  printf '%s\n' "${ESLINT_VELVET_GLOVE_POISON-}" >"$record/env-ESLINT_VELVET_GLOVE_POISON"
   printf '%s\n' "${DYLD_FALLBACK_LIBRARY_PATH-}" >"$record/env-DYLD_FALLBACK_LIBRARY_PATH"
   printf '%s\n' "${DYLD_FALLBACK_FRAMEWORK_PATH-}" >"$record/env-DYLD_FALLBACK_FRAMEWORK_PATH"
   printf '%s\n' "${DYLD_FRAMEWORK_PATH-}" >"$record/env-DYLD_FRAMEWORK_PATH"
@@ -307,6 +310,10 @@ printf '%s\n' "$VELVET_GLOVE_TOOL_TRACE_SENTINEL" >"$record/env-VELVET_GLOVE_TOO
 
 argument_index=0
 dclint_config=
+eslint_config=''
+eslint_suppressions=''
+eslint_cache=''
+eslint_private_controls=0
 for argument in "$@"; do
   printf '%s\n' "$argument" >"$record/argv-$argument_index"
   if [ "$logical_program" = dclint ]; then
@@ -320,6 +327,18 @@ for argument in "$@"; do
         ;;
     esac
   fi
+  case $argument in
+    --config=*) eslint_config=${argument#--config=} ;;
+    --suppressions-location=*)
+      eslint_suppressions=${argument#--suppressions-location=}
+      eslint_private_controls=1
+      ;;
+    --cache-location=*)
+      eslint_cache=${argument#--cache-location=}
+      eslint_private_controls=1
+      ;;
+    --no-config-lookup) eslint_private_controls=1 ;;
+  esac
   argument_index=$((argument_index + 1))
 done
 
@@ -353,9 +372,32 @@ if [ "$logical_program" = dclint ]; then
   fi
 fi
 
+if [ "$eslint_private_controls" -eq 1 ]; then
+  [ -n "$eslint_config" ] && [ -n "$eslint_suppressions" ] && [ -n "$eslint_cache" ] || exit 93
+  eslint_private_root=$(/usr/bin/dirname "$eslint_config")
+  [ "$(/usr/bin/dirname "$eslint_suppressions")" = "$eslint_private_root" ] || exit 94
+  case $eslint_cache in "$eslint_private_root"/cache-[0-9]*/.eslintcache) ;; *) exit 95 ;; esac
+  printf '%s\n' "$eslint_private_root" >"$record/eslint-private-root"
+  /usr/bin/stat -f '%Lp' "$eslint_private_root" >"$record/eslint-private-root-mode"
+  /usr/bin/stat -f '%Lp' "$eslint_config" >"$record/eslint-config-mode"
+  /usr/bin/stat -f '%Lp' "$eslint_suppressions" >"$record/eslint-suppressions-mode"
+  /usr/bin/stat -f '%Lp' "$(/usr/bin/dirname "$eslint_cache")" >"$record/eslint-cache-directory-mode"
+  /bin/cp "$eslint_config" "$record/eslint-config.cjs"
+  /bin/cp "$eslint_suppressions" "$record/eslint-suppressions.json"
+  printf '%s\n' "$eslint_cache" >"$record/eslint-cache-location"
+fi
+
 set +e
 "$real_program" "$@"
 status=$?
 set -e
+if [ -n "$eslint_cache" ]; then
+  if [ -f "$eslint_cache" ]; then
+    printf '%s\n' file >"$record/eslint-cache-kind"
+    /usr/bin/stat -f '%Lp' "$eslint_cache" >"$record/eslint-cache-mode"
+  else
+    printf '%s\n' missing >"$record/eslint-cache-kind"
+  fi
+fi
 printf '%s\n' "$status" >"$record/status"
 exit "$status"
