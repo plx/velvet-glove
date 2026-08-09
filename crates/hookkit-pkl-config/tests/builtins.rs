@@ -288,6 +288,79 @@ fn astro_adapter_requires_a_completed_workspace_check() {
     assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
 }
 
+#[test]
+fn buf_format_adapter_locks_workspace_mutation_and_diff_completion() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let buf = spec(&specs, "bufFormat");
+
+    assert_eq!(buf.workspace_indicator.as_deref(), Some("buf.yaml"));
+    assert_eq!(buf.phase_invocation, InvocationGranularity::Workspace);
+    assert!(
+        buf.workflows.is_empty(),
+        "buf format uses compatibility translation"
+    );
+
+    let format = buf.phases.get("format").expect("buf format phase");
+    let verify = buf.phases.get("verify").expect("buf verify phase");
+    assert_eq!(format.program.as_deref(), Some("python"));
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(format.writes, WriteBehavior::Workspace);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(format.argv.len(), 8);
+    assert_eq!(verify.argv.len(), 8);
+    assert_eq!(format.argv[0], literal("-I"));
+    assert_eq!(format.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &format.argv[2] else {
+        panic!("buf format adapter must be a literal Python program")
+    };
+    assert_eq!(verify.argv[2], format.argv[2]);
+    for required in [
+        "shutil.which(requested_tool)",
+        "extra arguments are unsupported",
+        "--disable-symlinks",
+        "--error-format=text",
+        "--log-format=text",
+        "config",
+        "ls-modules",
+        "--format=json",
+        "parse_module_scope",
+        "validate_module_coverage",
+        "buf.yaml module scope omits workspace proto files",
+        "--write",
+        "--diff",
+        "--exit-code",
+        "\"PATH\": \"/usr/bin:/bin\"",
+        "name.startswith(\"BUF_\")",
+        "\"DIFF_OPTIONS\"",
+        "velvet-glove-buf-cache",
+        "path_info.st_nlink != 1",
+        "config_info.st_nlink != 1",
+        "canonical v1 or v2 version header",
+        "exactly one YAML document",
+        "runner-hard-skipped directory",
+        "combined output exceeded",
+        "class AdapterSignal(BaseException)",
+        "signal_group(signal.SIGKILL)",
+        "diff output has no blocks",
+        "unified-diff block has no hunk",
+        "diff path escapes workspace",
+        "\\t<mtime>\\n",
+        "returncode == 100",
+    ] {
+        assert!(adapter.contains(required), "buf adapter omits {required:?}");
+    }
+    for (phase, mode) in [(format, "write"), (verify, "verify")] {
+        assert_eq!(phase.argv[3], token(ArgToken::ToolExecutable));
+        assert_eq!(phase.argv[4], literal(mode));
+        assert_eq!(phase.argv[5], token(ArgToken::ExtraArgs));
+        assert_eq!(phase.argv[6], literal("__VELVET_GLOVE_BUF_WORKSPACE__"));
+        assert_eq!(phase.argv[7], token(ArgToken::Workspace));
+    }
+    assert_exit_codes(&format.exit_codes, &[0], &[], &[2]);
+    assert_exit_codes(&verify.exit_codes, &[0], &[100], &[2]);
+}
+
 fn spec(specs: &std::collections::BTreeMap<String, ToolSpec>, key: &str) -> ToolSpec {
     specs
         .get(key)

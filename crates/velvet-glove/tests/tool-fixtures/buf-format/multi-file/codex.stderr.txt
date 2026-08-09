@@ -1,2 +1,2 @@
-buf format: changed example.proto
+buf format: changed example.proto, proto/workspace-only.proto
 hookkit: redirected user notices and diagnostics to protocol stderr

@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "buf format changed example.proto, proto/workspace-only.proto; re-read changed files before editing further."
+  }
+}

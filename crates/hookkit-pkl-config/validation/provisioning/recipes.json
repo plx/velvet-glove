@@ -158,6 +158,48 @@
       "bootstrap": []
     },
     {
+      "id": "macos-arm64-buf",
+      "provisioningGroup": "data-formats",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "buf",
+          "version": "1.72.0",
+          "miseTool": "buf@1.72.0",
+          "installationSource": "Buf v1.72.0 Darwin-arm64 release archive locked by SHA-256 in validation/provisioning/mise.lock; upstream checksum list independently verified with minisign",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+          },
+          "probe": {
+            "argv": ["buf", "--version"],
+            "match": "exact",
+            "expected": "1.72.0"
+          }
+        },
+        {
+          "id": "apple-diff",
+          "version": "Apple diff (based on FreeBSD diff)",
+          "installationSource": "Apple /usr/bin/diff supplied by the declared macOS host for Buf unified-diff rendering",
+          "integrity": {
+            "kind": "host-program",
+            "path": "/usr/bin/diff"
+          },
+          "probe": {
+            "argv": ["/usr/bin/diff", "--version"],
+            "match": "exact",
+            "expected": "Apple diff (based on FreeBSD diff)"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["diff"],
+      "bootstrap": []
+    },
+    {
       "id": "macos-arm64-node",
       "provisioningGroup": "node",
       "platform": "macos",
@@ -728,6 +770,25 @@
       "caseExecutables": ["jq"],
       "cases": ["clean", "invalid", "multi-file-fragments", "operational-failure"],
       "representativeCase": "multi-file-fragments"
+    },
+    {
+      "id": "buf-format-macos-arm64",
+      "toolId": "buf-format",
+      "environmentId": "macos-arm64-buf",
+      "version": "1.72.0",
+      "installationSource": "Buf v1.72.0 Darwin-arm64 release archive locked by SHA-256 in validation/provisioning/mise.lock; upstream checksum list independently verified with minisign",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["buf", "--version"],
+        "match": "exact",
+        "expected": "1.72.0"
+      },
+      "caseExecutables": ["buf", "python", "diff"],
+      "cases": ["clean", "unformatted", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
     },
     {
       "id": "betterleaks-macos-arm64",

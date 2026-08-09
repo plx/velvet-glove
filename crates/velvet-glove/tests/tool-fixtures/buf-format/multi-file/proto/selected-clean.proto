@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package fixture.multi.v1;
+
+message SelectedClean {
+  string value = 1;
+}

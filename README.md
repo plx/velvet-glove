@@ -149,9 +149,10 @@ just tool-case jq multi-file-fragments
 just tool-case astro multi-file-project
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
+just tool-case buf-format multi-file
 
-# Eleven behavior-rich contracts across eight environments: data formats, Node,
-# Python, Go, Rust, Ruby, security, and native macOS.
+# Twelve behavior-rich contracts across nine environments: jq data formats,
+# Buf data formats, Node, Python, Go, Rust, Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -173,6 +174,17 @@ whitespace-separated top-level values rather than requiring exactly one JSON
 document. The exact artifact URLs, SHA-256 digests, status mapping, and
 provenance identity are in the
 [pinned environment guide](docs/pinned-tool-environments.md#jq-validation-contract).
+
+The separate Buf data-formats lane pins Buf 1.72.0 and the declared Apple
+`/usr/bin/diff` prerequisite. Its isolated adapter rejects configurable flags,
+proves every physical Proto file belongs to the effective module scope, locks
+symlink-safe workspace formatting, and accepts status 100 only after parsing a
+complete unified diff and removing its generated mtime fields. The
+representative repairs selected and unselected in-scope files, records the
+complete workspace diff, reruns the authoritative check, and proves a clean
+idempotent repeat. Exact release/signature provenance and the config, syntax,
+filesystem, and transaction limitations are in the
+[Buf contract](docs/pinned-tool-environments.md#buf-format-validation-contract).
 
 The Node lane also pins Astro 7.2.0, `@astrojs/check` 0.9.10, and TypeScript
 6.0.3. Its evaluated adapter performs one error-only check for the whole

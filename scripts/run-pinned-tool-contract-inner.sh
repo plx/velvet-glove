@@ -85,7 +85,15 @@ while IFS= read -r program; do
     "$state_dir"/*|"${MISE_DATA_DIR:?}"/*) ;;
     *)
       if jq -e --arg path "$resolved_real" \
-        '[.sharedComponents[] | select(.integrity.kind == "host-program") | .integrity.path]
+        --argjson tools "$tool_ids" \
+        '([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
+          | unique) as $environmentIds
+         | [(.sharedComponents[],
+              (.environments[]
+               | select(.id as $id | $environmentIds | index($id))
+               | .components[]))
+            | select(.integrity.kind == "host-program")
+            | .integrity.path]
          | index($path) != null' "$registry" >/dev/null; then
         resolution_kind=declared-host-prerequisite
       else
@@ -222,6 +230,7 @@ done < <(jq -r --argjson tools "$tool_ids" '
      + [.environments[]
         | select(.id as $id | $environmentIds | index($id))
         | (.components[]
+           | select(.integrity.kind != "host-program")
            | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)),
           .bootstrap[].lockfile]
      + [.recipes[]

@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package fixture.clean.v1;
+
+message Example {
+  string name = 1;
+}

@@ -73,6 +73,13 @@ change, and the second immediate/deferred run must produce an empty diff. This
 lets a multi-file fixture retain clean or intentionally dirty unselected
 sentinels without weakening the complete-workspace-diff assertion.
 
+The mirror may include files outside the event's candidate set when an
+evaluated remedy declares `matching-globs` or `workspace` writes. The retained
+deferred evidence must then report those snapshot-discovered files in
+`changedFiles` and in the file-result union while preserving the original
+candidate list. Remedies declared `target-files` remain restricted to event
+candidates.
+
 ## Normalization placeholders
 
 When comparing outputs, the harness substitutes the test's temp workspace
@@ -143,8 +150,8 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, and Biome contract
-cases are retained too. Their evidence includes exact pass-through
+alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, and Buf
+Format contract cases are retained too. Their evidence includes exact pass-through
 program/argv/cwd/environment traces (including Asciidoctor's nested FATAL
 preflight and WARNING validation, Astro's single nested project check, and
 Betterleaks' marker-delimited batch adapter with locked redaction and finding
@@ -164,3 +171,14 @@ bind `NODE_PATH` to the same controlled `node_modules` graph as the pinned
 Astro executable, verify all three required package manifests, and record
 disabled telemetry, non-interactive CI mode, and a cleared debug channel. Other
 successful case workspaces are removed.
+
+Buf Format traces bind its isolated workspace adapter, absolute managed Buf
+executable, a `buf config ls-modules --log-format=text --format=json` scope
+preflight before every native format attempt, fixed formatter flags, Apple
+`diff` prerequisite, sanitized child `PATH`, scrubbed
+`BUF_*`/`DIFF_OPTIONS`/`DEBUG`, and a fixture-private `BUF_CACHE_DIR`. Dirty
+diagnostics must contain complete, sorted unified-diff blocks whose dynamic
+header mtimes were replaced with `<mtime>`. The multi-file case selects two
+candidates while also changing a workspace file outside that candidate set, so
+retained reports prove workspace write scope, conservative workspace attribution,
+and the full candidate-plus-changed file union.

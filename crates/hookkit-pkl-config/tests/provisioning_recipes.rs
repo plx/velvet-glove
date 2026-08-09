@@ -381,6 +381,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "betterleaks",
             "biome",
             "black",
+            "buf-format",
             "go-fmt",
             "jq",
             "rubocop",
@@ -938,6 +939,7 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
             assert_eq!(component.mise_tool, None);
             let expected = match component.id.as_str() {
                 "apple-clang" => ("major >=17", "/usr/bin/cc"),
+                "apple-diff" => ("Apple diff (based on FreeBSD diff)", "/usr/bin/diff"),
                 "macos-sdk" => ("major >=26", "/usr/bin/xcrun"),
                 "xcode" => ("major >=26", "/usr/bin/xcodebuild"),
                 other => panic!("unexpected host program component {other}"),

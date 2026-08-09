@@ -5,11 +5,12 @@ single command. For example:
 
 ```sh
 just tool-case jq multi-file-fragments
+just tool-case buf-format multi-file
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
 ```
 
-Run all eleven behavior-rich representative contracts across eight environments
+Run all twelve behavior-rich representative contracts across nine environments
 with:
 
 ```sh
@@ -67,6 +68,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Environment | Runtime/tool | Integrity source | Representative |
 | --- | --- | --- | --- |
 | Data formats | jq 1.8.2 | SHA-256 + SLSA | `jq/multi-file-fragments` |
+| Buf data formats | Buf 1.72.0; Python 3.14.5; Apple diff | mise SHA-256; signed upstream checksum manifest; exact host-program probe | `buf-format/multi-file` |
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5 | mise SHA-256 | `go-fmt/unformatted` |
@@ -112,6 +114,134 @@ The representative selector exercises the cross-file regression. Full jq
 coverage additionally runs `clean`, `invalid`, and `operational-failure`; each
 case covers both Claude and Codex immediate hooks and the
 compatibility-translated deferred lifecycle.
+
+### buf format validation contract
+
+The separate Buf data-formats environment pins the official
+[`buf-Darwin-arm64.tar.gz`](https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Darwin-arm64.tar.gz)
+1.72.0 release archive at SHA-256
+`be040ae0ca381103dfda68a36738695c4db3e48de8e91412acdc3d991f39b91e`.
+Its `bin/buf` member is byte-identical to the direct Darwin arm64 release
+binary and has SHA-256
+`5176f23a6118b9978de1340c3e3301a4ed0d48e16a669510be44b4c355170d57`.
+The v1.72.0 tag resolves to GitHub-verified commit
+[`7d6f05675219fa077f776e9f05b7c7d1a9882e0c`](https://github.com/bufbuild/buf/commit/7d6f05675219fa077f776e9f05b7c7d1a9882e0c).
+The upstream
+[`sha256.txt`](https://github.com/bufbuild/buf/releases/download/v1.72.0/sha256.txt)
+and
+[`sha256.txt.minisig`](https://github.com/bufbuild/buf/releases/download/v1.72.0/sha256.txt.minisig)
+are independently pinned at SHA-256
+`c6ddd4f90a2829ea04efbfbbbc44f8f5d4a0f2dda3bec5ec3fbb652c2d394c06`
+and
+`468ac733bfeef624cfa2fe45d85d0c6f0d4e3fa1238bc4c9ec7cb7b425ac48fd`.
+Both minisign signatures verify with Buf's
+[documented public key](https://buf.build/docs/cli/installation/#github),
+`RWQ/i9xseZwBVE7pEniCNjlNOeeyp4BQgdZDLQcAohxEAH5Uj5DEKjv6` and trusted
+key ID `54019C796CDC8B3F` at timestamp 2026-07-17T20:09:43Z. GitHub provides no
+artifact attestation for this release, so the signed checksum manifest and
+exact mise lock are the artifact trust boundary. Buf is Apache-2.0-licensed,
+with the commit's license file pinned at SHA-256
+`995b27237c0d8ef8c970d36da9e81f1472790ae18f3d7d5a966781b53d78f242`.
+The source archive used for the independent source-mode security scan has
+SHA-256
+`52ee072d93e17adec529ca13dd701c0939b3a210a1c2803379007c7a830f502d`.
+The exact product probe is `buf --version` → `1.72.0`.
+
+The evaluated phases use the shared pinned Python 3.14.5 interpreter in
+isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> buf <write|verify> {extra-args} __VELVET_GLOVE_BUF_WORKSPACE__ {workspace}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Every configured extra argument is rejected because Buf format options can
+change selection, symlink behavior, mutation, output, completion status, or
+process behavior. The adapter resolves the managed `buf` executable before
+replacing child `PATH` with `/usr/bin:/bin`. Each phase first runs:
+
+```text
+ABS_BUF config ls-modules --log-format=text --format=json
+```
+
+The adapter accepts one complete UTF-8 JSON object on every module line
+and checks the union of module paths, includes, and excludes. The root `buf.yaml`
+must be a unique regular file, begin with one canonical `version: v1` or
+`version: v2` header, and contain one YAML document. Every physical `.proto`
+file in the non-symlink workspace tree must be covered by at least one module
+and no applicable exclusion. A valid configuration that intentionally leaves
+such a Proto outside its modules, includes, or under an exclusion therefore
+fails operationally; this conservative restriction prevents a selected file
+from producing a successful no-op. Proto files beneath `.git`, `node_modules`,
+or `target` are also rejected because the runner deliberately does not
+snapshot those directories.
+
+After a successful preflight, the exact nested phase command is one of:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+ABS_BUF format --disable-symlinks --error-format=text --log-format=text --write WORKSPACE
+ABS_BUF format --disable-symlinks --error-format=text --log-format=text --diff --exit-code WORKSPACE
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Buf invokes the host `diff` program for the second command. The environment
+therefore declares `/usr/bin/diff` as an auxiliary program and probes its exact
+product string, `Apple diff (based on FreeBSD diff)`. `PATH` is fixed to the
+two system executable directories, `DIFF_OPTIONS`, `DEBUG`, and every ambient
+`BUF_*` variable are removed, and `BUF_CACHE_DIR` is placed beneath the
+harness-controlled absolute `TMPDIR`. The pinned lane records Python 3.14.5,
+the managed Buf path, and the Apple diff host prerequisite in every run.
+
+Native status zero is accepted only with empty stdout and stderr. Verify
+status 100 is a source formatting issue only when stderr is empty and stdout
+contains one or more complete, sorted unified-diff blocks with consistent
+paths and hunk counts. The adapter removes only the generated old/new header
+mtime fields, replacing each with `<mtime>`; malformed or incomplete status
+100 output is operational failure status two. Native configuration, usage,
+I/O, spawn, signal, and output-over-16-MiB failures likewise map to two. This
+matters because native Buf uses status one for configuration failures and can
+misreport arbitrary `diff` subprocess output as status 100.
+
+The four cases cover clean input, one unformatted source, a multi-file
+workspace, and a configuration-induced no-op. The operational case has one
+clean included Proto plus one dirty excluded Proto: native format alone would
+return clean without touching the dirty file, while the module preflight runs
+once and the adapter rejects the uncovered path before launching format. The
+multi-file case selects one dirty and one clean Proto while an unselected dirty
+Proto remains in module scope. One workspace invocation repairs both dirty
+files, the workspace write snapshot records their exact bytes, conservative
+candidate attribution remains separate from exact changed-file evidence, and
+the authoritative verify and repeat are clean.
+
+Immediate execution orders write before verify. Deferred compatibility first
+checks the pristine workspace, records status 100 and the canonical diff,
+conditionally applies the remedy, and runs a final clean check. A second
+deferred attempt on repaired bytes is verify-only. Both surfaces prove the
+complete workspace diff and a mutation-free idempotent rerun.
+
+This is a formatting contract, not Proto syntax validation: Buf can accept
+some malformed or invalid-UTF-8 inputs as clean or format them destructively.
+`--disable-symlinks` and link-count preflight reject the demonstrated symlink
+and hard-link escapes, but filesystem and config replacement races remain.
+Buf writes are not transactional; a late error can leave earlier files in a
+multi-file workspace already formatted. The controlled operational fixture
+fails before mutation, while the general partial-write and TOCTOU boundaries
+remain explicit limitations. The predictable cache subdirectory is trusted
+only because the pinned lane supplies a private controlled `TMPDIR`.
+
+The Darwin arm64 binary was built with Go 1.26.5, `CGO_ENABLED=0`, and only
+system dynamic libraries. A `govulncheck` 1.6.0 binary scan reports only
+[`GO-2026-5932`](https://pkg.go.dev/vuln/GO-2026-5932) through coarse OpenPGP
+module/symbol metadata; an exact v1.72.0 source scan finds it only at module
+level and not imported or called. This is a recorded scanner limitation, not
+an audit-clean or future-security claim. The release binary has only an ad-hoc
+linker signature rather than a Developer ID signature or notarization.
 
 ### Betterleaks validation contract
 
@@ -491,10 +621,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These eleven smoke contracts establish the reproducible environment substrate;
+These twelve smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
-and semantic case has evidence; jq, Betterleaks, Astro, Asciidoctor, and Biome
+and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
+Asciidoctor, and Biome
 are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 
