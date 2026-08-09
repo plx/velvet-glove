@@ -246,6 +246,7 @@ eslintAdapter: String = #"""
   cleaning = False
   output_total = 0
   private_root = None
+  temp_root = None
   handled_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
@@ -279,28 +280,60 @@ eslintAdapter: String = #"""
           return True
 
 
+  def sweep_process_group():
+      if not process_group_exists():
+          return False
+      signal_group(signal.SIGKILL)
+      deadline = time.monotonic() + 1
+      while process_group_exists() and time.monotonic() < deadline:
+          time.sleep(0.01)
+      if process_group_exists():
+          raise EvidenceError("cannot reap same-group descendants after child exit")
+      return True
+
+
   def stop_child(initial_signal=None):
       global process
       global cleaning
       child = process
       if child is None:
-          return
+          return None
+      failures = []
+      previous_cleaning = cleaning
       cleaning = True
       try:
-          if child.poll() is None:
+          try:
+              running = child.poll() is None
+          except (OSError, ValueError) as error:
+              failures.append(f"cannot poll native child: {error}")
+              running = True
+          if running:
               signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)
               try:
                   child.wait(timeout=1)
-              except (OSError, ValueError, subprocess.TimeoutExpired):
+              except subprocess.TimeoutExpired:
                   pass
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot stop native child gracefully: {error}")
           signal_group(signal.SIGKILL)
           try:
               child.wait(timeout=1)
-          except (OSError, ValueError, subprocess.TimeoutExpired):
-              pass
+          except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+              failures.append(f"cannot reap native child: {error}")
+          try:
+              deadline = time.monotonic() + 1
+              while process_group_exists() and time.monotonic() < deadline:
+                  time.sleep(0.01)
+              if process_group_exists():
+                  failures.append("native child process group survived SIGKILL")
+          except (OSError, ValueError) as error:
+              failures.append(f"cannot verify native child process-group cleanup: {error}")
       finally:
           process = None
-          cleaning = False
+          cleaning = previous_cleaning
+      if failures:
+          return EvidenceError("; ".join(failures))
+      return None
 
 
   def forward_signal(signum, _frame):
@@ -312,9 +345,11 @@ eslintAdapter: String = #"""
 
 
   def append_adapter_error(primary, secondary):
+      if secondary is None:
+          return primary
       if primary is None:
           return secondary
-      return ValueError(f"{primary}; {secondary}")
+      return EvidenceError(f"{primary}; {secondary}")
 
 
   def apply_pending_signal(primary):
@@ -339,12 +374,15 @@ eslintAdapter: String = #"""
 
   def run_child(arguments):
       global process
+      global cleaning
       global output_total
       global stdout_bytes
       global stderr_bytes
+      stdout_bytes = b""
+      stderr_bytes = b""
       if pending_signal is not None:
           raise AdapterSignal(pending_signal)
-      process = subprocess.Popen(
+      child = subprocess.Popen(
           arguments,
           stdin=subprocess.DEVNULL,
           stdout=subprocess.PIPE,
@@ -353,9 +391,12 @@ eslintAdapter: String = #"""
           env=environment,
           start_new_session=True,
       )
+      process = child
       stdout_chunks = []
       stderr_chunks = []
       selector = selectors.DefaultSelector()
+      leader_status = None
+      leader_exit_deadline = None
       try:
           for stream, chunks in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
               if stream is None:
@@ -375,20 +416,49 @@ eslintAdapter: String = #"""
                   else:
                       selector.unregister(key.fileobj)
                       key.fileobj.close()
-          status = process.wait()
-          if process_group_exists():
-              signal_group(signal.SIGKILL)
-              deadline = time.monotonic() + 1
-              while process_group_exists() and time.monotonic() < deadline:
-                  time.sleep(0.01)
-              if process_group_exists():
-                  raise EvidenceError("native ESLint left same-group descendants after child exit")
+              if leader_status is None:
+                  leader_status = process.poll()
+                  if leader_status is not None:
+                      leader_exit_deadline = time.monotonic() + 0.25
+              if (
+                  leader_status is not None
+                  and selector.get_map()
+                  and time.monotonic() >= leader_exit_deadline
+              ):
+                  previous_cleaning = cleaning
+                  cleaning = True
+                  try:
+                      left_descendants = sweep_process_group()
+                  finally:
+                      cleaning = previous_cleaning
+                  if left_descendants:
+                      raise EvidenceError(
+                          "native ESLint left same-group descendants after child exit"
+                      )
+                  raise EvidenceError(
+                      "native ESLint child exited without closing output pipes"
+                  )
+          status = process.wait() if leader_status is None else leader_status
+          previous_cleaning = cleaning
+          cleaning = True
+          try:
+              left_descendants = sweep_process_group()
+          finally:
+              cleaning = previous_cleaning
+          if left_descendants:
+              raise EvidenceError("native ESLint left same-group descendants after child exit")
+          process = None
+          return status, b"".join(stdout_chunks), b"".join(stderr_chunks)
       finally:
           selector.close()
-      process = None
-      stdout_bytes = b"".join(stdout_chunks)
-      stderr_bytes = b"".join(stderr_chunks)
-      return status, stdout_bytes, stderr_bytes
+          for stream in (child.stdout, child.stderr):
+              if stream is not None:
+                  try:
+                      stream.close()
+                  except OSError:
+                      pass
+          stdout_bytes = b"".join(stdout_chunks)
+          stderr_bytes = b"".join(stderr_chunks)
 
 
   def file_snapshot(paths):
@@ -455,6 +525,8 @@ eslintAdapter: String = #"""
                   raise EvidenceError(f"{label} emitted invalid diagnostic severity")
               if not isinstance(message.get("message"), str):
                   raise EvidenceError(f"{label} emitted a diagnostic without a message")
+              if "fatal" in message and not isinstance(message["fatal"], bool):
+                  raise EvidenceError(f"{label} emitted a non-boolean fatal marker")
               severities.append(severity)
               if message.get("fatal", False) is True:
                   fatal_count += 1
@@ -469,9 +541,17 @@ eslintAdapter: String = #"""
                   raise EvidenceError(
                       f"{label} emitted inconsistent {key} for {path!r}: {value!r}"
                   )
-          for key in ("fixableErrorCount", "fixableWarningCount"):
+          for key, total_key in (
+              ("fixableErrorCount", "errorCount"),
+              ("fixableWarningCount", "warningCount"),
+          ):
               value = result.get(key)
-              if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+              if (
+                  isinstance(value, bool)
+                  or not isinstance(value, int)
+                  or value < 0
+                  or value > result[total_key]
+              ):
                   raise EvidenceError(f"{label} emitted invalid {key} for {path!r}")
           if "output" in result and not isinstance(result["output"], str):
               raise EvidenceError(f"{label} emitted non-string fix output for {path!r}")
@@ -575,11 +655,22 @@ eslintAdapter: String = #"""
 
 
   def sanitize(value):
-      if private_root is None:
-          return value
       if isinstance(value, bytes):
+          if private_root is None:
+              return value
           return value.replace(os.fsencode(private_root), b"<eslint-private>")
-      return str(value).replace(private_root, "<eslint-private>")
+      message = str(value)
+      if private_root is not None:
+          return message.replace(private_root, "<eslint-private>")
+      if isinstance(value, OSError) and value.filename is not None and temp_root is not None:
+          filename = os.fsdecode(value.filename)
+          candidate = os.path.abspath(filename)
+          if (
+              os.path.dirname(candidate) == temp_root
+              and os.path.basename(candidate).startswith("velvet-glove-eslint-")
+          ):
+              message = message.replace(filename, "<eslint-private>")
+      return message
 
 
   previous_handlers = {}
@@ -591,7 +682,10 @@ eslintAdapter: String = #"""
   try:
       for signum in handled_signals:
           previous_handlers[signum] = signal.signal(signum, forward_signal)
-      temp_root = os.path.realpath(tempfile.gettempdir())
+      requested_temp_root = os.environ.get("TMPDIR")
+      temp_root = os.path.realpath(
+          requested_temp_root if requested_temp_root else tempfile.gettempdir()
+      )
       temp_info = os.lstat(temp_root)
       if not stat.S_ISDIR(temp_info.st_mode) or os.path.islink(temp_root):
           raise OSError(f"temporary root is not a real directory: {temp_root}")
@@ -703,13 +797,11 @@ eslintAdapter: String = #"""
                   raise EvidenceError("native ESLint final diagnostics differ from fix dry-run")
               returncode = final_status
   except AdapterSignal as error:
-      stop_child(error.signum)
-      adapter_error = error
+      adapter_error = append_adapter_error(error, stop_child(error.signum))
       reported_signal = error.signum
       returncode = 2
   except BaseException as error:
-      stop_child()
-      adapter_error = error
+      adapter_error = append_adapter_error(error, stop_child())
       returncode = 2
   finally:
       cleaning = True

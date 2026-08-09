@@ -17540,6 +17540,35 @@ printf '[{{"filePath":"%s","messages":[],"suppressedMessages":[],"errorCount":0,
 
         std::fs::write(&source_config, "{\"rules\":{}}\n")
             .map_err(|error| format!("restore ESLint signal config: {error}"))?;
+        verify_eslint_adapter_initialization_failure(
+            &python,
+            adapter,
+            &fake_cli,
+            &target,
+            &project,
+            &requested_root,
+            timeout,
+        )?;
+        verify_eslint_adapter_malformed_completion(
+            &python,
+            adapter,
+            &fake_cli,
+            &target,
+            &project,
+            &temporary,
+            &requested_root,
+            timeout,
+        )?;
+        verify_eslint_adapter_normal_exit_cleanup(
+            &python,
+            adapter,
+            &fake_cli,
+            &target,
+            &project,
+            &temporary,
+            &requested_root,
+            timeout,
+        )?;
         verify_eslint_adapter_signal_cleanup(
             &python,
             adapter,
@@ -17588,6 +17617,400 @@ fn run_eslint_adapter_probe(
         .env("ESLINT_VELVET_GLOVE_POISON", ESLINT_POISON_ENV_VALUE);
     run_with_timeout(&mut command, &[], timeout, capture)
         .map_err(|error| format!("run ESLint adapter probe: {error}"))
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_eslint_adapter_initialization_failure(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    target: &Path,
+    project: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let unwritable = root.join("eslint-unwritable-temp");
+    std::fs::create_dir(&unwritable)
+        .map_err(|error| format!("create unwritable ESLint temporary root: {error}"))?;
+    let mut permissions = std::fs::metadata(&unwritable)
+        .map_err(|error| format!("inspect unwritable ESLint temporary root: {error}"))?
+        .permissions();
+    permissions.set_mode(0o500);
+    std::fs::set_permissions(&unwritable, permissions)
+        .map_err(|error| format!("make ESLint temporary root unwritable: {error}"))?;
+
+    let invoked = root.join("eslint-mkdtemp-node-ran");
+    let node = root.join("eslint-mkdtemp-node");
+    write_executable_probe(
+        &node,
+        &format!(
+            "#!/bin/sh\nset -eu\n: > '{}'\nexit 0\n",
+            shell_probe_path(&invoked)?
+        ),
+    )?;
+    let output_result = run_eslint_adapter_probe(
+        python,
+        adapter,
+        &node,
+        fake_cli,
+        "verify",
+        &[],
+        &[target],
+        project,
+        &unwritable,
+        timeout.min(Duration::from_secs(5)),
+        &root.join("eslint-mkdtemp-failure-evidence"),
+    );
+    let mut restore = std::fs::metadata(&unwritable)
+        .map_err(|error| format!("reinspect unwritable ESLint temporary root: {error}"))?
+        .permissions();
+    restore.set_mode(0o700);
+    std::fs::set_permissions(&unwritable, restore)
+        .map_err(|error| format!("restore ESLint temporary-root permissions: {error}"))?;
+    let output = output_result?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || invoked.exists()
+        || !stderr.contains("<eslint-private>")
+        || stderr.contains(ESLINT_PRIVATE_ROOT_PREFIX)
+        || stderr.matches("velvet-glove-eslint:").count() != 1
+    {
+        return Err(format!(
+            "ESLint mkdtemp failure leaked private state or invoked Node: status={:?}; invoked={}; stdout={:?}; stderr={stderr:?}",
+            output.status.code(),
+            invoked.exists(),
+            String::from_utf8_lossy(&output.stdout)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_eslint_adapter_malformed_completion(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    target: &Path,
+    project: &Path,
+    temporary: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let baseline = std::fs::read(target)
+        .map_err(|error| format!("read ESLint malformed-output baseline: {error}"))?;
+    for (label, payload, diagnostic) in [
+        (
+            "fixable-count",
+            r#"printf '[{"filePath":"%s","messages":[],"suppressedMessages":[],"errorCount":0,"fatalErrorCount":0,"warningCount":0,"fixableErrorCount":1,"fixableWarningCount":0}]\n' "$last"
+exit 0"#,
+            "invalid fixableErrorCount",
+        ),
+        (
+            "fatal-marker",
+            r#"printf '[{"filePath":"%s","messages":[{"severity":2,"message":"fatal","fatal":"yes"}],"suppressedMessages":[],"errorCount":1,"fatalErrorCount":0,"warningCount":0,"fixableErrorCount":0,"fixableWarningCount":0}]\n' "$last"
+exit 1"#,
+            "non-boolean fatal marker",
+        ),
+    ] {
+        let invoked = root.join(format!("eslint-malformed-{label}-node-ran"));
+        let node = root.join(format!("eslint-malformed-{label}-node"));
+        write_executable_probe(
+            &node,
+            &format!(
+                "#!/bin/sh\nset -eu\n: > '{}'\nlast=''\nfor argument in \"$@\"; do last=$argument; done\n{payload}\n",
+                shell_probe_path(&invoked)?
+            ),
+        )?;
+        let output = run_eslint_adapter_probe(
+            python,
+            adapter,
+            &node,
+            fake_cli,
+            "verify",
+            &[],
+            &[target],
+            project,
+            temporary,
+            timeout.min(Duration::from_secs(5)),
+            &root.join(format!("eslint-malformed-{label}-evidence")),
+        )?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let observed = std::fs::read(target)
+            .map_err(|error| format!("read ESLint malformed-{label} target: {error}"))?;
+        if output.status.code() != Some(2)
+            || !invoked.exists()
+            || !stderr.contains(diagnostic)
+            || observed != baseline
+        {
+            return Err(format!(
+                "ESLint malformed {label} completion was accepted or mutated input: status={:?}; invoked={}; unchanged={}; stdout={:?}; stderr={stderr:?}",
+                output.status.code(),
+                invoked.exists(),
+                observed == baseline,
+                String::from_utf8_lossy(&output.stdout)
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assert_eslint_orphan_swept(
+    output: &BoundedOutput,
+    leader_record: &Path,
+    descendant_record: &Path,
+    private_root_record: &Path,
+    label: &str,
+) -> Result<(), String> {
+    let leader = read_pid_file(leader_record, &format!("ESLint {label} leader"))?;
+    let descendant = read_pid_file(descendant_record, &format!("ESLint {label} descendant"))?;
+    let private_root = PathBuf::from(
+        std::fs::read_to_string(private_root_record)
+            .map_err(|error| format!("read ESLint {label} private root: {error}"))?
+            .trim(),
+    );
+    let leader_alive = process_survives(leader, Duration::from_secs(1))?;
+    let descendant_alive = process_survives(descendant, Duration::from_secs(1))?;
+    let group_alive = process_group_survives(leader, Duration::from_secs(1))?;
+    if leader_alive || descendant_alive || group_alive {
+        let _ = signal_process_group(leader, "KILL");
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || leader_alive
+        || descendant_alive
+        || group_alive
+        || private_root.exists()
+        || !stderr.contains("native ESLint left same-group descendants after child exit")
+        || stderr.matches("velvet-glove-eslint:").count() != 1
+    {
+        return Err(format!(
+            "ESLint {label} orphan was not swept: status={:?}; leader={leader}:{leader_alive}; descendant={descendant}:{descendant_alive}; group={group_alive}; private_exists={}; stdout={:?}; stderr={stderr:?}",
+            output.status.code(),
+            private_root.exists(),
+            String::from_utf8_lossy(&output.stdout)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_eslint_adapter_normal_exit_cleanup(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    target: &Path,
+    project: &Path,
+    temporary: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let inherited_count = root.join("eslint-inherited-pipe-count");
+    let inherited_leader = root.join("eslint-inherited-pipe-leader");
+    let inherited_descendant = root.join("eslint-inherited-pipe-descendant");
+    let inherited_private = root.join("eslint-inherited-pipe-private-root");
+    let inherited_node = root.join("eslint-inherited-pipe-node");
+    write_executable_probe(
+        &inherited_node,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+count=0
+[ ! -f '{count}' ] || count=$(/bin/cat '{count}')
+count=$((count + 1))
+printf '%s\n' "$count" > '{count}'
+last=''
+for argument in "$@"; do
+  last=$argument
+  case $argument in --config=*) /usr/bin/dirname "${{argument#--config=}}" > '{private}' ;; esac
+done
+if [ "$count" -eq 1 ]; then
+  printf '[{{"filePath":"%s","messages":[],"suppressedMessages":[],"errorCount":0,"fatalErrorCount":0,"warningCount":0,"fixableErrorCount":0,"fixableWarningCount":0}}]\n' "$last"
+  exit 0
+fi
+(
+  trap '' HUP INT TERM
+  while :; do :; done
+) &
+printf '%s\n' "$!" > '{descendant}'
+printf '%s\n' "$$" > '{leader}'
+exit 0
+"#,
+            count = shell_probe_path(&inherited_count)?,
+            private = shell_probe_path(&inherited_private)?,
+            descendant = shell_probe_path(&inherited_descendant)?,
+            leader = shell_probe_path(&inherited_leader)?,
+        ),
+    )?;
+    let inherited_output = match run_eslint_adapter_probe(
+        python,
+        adapter,
+        &inherited_node,
+        fake_cli,
+        "fix",
+        &[],
+        &[target],
+        project,
+        temporary,
+        timeout.min(Duration::from_secs(7)),
+        &root.join("eslint-inherited-pipe-evidence"),
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            if let Ok(leader) = read_pid_file(&inherited_leader, "ESLint inherited-pipe leader") {
+                let _ = signal_process_group(leader, "KILL");
+            }
+            return Err(error);
+        }
+    };
+    assert_eslint_orphan_swept(
+        &inherited_output,
+        &inherited_leader,
+        &inherited_descendant,
+        &inherited_private,
+        "inherited-pipe",
+    )?;
+
+    let closed_leader = root.join("eslint-closed-stdio-leader");
+    let closed_descendant = root.join("eslint-closed-stdio-descendant");
+    let closed_private = root.join("eslint-closed-stdio-private-root");
+    let closed_node = root.join("eslint-closed-stdio-node");
+    write_executable_probe(
+        &closed_node,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+for argument in "$@"; do
+  case $argument in --config=*) /usr/bin/dirname "${{argument#--config=}}" > '{private}' ;; esac
+done
+(
+  exec </dev/null >/dev/null 2>/dev/null
+  trap '' HUP INT TERM
+  while :; do :; done
+) &
+printf '%s\n' "$!" > '{descendant}'
+printf '%s\n' "$$" > '{leader}'
+exec >/dev/null 2>/dev/null
+exit 0
+"#,
+            private = shell_probe_path(&closed_private)?,
+            descendant = shell_probe_path(&closed_descendant)?,
+            leader = shell_probe_path(&closed_leader)?,
+        ),
+    )?;
+    let closed_output = match run_eslint_adapter_probe(
+        python,
+        adapter,
+        &closed_node,
+        fake_cli,
+        "verify",
+        &[],
+        &[target],
+        project,
+        temporary,
+        timeout.min(Duration::from_secs(7)),
+        &root.join("eslint-closed-stdio-evidence"),
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            if let Ok(leader) = read_pid_file(&closed_leader, "ESLint closed-stdio leader") {
+                let _ = signal_process_group(leader, "KILL");
+            }
+            return Err(error);
+        }
+    };
+    assert_eslint_orphan_swept(
+        &closed_output,
+        &closed_leader,
+        &closed_descendant,
+        &closed_private,
+        "closed-stdio",
+    )?;
+
+    let output_anchor = "OUTPUT_LIMIT = 16 * 1024 * 1024\n";
+    let cleanup_anchor = concat!(
+        "            if process_group_exists():\n",
+        "                failures.append(\"native child process group survived SIGKILL\")\n",
+    );
+    if adapter.matches(output_anchor).count() != 1 || adapter.matches(cleanup_anchor).count() != 1 {
+        return Err("ESLint output/cleanup composition probe lost its exact anchors".to_owned());
+    }
+    let output_adapter = adapter
+        .replacen(output_anchor, "OUTPUT_LIMIT = 1024\n", 1)
+        .replacen(
+            cleanup_anchor,
+            concat!(
+                "            if True:\n",
+                "                failures.append(\"native child process group survived SIGKILL\")\n",
+            ),
+            1,
+        );
+    let output_count = root.join("eslint-output-cap-count");
+    let output_leader = root.join("eslint-output-cap-leader");
+    let output_node = root.join("eslint-output-cap-node");
+    write_executable_probe(
+        &output_node,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+count=0
+[ ! -f '{count}' ] || count=$(/bin/cat '{count}')
+count=$((count + 1))
+printf '%s\n' "$count" > '{count}'
+last=''
+for argument in "$@"; do last=$argument; done
+if [ "$count" -eq 1 ]; then
+  printf '[{{"filePath":"%s","messages":[],"suppressedMessages":[],"errorCount":0,"fatalErrorCount":0,"warningCount":0,"fixableErrorCount":0,"fixableWarningCount":0}}]\n' "$last"
+  exit 0
+fi
+printf '%s\n' "$$" > '{leader}'
+exec /usr/bin/yes eslint-current-output
+"#,
+            count = shell_probe_path(&output_count)?,
+            leader = shell_probe_path(&output_leader)?,
+        ),
+    )?;
+    let output = run_eslint_adapter_probe(
+        python,
+        &output_adapter,
+        &output_node,
+        fake_cli,
+        "fix",
+        &[],
+        &[target],
+        project,
+        temporary,
+        timeout.min(Duration::from_secs(7)),
+        &root.join("eslint-output-cap-evidence"),
+    )?;
+    let output_child = read_pid_file(&output_leader, "ESLint output-cap leader")?;
+    let output_child_alive = process_survives(output_child, Duration::from_secs(1))?;
+    let output_group_alive = process_group_survives(output_child, Duration::from_secs(1))?;
+    if output_child_alive || output_group_alive {
+        let _ = signal_process_group(output_child, "KILL");
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || output_child_alive
+        || output_group_alive
+        || !stderr.contains("combined output exceeded 1024 bytes")
+        || !stderr.contains("native child process group survived SIGKILL")
+        || stderr.contains(&target.display().to_string())
+        || stderr.matches("velvet-glove-eslint:").count() != 1
+    {
+        return Err(format!(
+            "ESLint output-cap cleanup did not compose or emitted stale JSON: status={:?}; child={output_child}:{output_child_alive}; group={output_group_alive}; stdout_bytes={}; stderr={stderr:?}",
+            output.status.code(),
+            output.stdout.len()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
