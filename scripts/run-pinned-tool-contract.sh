@@ -71,6 +71,7 @@ run_home=$(mktemp -d "/private/tmp/velvet-glove-pinned.XXXXXX")
 rust_extract_dir=
 clippy_extract_dir=
 prettier_extract_dir=
+contextlint_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
 cleanup() {
@@ -85,6 +86,9 @@ cleanup() {
   esac
   case $prettier_extract_dir in
     "$state_dir"/prettier-extract.*) rm -rf -- "$prettier_extract_dir" ;;
+  esac
+  case $contextlint_extract_dir in
+    "$state_dir"/contextlint-extract.*) rm -rf -- "$contextlint_extract_dir" ;;
   esac
   case $ruby_extract_dir in
     "$state_dir"/ruby-extract.*) rm -rf -- "$ruby_extract_dir" ;;
@@ -576,6 +580,150 @@ if needs_group prettier; then
   fi
   if [[ $(env -i "${provisioning_env[@]}" "$prettier_node" "$prettier_cli" --version) != "3.9.6" ]]; then
     echo "error: controlled Prettier CLI failed its exact version probe" >&2
+    exit 1
+  fi
+fi
+
+contextlint_root="$state_dir/contextlint-environment-node-24.19.0-contextlint-1.1.1"
+if needs_group contextlint; then
+  contextlint_node_archive=$(fetch_component_archive contextlint-node)
+  contextlint_node_identity=$(component_integrity_json contextlint-node)
+  contextlint_npm_identity=$(component_integrity_json contextlint-npm)
+  contextlint_package_json="$provisioning_dir/contextlint/package.json"
+  contextlint_package_lock="$provisioning_dir/contextlint/package-lock.json"
+  contextlint_npm_global_config="$run_home/npm-globalconfig"
+  : >"$contextlint_npm_global_config"
+  read -r contextlint_package_sha256 _ < <(/usr/bin/shasum -a 256 "$contextlint_package_json")
+  read -r contextlint_lock_sha256 _ < <(/usr/bin/shasum -a 256 "$contextlint_package_lock")
+  contextlint_cli_integrity='sha512-QCyjqmdaoanH9L8AduX2jH7vRm2yryHpxroLai0PHHP2lijBTG96UEICCuSIHbkoQ4FXulrokQst5+eTf34v9g=='
+  contextlint_core_integrity='sha512-ui2ymL90ZlV260NZD8pgki6fwCUM1bX2wj1LbDy5H4u7w8JyTvxIBORxzhWlklDUmsXf1wVxIZXdbvuRYRsqfQ=='
+  if ! "$jq_bin" -e \
+    --arg cliIntegrity "$contextlint_cli_integrity" \
+    --arg coreIntegrity "$contextlint_core_integrity" '
+      .lockfileVersion == 3
+      and .packages[""].engines.node == "24.19.0"
+      and .packages[""].dependencies == {
+        "@contextlint/cli": "1.1.1",
+        "@contextlint/core": "1.1.1"
+      }
+      and .packages["node_modules/@contextlint/cli"].version == "1.1.1"
+      and .packages["node_modules/@contextlint/cli"].integrity == $cliIntegrity
+      and .packages["node_modules/@contextlint/core"].version == "1.1.1"
+      and .packages["node_modules/@contextlint/core"].integrity == $coreIntegrity
+    ' "$contextlint_package_lock" >/dev/null; then
+    echo "error: committed Contextlint npm lock does not bind the exact CLI/core 1.1.1 graph" >&2
+    exit 1
+  fi
+  contextlint_identity=$("$jq_bin" -cn \
+    --argjson node "$contextlint_node_identity" \
+    --argjson npm "$contextlint_npm_identity" \
+    --arg packageSha256 "$contextlint_package_sha256" \
+    --arg packageLockSha256 "$contextlint_lock_sha256" \
+    --arg cliIntegrity "$contextlint_cli_integrity" \
+    --arg coreIntegrity "$contextlint_core_integrity" \
+    '{node: $node, npm: $npm, contextlint: {version: "1.1.1", cliVersion: "1.1.1", coreVersion: "1.1.1", cliIntegrity: $cliIntegrity, coreIntegrity: $coreIntegrity, packageSha256: $packageSha256, packageLockSha256: $packageLockSha256}}')
+  if [[ -e $contextlint_root && ! -d $contextlint_root ]]; then
+    echo "error: controlled Contextlint environment root is not a directory: $contextlint_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $contextlint_root ]]; then
+    echo "==> Installing the checksum-verified Node 24.19.0 and npm integrity-locked Contextlint 1.1.1 closure"
+    contextlint_extract_dir=$(mktemp -d "$state_dir/contextlint-extract.XXXXXX")
+    contextlint_install_root="$contextlint_extract_dir/install"
+    mkdir -p "$contextlint_install_root/package"
+    /usr/bin/tar -xf "$contextlint_node_archive" -C "$contextlint_extract_dir"
+    contextlint_archive_root=$(printf '%s\n' "$contextlint_node_identity" | \
+      "$jq_bin" -r '.integrity.archiveRoot')
+    mv "$contextlint_extract_dir/$contextlint_archive_root" "$contextlint_install_root/node"
+    cp "$contextlint_package_json" "$contextlint_install_root/package/package.json"
+    cp "$contextlint_package_lock" "$contextlint_install_root/package/package-lock.json"
+    env -i "${provisioning_env[@]}" \
+      "NPM_CONFIG_USERCONFIG=/dev/null" \
+      "NPM_CONFIG_GLOBALCONFIG=$contextlint_npm_global_config" \
+      "NPM_CONFIG_CACHE=$state_dir/npm-cache/contextlint-1.1.1" \
+      "$contextlint_install_root/node/bin/node" \
+      "$contextlint_install_root/node/lib/node_modules/npm/bin/npm-cli.js" \
+      ci --ignore-scripts --no-audit --no-fund --prefix "$contextlint_install_root/package"
+    read -r observed_contextlint_package_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$contextlint_install_root/package/package.json"
+    )
+    read -r observed_contextlint_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$contextlint_install_root/package/package-lock.json"
+    )
+    if [[ $observed_contextlint_package_sha256 != "$contextlint_package_sha256" || \
+      $observed_contextlint_lock_sha256 != "$contextlint_lock_sha256" ]]; then
+      echo "error: npm ci changed the exact Contextlint package manifest or lock" >&2
+      exit 1
+    fi
+    printf '%s\n' "$contextlint_identity" >"$contextlint_install_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$contextlint_install_root/node" contextlint-node
+    mv "$contextlint_install_root" "$contextlint_root"
+    rm -rf -- "$contextlint_extract_dir"
+    contextlint_extract_dir=
+  fi
+  contextlint_node="$contextlint_root/node/bin/node"
+  contextlint_npm_cli="$contextlint_root/node/lib/node_modules/npm/bin/npm-cli.js"
+  contextlint_cli="$contextlint_root/package/node_modules/@contextlint/cli/dist/index.js"
+  contextlint_core_manifest="$contextlint_root/package/node_modules/@contextlint/core/package.json"
+  if [[ ! -x $contextlint_node || ! -f $contextlint_npm_cli || ! -f $contextlint_cli || \
+    ! -f $contextlint_core_manifest ]]; then
+    echo "error: controlled Contextlint environment is incomplete: $contextlint_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $contextlint_root/.velvet-glove-artifacts.json ]] || \
+    [[ $(<"$contextlint_root/.velvet-glove-artifacts.json") != "$contextlint_identity" ]]; then
+    echo "error: controlled Contextlint environment does not match the declared Node archive and npm lock: $contextlint_root" >&2
+    exit 1
+  fi
+  read -r observed_contextlint_package_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$contextlint_root/package/package.json"
+  )
+  read -r observed_contextlint_lock_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$contextlint_root/package/package-lock.json"
+  )
+  if [[ $observed_contextlint_package_sha256 != "$contextlint_package_sha256" || \
+    $observed_contextlint_lock_sha256 != "$contextlint_lock_sha256" ]]; then
+    echo "error: controlled Contextlint environment manifest or lock digest drifted" >&2
+    exit 1
+  fi
+  if [[ $(readlink "$contextlint_root/package/node_modules/.bin/contextlint") != \
+    "../@contextlint/cli/dist/index.js" ]]; then
+    echo "error: controlled Contextlint npm bin link escapes the declared CLI package" >&2
+    exit 1
+  fi
+  if ! "$jq_bin" -e '
+      .name == "@contextlint/cli"
+      and .version == "1.1.1"
+      and .type == "module"
+      and .bin == {contextlint: "dist/index.js"}
+      and .dependencies["@contextlint/core"] == "1.1.1"
+    ' "$contextlint_root/package/node_modules/@contextlint/cli/package.json" >/dev/null || \
+    ! "$jq_bin" -e '
+      .name == "@contextlint/core"
+      and .version == "1.1.1"
+      and .type == "module"
+    ' "$contextlint_core_manifest" >/dev/null; then
+    echo "error: controlled Contextlint installed package pair drifted from exact 1.1.1" >&2
+    exit 1
+  fi
+  env -i "${provisioning_env[@]}" \
+    "$contextlint_node" "$contextlint_npm_cli" ls --all --prefix "$contextlint_root/package" >/dev/null
+  verify_macho_closure "$contextlint_root/node" contextlint-node
+  if [[ $(env -i "${provisioning_env[@]}" "$contextlint_node" --version) != "v24.19.0" ]]; then
+    echo "error: controlled Contextlint Node runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$contextlint_node" "$contextlint_npm_cli" --version) != "11.17.0" ]]; then
+    echo "error: controlled Contextlint npm runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$contextlint_node" -p \
+    'JSON.parse(require("node:fs").readFileSync(process.argv[1])).version' \
+    "$contextlint_root/package/node_modules/@contextlint/cli/package.json") != "1.1.1" ]] || \
+    [[ $(env -i "${provisioning_env[@]}" "$contextlint_node" -p \
+    'JSON.parse(require("node:fs").readFileSync(process.argv[1])).version' \
+    "$contextlint_core_manifest") != "1.1.1" ]]; then
+    echo "error: controlled Contextlint CLI/core pair failed its exact version probe" >&2
     exit 1
   fi
 fi
