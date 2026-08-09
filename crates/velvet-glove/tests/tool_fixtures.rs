@@ -55,6 +55,33 @@ const GITLEAKS_CONFIG_ENV: &str = "GITLEAKS_CONFIG";
 const GITLEAKS_CONFIG_TOML_ENV: &str = "GITLEAKS_CONFIG_TOML";
 const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this";
 const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
+const PRETTIER_POISON_ENV_VALUE: &str = "velvet-glove-prettier-adapter-must-clear-this";
+const PRETTIER_CHILD_PATH: &str = "/usr/bin:/bin";
+const PRETTIER_SCRUBBED_ENV: &[&str] = &[
+    DEBUG_ENV,
+    "NODE_DEBUG",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_NO_WARNINGS",
+    "NODE_OPTIONS",
+    NODE_PATH_ENV,
+    "NODE_PENDING_DEPRECATION",
+    "NODE_REPL_HISTORY",
+    "NODE_V8_COVERAGE",
+    "NODE_VELVET_GLOVE_POISON",
+    "PRETTIER_DEBUG",
+    "PRETTIER_EXPERIMENTAL_CLI",
+    "PRETTIER_PERF_REPEAT",
+    "PRETTIER_VELVET_GLOVE_POISON",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "LD_VELVET_GLOVE_POISON",
+];
 const BUF_POISON_ENV_VALUE: &str = "velvet-glove-buf-adapter-must-clear-this";
 const GOFMT_POISON_ENV_VALUE: &str = "velvet-glove-gofmt-adapter-must-clear-this";
 const GOFMT_CHILD_PATH: &str = "/usr/bin:/bin";
@@ -271,6 +298,15 @@ enum TracePlan {
         marker: &'static str,
         mode_arguments: &'static [(&'static str, &'static [&'static [&'static str]])],
     },
+    PairedNodeModeFilesMarker {
+        node_program_index: usize,
+        tool_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        leading: &'static [&'static str],
+        mode_arguments: &'static [(&'static str, &'static [&'static str])],
+        before_files: &'static [&'static str],
+    },
     PreflightThenNestedModeWorkspaceMarker {
         nested_program_index: usize,
         adapter_prefix: &'static [&'static str],
@@ -378,6 +414,28 @@ const GOFMT_TRACE_PLAN: TracePlan = TracePlan::PreflightThenNestedModeFilesMarke
     adapter_prefix: &["-I", "-c"],
     marker: GOFMT_FILES_MARKER,
     mode_arguments: GOFMT_MODE_ARGUMENTS,
+};
+
+const PRETTIER_FILES_MARKER: &str = "__VELVET_GLOVE_PRETTIER_FILES__";
+const PRETTIER_MODE_ARGUMENTS: &[(&str, &[&str])] = &[
+    ("format", &["--write", "--log-level=error"]),
+    ("verify", &["--list-different", "--log-level=log"]),
+];
+const PRETTIER_ARGUMENTS_BEFORE_FILES: &[&str] = &[
+    "--no-editorconfig",
+    "--ignore-path=/dev/null",
+    "--with-node-modules",
+    "--no-color",
+    "--",
+];
+const PRETTIER_TRACE_PLAN: TracePlan = TracePlan::PairedNodeModeFilesMarker {
+    node_program_index: 3,
+    tool_program_index: 4,
+    adapter_prefix: &["-I", "-c"],
+    marker: PRETTIER_FILES_MARKER,
+    leading: &["--config=/dev/null"],
+    mode_arguments: PRETTIER_MODE_ARGUMENTS,
+    before_files: PRETTIER_ARGUMENTS_BEFORE_FILES,
 };
 
 const BUF_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_BUF_WORKSPACE__";
@@ -827,6 +885,61 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["::error title=format"],
             trace_plan: BIOME_TRACE_PLAN,
         },
+        ("prettier", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: PRETTIER_TRACE_PLAN,
+        },
+        ("prettier", "unformatted") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["prettier: formatting differs:", "example.js"],
+            diagnostic_excludes: &[],
+            trace_plan: PRETTIER_TRACE_PLAN,
+        },
+        ("prettier", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js", "src/selected-clean.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["prettier: formatting differs:", "example.js"],
+            diagnostic_excludes: &["unselected-sentinel.js"],
+            trace_plan: PRETTIER_TRACE_PLAN,
+        },
+        ("prettier", "config-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 2,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &["--print-width=wide"],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "Invalid --print-width value",
+                "native Prettier exited 1 without valid completion evidence",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: PRETTIER_TRACE_PLAN,
+        },
         ("buf-format", "clean") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -1083,8 +1196,8 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             trace_plan: GOFMT_TRACE_PLAN,
         },
         (
-            "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
-            | "cargo-clippy" | "go-fmt",
+            "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format"
+            | "cargo-fmt" | "cargo-clippy" | "go-fmt" | "prettier",
             other,
         ) => {
             return Err(format!(
@@ -1179,6 +1292,74 @@ fn mutating_tool_contract_case(
             remedy_writes: WriteBehavior::TargetFiles,
             remedy_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
+                exit_code: 2,
+                trace_exit_codes: &[1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("prettier", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("prettier", "unformatted") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.js"],
+        },
+        ("prettier", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js", "src/selected-clean.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.js", "src/selected-clean.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.js"],
+        },
+        ("prettier", "config-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.js"],
                 exit_code: 2,
                 trace_exit_codes: &[1],
             }],
@@ -1485,7 +1666,10 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
-        ("biome" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "go-fmt", other) => {
+        (
+            "biome" | "prettier" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "go-fmt",
+            other,
+        ) => {
             return Err(format!(
                 "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
@@ -3364,6 +3548,19 @@ fn cargo_fmt_failure_goldens_embed_the_evaluated_adapter() {
 }
 
 #[test]
+#[ignore = "evaluated Prettier adapter adversarial contract; requires controlled Python"]
+fn prettier_evaluated_adapter_adversarial_contract() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("prettier")
+        .unwrap_or_else(|| panic!("builtin catalog has no Prettier spec"));
+    verify_prettier_adapter_adversarial_contract(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     let options = HarnessOptions::from_environment().unwrap_or_else(|error| panic!("{error}"));
@@ -3398,6 +3595,11 @@ fn run_all_tool_fixtures() {
         verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("cargo-fmt adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "prettier") {
+        verify_prettier_adapter_adversarial_contract(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("prettier adapter adversarial contract probe: pass");
     }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -5551,6 +5753,121 @@ fn resolve_trace_invocations(
                 .collect();
             Ok((trace_program, traces))
         }
+        TracePlan::PairedNodeModeFilesMarker {
+            node_program_index,
+            tool_program_index,
+            adapter_prefix,
+            marker,
+            leading,
+            mode_arguments,
+            before_files,
+        } => {
+            if expected_exit_codes.len() != 1 {
+                return Err(format!(
+                    "paired-Node mode-and-files adapter trace for {outer_program} must declare exactly one exit code, got {expected_exit_codes:?}"
+                ));
+            }
+            if node_program_index != adapter_prefix.len() + 1
+                || tool_program_index != node_program_index + 1
+            {
+                return Err(format!(
+                    "paired-Node mode-and-files adapter trace plan for {outer_program} must place exactly one script before consecutive Node and tool arguments"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "paired-Node mode-and-files adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "paired-Node mode-and-files adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(node_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "paired-Node mode-and-files adapter {outer_program} has no Node executable at argument {node_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let tool_program = outer_arguments
+                .get(tool_program_index)
+                .filter(|program| Path::new(program).is_absolute())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "paired-Node mode-and-files adapter {outer_program} requires an absolute managed tool CLI at argument {tool_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let mode_index = tool_program_index + 1;
+            let mode = outer_arguments.get(mode_index).ok_or_else(|| {
+                format!(
+                    "paired-Node mode-and-files adapter {outer_program} has no phase mode: {outer_arguments:?}"
+                )
+            })?;
+            let mode_arguments = mode_arguments
+                .iter()
+                .find_map(|(name, arguments)| (*name == mode).then_some(*arguments))
+                .ok_or_else(|| {
+                    format!(
+                        "paired-Node mode-and-files adapter {outer_program} has unsupported phase mode {mode:?}"
+                    )
+                })?;
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "paired-Node mode-and-files adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= mode_index {
+                return Err(format!(
+                    "paired-Node mode-and-files adapter {outer_program} places {marker:?} before phase mode: {outer_arguments:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let rendered_files = &outer_arguments[(*marker_index + 1)..];
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "paired-Node mode-and-files adapter {outer_program} file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let arguments = std::iter::once(tool_program)
+                .chain(leading.iter().map(|argument| (*argument).to_owned()))
+                .chain(mode_arguments.iter().map(|argument| (*argument).to_owned()))
+                .chain(
+                    outer_arguments[(mode_index + 1)..*marker_index]
+                        .iter()
+                        .cloned(),
+                )
+                .chain(before_files.iter().map(|argument| (*argument).to_owned()))
+                .chain(expected_files)
+                .collect();
+            Ok((
+                trace_program.clone(),
+                vec![ResolvedTraceInvocation {
+                    program: trace_program,
+                    targets: targets.to_vec(),
+                    arguments,
+                    exit_code: expected_exit_codes[0],
+                }],
+            ))
+        }
         TracePlan::PreflightThenNestedModeWorkspaceMarker {
             nested_program_index,
             adapter_prefix,
@@ -6723,6 +7040,27 @@ impl ToolTraceHarness {
                 command.env(name, BIOME_POISON_ENV_VALUE);
             }
         }
+        if self.programs.contains_key("node") {
+            for name in [
+                "LANG",
+                "LC_ALL",
+                "TZ",
+                "TERM",
+                CI_ENV,
+                "NO_COLOR",
+                "CLICOLOR",
+                "FORCE_COLOR",
+            ] {
+                command.env(name, PRETTIER_POISON_ENV_VALUE);
+            }
+            for name in PRETTIER_SCRUBBED_ENV {
+                if name.starts_with("DYLD_") || name.starts_with("LD_") {
+                    command.env_remove(name);
+                } else {
+                    command.env(name, PRETTIER_POISON_ENV_VALUE);
+                }
+            }
+        }
         if self.programs.contains_key("buf") {
             let root = self.trace_root.parent().ok_or_else(|| {
                 format!(
@@ -6925,6 +7263,15 @@ fn verify_tool_trace_invocations(
                 .as_object_mut()
                 .expect("trace environment is a JSON object");
             for (name, value) in scrubbed {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
+        if trace_program == "node" {
+            let controlled = verify_prettier_trace_environment(&record)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
                 environment.insert(name, JsonValue::String(value));
             }
         }
@@ -7148,6 +7495,33 @@ fn verify_betterleaks_trace_environment(record: &Path) -> Result<BTreeMap<String
         if !value.is_empty() {
             return Err(format!(
                 "Betterleaks trace must clear inherited configuration, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    Ok(environment)
+}
+
+fn verify_prettier_trace_environment(record: &Path) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    for (name, expected) in [
+        (PATH_ENV, PRETTIER_CHILD_PATH),
+        (CI_ENV, "1"),
+        ("TERM", "dumb"),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "Prettier trace requires {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in PRETTIER_SCRUBBED_ENV {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "Prettier trace must clear inherited Node, Prettier, and loader state; got {name}={value:?}"
             ));
         }
         environment.insert((*name).to_owned(), value);
@@ -9406,15 +9780,43 @@ fn write_pkl_config(
             .map(|argument| format!("\"{}\"", pkl_string(argument)))
             .collect::<Vec<_>>()
             .join("; ");
-        format!(
-            r#"(Builtins.{property}) {{
-    phases {{
-      ["{phase_id}"] {{
+        let phase_overrides = if tool == "prettier" {
+            format!(
+                r#"      ["format"] {{
         extraArgs = new Listing<String> {{ {extra_args} }}
       }}
+      ["verify"] {{
+        extraArgs = new Listing<String> {{ {extra_args} }}
+      }}"#,
+            )
+        } else {
+            format!(
+                r#"      ["{phase_id}"] {{
+        extraArgs = new Listing<String> {{ {extra_args} }}
+      }}"#,
+                phase_id = contract.phase_id,
+            )
+        };
+        let executable_override = if tool == "prettier" {
+            let requested = resolve_program("prettier")
+                .ok_or_else(|| "Prettier fixture could not resolve its managed CLI".to_owned())?;
+            let executable = requested.canonicalize().map_err(|error| {
+                format!("canonicalize managed Prettier CLI {requested:?}: {error}")
+            })?;
+            format!(
+                "    executable = \"{}\"\n",
+                pkl_string(&executable.to_string_lossy())
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            r#"(Builtins.{property}) {{
+{executable_override}
+    phases {{
+{phase_overrides}
     }}
   }}"#,
-            phase_id = contract.phase_id,
         )
     } else {
         format!("Builtins.{property}")
@@ -11133,6 +11535,649 @@ fn read_pid_file(path: &Path, label: &str) -> Result<u32, String> {
         .trim()
         .parse::<u32>()
         .map_err(|error| format!("parse {label} PID {value:?}: {error}"))
+}
+
+fn verify_prettier_adapter_adversarial_contract(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    let phase = spec
+        .phases
+        .get("verify")
+        .ok_or_else(|| "Prettier adversarial probe lacks a verify phase".to_owned())?;
+    let [
+        ArgvElement::Literal(isolated),
+        ArgvElement::Literal(command),
+        ArgvElement::Literal(adapter),
+        ArgvElement::Literal(node_name),
+        ArgvElement::Token(ArgToken::ToolExecutable),
+        ArgvElement::Literal(mode),
+        ArgvElement::Token(ArgToken::ExtraArgs),
+        ArgvElement::Literal(marker),
+        ArgvElement::Token(ArgToken::Files),
+    ] = phase.argv.as_slice()
+    else {
+        return Err(
+            "Prettier adversarial probe could not extract the evaluated adapter".to_owned(),
+        );
+    };
+    if isolated != "-I"
+        || command != "-c"
+        || node_name != "node"
+        || mode != "verify"
+        || marker != PRETTIER_FILES_MARKER
+    {
+        return Err(format!(
+            "Prettier adversarial probe found unexpected evaluated argv shape: {:?}",
+            phase.argv
+        ));
+    }
+    let python_program = phase
+        .program
+        .as_deref()
+        .ok_or_else(|| "Prettier adversarial probe lacks an adapter program".to_owned())?;
+    let python = resolve_program(python_program)
+        .ok_or_else(|| format!("Prettier adversarial probe cannot resolve {python_program:?}"))?
+        .canonicalize()
+        .map_err(|error| format!("canonicalize Prettier probe Python: {error}"))?;
+
+    let requested_root = unique_temp_dir("velvet-glove-prettier-adversarial");
+    std::fs::create_dir_all(&requested_root)
+        .map_err(|error| format!("create Prettier adversarial root {requested_root:?}: {error}"))?;
+    let root = requested_root
+        .canonicalize()
+        .map_err(|error| format!("canonicalize Prettier adversarial root: {error}"))?;
+    let result = (|| {
+        let target = root.join("example.js");
+        std::fs::write(&target, "const value = {answer: 42};\n")
+            .map_err(|error| format!("write Prettier adversarial target: {error}"))?;
+        let fake_cli = root.join("prettier.cjs");
+        std::fs::write(
+            &fake_cli,
+            "throw new Error('must be launched by the paired Node');\n",
+        )
+        .map_err(|error| format!("write fake Prettier CLI: {error}"))?;
+        let mut cli_permissions = std::fs::metadata(&fake_cli)
+            .map_err(|error| format!("inspect fake Prettier CLI: {error}"))?
+            .permissions();
+        cli_permissions.set_mode(0o600);
+        std::fs::set_permissions(&fake_cli, cli_permissions)
+            .map_err(|error| format!("make fake Prettier CLI non-executable: {error}"))?;
+
+        let source_config = root.join("safe-config.json");
+        std::fs::write(&source_config, "{\"singleQuote\":true}\n")
+            .map_err(|error| format!("write safe Prettier config: {error}"))?;
+        let captured_argv = root.join("captured-argv");
+        let captured_config = root.join("captured-config");
+        let captured_config_path = root.join("captured-config-path");
+        let captured_mode = root.join("captured-config-mode");
+        let captured_environment = root.join("captured-environment");
+        let node_marker = root.join("node-ran");
+        let success_node = root.join("paired-node-success");
+        let success_source = format!(
+            r#"#!/bin/sh
+set -eu
+: > '{node_marker}'
+: > '{captured_argv}'
+for argument in "$@"; do
+  printf '%s\n' "$argument" >> '{captured_argv}'
+done
+[ "$1" = '{fake_cli}' ] || exit 91
+config=''
+for argument in "$@"; do
+  case "$argument" in --config=*) config=${{argument#--config=}} ;; esac
+done
+[ -n "$config" ] || exit 92
+printf '{{"plugins":["./executed.cjs"]}}\n' > '{source_config}'
+printf '%s\n' "$config" > '{captured_config_path}'
+/bin/cp "$config" '{captured_config}'
+/usr/bin/stat -f '%Lp' "$config" > '{captured_mode}'
+{{
+  printf 'PATH=%s\n' "${{PATH-}}"
+  printf 'LANG=%s\n' "${{LANG-}}"
+  printf 'LC_ALL=%s\n' "${{LC_ALL-}}"
+  printf 'TZ=%s\n' "${{TZ-}}"
+  printf 'TERM=%s\n' "${{TERM-}}"
+  printf 'CI=%s\n' "${{CI-}}"
+  printf 'NODE_OPTIONS=%s\n' "${{NODE_OPTIONS-}}"
+  printf 'NODE_V8_COVERAGE=%s\n' "${{NODE_V8_COVERAGE-}}"
+  printf 'PRETTIER_EXPERIMENTAL_CLI=%s\n' "${{PRETTIER_EXPERIMENTAL_CLI-}}"
+  printf 'PRETTIER_VELVET_GLOVE_POISON=%s\n' "${{PRETTIER_VELVET_GLOVE_POISON-}}"
+  printf 'DEBUG=%s\n' "${{DEBUG-}}"
+}} > '{captured_environment}'
+printf 'example.js\n'
+exit 1
+"#,
+            node_marker = shell_probe_path(&node_marker)?,
+            captured_argv = shell_probe_path(&captured_argv)?,
+            fake_cli = shell_probe_path(&fake_cli)?,
+            source_config = shell_probe_path(&source_config)?,
+            captured_config_path = shell_probe_path(&captured_config_path)?,
+            captured_config = shell_probe_path(&captured_config)?,
+            captured_mode = shell_probe_path(&captured_mode)?,
+            captured_environment = shell_probe_path(&captured_environment)?,
+        );
+        write_executable_probe(&success_node, &success_source)?;
+        let output = run_prettier_adapter_probe(
+            &python,
+            adapter,
+            &success_node,
+            &fake_cli,
+            "verify",
+            &["--config=safe-config.json", "--tab-width=4"],
+            &[&target],
+            &root,
+            timeout,
+            "safe-config-swap",
+        )?;
+        if output.status.code() != Some(1)
+            || !output.stdout.is_empty()
+            || String::from_utf8_lossy(&output.stderr)
+                != format!("prettier: formatting differs: {}\n", target.display())
+        {
+            return Err(format!(
+                "Prettier safe-config evidence mismatch: status={:?} stdout={:?} stderr={:?}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        if std::fs::read_to_string(&source_config)
+            .map_err(|error| format!("read swapped source config: {error}"))?
+            != "{\"plugins\":[\"./executed.cjs\"]}\n"
+        {
+            return Err("fake Node did not swap the original config after validation".to_owned());
+        }
+        if std::fs::read_to_string(&captured_config)
+            .map_err(|error| format!("read private config capture: {error}"))?
+            != "{\"singleQuote\":true}\n"
+        {
+            return Err(
+                "Prettier child did not receive the validated data-only config copy".to_owned(),
+            );
+        }
+        if std::fs::read_to_string(&captured_mode)
+            .map_err(|error| format!("read private config mode: {error}"))?
+            .trim()
+            != "600"
+        {
+            return Err("Prettier private config copy was not mode 0600".to_owned());
+        }
+        let private_config = PathBuf::from(
+            std::fs::read_to_string(&captured_config_path)
+                .map_err(|error| format!("read private config path: {error}"))?
+                .trim(),
+        );
+        if private_config.starts_with(&root)
+            || private_config.exists()
+            || private_config.parent().is_some_and(Path::exists)
+        {
+            return Err(format!(
+                "Prettier private config was inside the project or not cleaned: {private_config:?}"
+            ));
+        }
+        let expected_argv = vec![
+            fake_cli
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            format!("--config={}", private_config.display()),
+            "--list-different".to_owned(),
+            "--log-level=log".to_owned(),
+            "--tab-width=4".to_owned(),
+            "--no-editorconfig".to_owned(),
+            "--ignore-path=/dev/null".to_owned(),
+            "--with-node-modules".to_owned(),
+            "--no-color".to_owned(),
+            "--".to_owned(),
+            target
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        let actual_argv = std::fs::read_to_string(&captured_argv)
+            .map_err(|error| format!("read paired Node argv: {error}"))?
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if actual_argv != expected_argv {
+            return Err(format!(
+                "paired Node argv mismatch: expected {expected_argv:?}, got {actual_argv:?}"
+            ));
+        }
+        let expected_environment = concat!(
+            "PATH=/usr/bin:/bin\n",
+            "LANG=C\n",
+            "LC_ALL=C\n",
+            "TZ=UTC\n",
+            "TERM=dumb\n",
+            "CI=1\n",
+            "NODE_OPTIONS=\n",
+            "NODE_V8_COVERAGE=\n",
+            "PRETTIER_EXPERIMENTAL_CLI=\n",
+            "PRETTIER_VELVET_GLOVE_POISON=\n",
+            "DEBUG=\n",
+        );
+        let actual_environment = std::fs::read_to_string(&captured_environment)
+            .map_err(|error| format!("read Prettier child environment: {error}"))?;
+        if actual_environment != expected_environment {
+            return Err(format!(
+                "Prettier child environment mismatch: expected {expected_environment:?}, got {actual_environment:?}"
+            ));
+        }
+
+        let reject_marker = root.join("reject-node-ran");
+        let reject_node = root.join("paired-node-reject-marker");
+        write_executable_probe(
+            &reject_node,
+            &format!(
+                "#!/bin/sh\nset -eu\n: > '{}'\nexit 0\n",
+                shell_probe_path(&reject_marker)?
+            ),
+        )?;
+        for (label, arguments) in [
+            ("write-false", vec!["--write=false"]),
+            ("check-false", vec!["--check=false"]),
+            ("cache", vec!["--cache=true"]),
+            ("plugin", vec!["--plugin=./executed.cjs"]),
+            ("version", vec!["--version=true"]),
+            ("ignore-path", vec!["--ignore-path=.prettierignore"]),
+            ("cursor-offset", vec!["--cursor-offset=0"]),
+        ] {
+            let _ = std::fs::remove_file(&reject_marker);
+            let output = run_prettier_adapter_probe(
+                &python,
+                adapter,
+                &reject_node,
+                &fake_cli,
+                "verify",
+                &arguments,
+                &[&target],
+                &root,
+                timeout,
+                label,
+            )?;
+            if output.status.code() != Some(2)
+                || reject_marker.exists()
+                || !String::from_utf8_lossy(&output.stderr).contains("unsupported argument")
+            {
+                return Err(format!(
+                    "Prettier bypass {label:?} was not rejected before Node: status={:?} stderr={:?}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+
+        for (label, name, body, diagnostic) in [
+            (
+                "executable-config",
+                "prettier.config.cjs",
+                "module.exports = { plugins: ['./executed.cjs'] };\n",
+                "explicit config must be JSON",
+            ),
+            (
+                "plugin-config",
+                "plugin-config.json",
+                "{\"plugins\":[\"./executed.cjs\"]}\n",
+                "unsupported option 'plugins'",
+            ),
+            (
+                "override-config",
+                "override-config.json",
+                "{\"overrides\":[{\"files\":\"*.js\",\"options\":{}}]}\n",
+                "overrides are unsupported",
+            ),
+        ] {
+            let config = root.join(name);
+            std::fs::write(&config, body)
+                .map_err(|error| format!("write {label} probe config: {error}"))?;
+            let _ = std::fs::remove_file(&reject_marker);
+            let argument = format!("--config={name}");
+            let output = run_prettier_adapter_probe(
+                &python,
+                adapter,
+                &reject_node,
+                &fake_cli,
+                "verify",
+                &[argument.as_str()],
+                &[&target],
+                &root,
+                timeout,
+                label,
+            )?;
+            if output.status.code() != Some(2)
+                || reject_marker.exists()
+                || !String::from_utf8_lossy(&output.stderr).contains(diagnostic)
+            {
+                return Err(format!(
+                    "Prettier {label} was not rejected before Node: status={:?} stderr={:?}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+
+        let symlink_target = root.join("symlink.js");
+        std::os::unix::fs::symlink(&target, &symlink_target)
+            .map_err(|error| format!("create Prettier target symlink: {error}"))?;
+        let _ = std::fs::remove_file(&reject_marker);
+        let output = run_prettier_adapter_probe(
+            &python,
+            adapter,
+            &reject_node,
+            &fake_cli,
+            "verify",
+            &[],
+            &[&symlink_target],
+            &root,
+            timeout,
+            "symlink-target",
+        )?;
+        if output.status.code() != Some(2)
+            || reject_marker.exists()
+            || !String::from_utf8_lossy(&output.stderr).contains("traverses a symlink")
+        {
+            return Err("Prettier selected-path symlink was not rejected before Node".to_owned());
+        }
+        let hardlink_target = root.join("hardlink.js");
+        std::fs::hard_link(&target, &hardlink_target)
+            .map_err(|error| format!("create Prettier target hardlink: {error}"))?;
+        let _ = std::fs::remove_file(&reject_marker);
+        let output = run_prettier_adapter_probe(
+            &python,
+            adapter,
+            &reject_node,
+            &fake_cli,
+            "verify",
+            &[],
+            &[&target],
+            &root,
+            timeout,
+            "hardlink-target",
+        )?;
+        if output.status.code() != Some(2)
+            || reject_marker.exists()
+            || !String::from_utf8_lossy(&output.stderr).contains("unique regular file")
+        {
+            return Err("Prettier selected-path hardlink was not rejected before Node".to_owned());
+        }
+        std::fs::remove_file(&hardlink_target)
+            .map_err(|error| format!("remove Prettier target hardlink: {error}"))?;
+
+        std::fs::write(&source_config, "{\"singleQuote\":true}\n")
+            .map_err(|error| format!("restore safe Prettier config: {error}"))?;
+        let error_config_path = root.join("error-config-path");
+        let error_node = root.join("paired-node-error");
+        write_executable_probe(
+            &error_node,
+            &format!(
+                r#"#!/bin/sh
+set -eu
+for argument in "$@"; do
+  case "$argument" in --config=*) printf '%s\n' "${{argument#--config=}}" > '{}' ;; esac
+done
+printf 'native failure\n' >&2
+exit 2
+"#,
+                shell_probe_path(&error_config_path)?
+            ),
+        )?;
+        let output = run_prettier_adapter_probe(
+            &python,
+            adapter,
+            &error_node,
+            &fake_cli,
+            "verify",
+            &["--config=safe-config.json"],
+            &[&target],
+            &root,
+            timeout,
+            "private-config-error-cleanup",
+        )?;
+        let error_private_config = PathBuf::from(
+            std::fs::read_to_string(&error_config_path)
+                .map_err(|error| format!("read error private config path: {error}"))?
+                .trim(),
+        );
+        if output.status.code() != Some(2)
+            || error_private_config.exists()
+            || error_private_config.parent().is_some_and(Path::exists)
+            || !String::from_utf8_lossy(&output.stderr).contains("native failure")
+        {
+            return Err(format!(
+                "Prettier error path did not clean private config: status={:?} path={error_private_config:?} stderr={:?}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        verify_prettier_adapter_signal_cleanup(
+            &python,
+            adapter,
+            &fake_cli,
+            &source_config,
+            &target,
+            &root,
+            timeout,
+        )?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&root);
+    result
+}
+
+#[cfg(not(unix))]
+fn verify_prettier_adapter_adversarial_contract(
+    _spec: &ToolSpec,
+    _timeout: Duration,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn run_prettier_adapter_probe(
+    python: &Path,
+    adapter: &str,
+    node: &Path,
+    tool: &Path,
+    phase: &str,
+    extra_args: &[&str],
+    targets: &[&Path],
+    root: &Path,
+    timeout: Duration,
+    label: &str,
+) -> Result<BoundedOutput, String> {
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(node)
+        .arg(tool)
+        .arg(phase)
+        .args(extra_args)
+        .arg(PRETTIER_FILES_MARKER)
+        .args(targets)
+        .current_dir(root)
+        .env("NODE_OPTIONS", PRETTIER_POISON_ENV_VALUE)
+        .env("NODE_V8_COVERAGE", PRETTIER_POISON_ENV_VALUE)
+        .env("PRETTIER_EXPERIMENTAL_CLI", PRETTIER_POISON_ENV_VALUE)
+        .env("PRETTIER_VELVET_GLOVE_POISON", PRETTIER_POISON_ENV_VALUE)
+        .env(DEBUG_ENV, PRETTIER_POISON_ENV_VALUE);
+    run_with_timeout(
+        &mut command,
+        &[],
+        timeout.min(Duration::from_secs(10)),
+        &root.join(format!("capture-{label}")),
+    )
+    .map_err(|error| format!("run Prettier adapter probe {label}: {error}"))
+}
+
+#[cfg(unix)]
+fn write_executable_probe(path: &Path, source: &str) -> Result<(), String> {
+    std::fs::write(path, source).map_err(|error| format!("write probe {path:?}: {error}"))?;
+    let mut permissions = std::fs::metadata(path)
+        .map_err(|error| format!("inspect probe {path:?}: {error}"))?
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(path, permissions)
+        .map_err(|error| format!("make probe {path:?} executable: {error}"))
+}
+
+#[cfg(unix)]
+fn shell_probe_path(path: &Path) -> Result<String, String> {
+    let value = path.to_string_lossy();
+    if value.contains('\'') || value.contains('\n') || value.contains('\r') {
+        return Err(format!(
+            "probe path cannot be safely shell-quoted: {path:?}"
+        ));
+    }
+    Ok(value.into_owned())
+}
+
+#[cfg(unix)]
+fn verify_prettier_adapter_signal_cleanup(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    source_config: &Path,
+    target: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let private_config_record = root.join("signal-private-config");
+    let child_pid_record = root.join("signal-child-pid");
+    let descendant_pid_record = root.join("signal-descendant-pid");
+    let descendant_ready = root.join("signal-descendant-ready");
+    let signal_node = root.join("paired-node-signal");
+    let source = format!(
+        r#"#!/bin/sh
+set -eu
+trap 'exit 0' HUP INT TERM
+for argument in "$@"; do
+  case "$argument" in --config=*) printf '%s\n' "${{argument#--config=}}" > '{private_config_record}' ;; esac
+done
+(
+  trap '' HUP INT TERM
+  : > '{descendant_ready}'
+  while :; do :; done
+) &
+while [ ! -f '{descendant_ready}' ]; do :; done
+printf '%s\n' "$!" > '{descendant_pid_record}'
+printf '%s\n' "$$" > '{child_pid_record}'
+while :; do :; done
+"#,
+        private_config_record = shell_probe_path(&private_config_record)?,
+        descendant_ready = shell_probe_path(&descendant_ready)?,
+        descendant_pid_record = shell_probe_path(&descendant_pid_record)?,
+        child_pid_record = shell_probe_path(&child_pid_record)?,
+    );
+    write_executable_probe(&signal_node, &source)?;
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(&signal_node)
+        .arg(fake_cli)
+        .arg("verify")
+        .arg(format!(
+            "--config={}",
+            source_config.file_name().unwrap().to_string_lossy()
+        ))
+        .arg(PRETTIER_FILES_MARKER)
+        .arg(target)
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn Prettier signal-cleanup adapter: {error}"))?;
+    let outer_pid = outer.id();
+    let startup_timeout = timeout.min(Duration::from_secs(5));
+    let deadline = std::time::Instant::now() + startup_timeout;
+    while !(private_config_record.is_file()
+        && child_pid_record.is_file()
+        && descendant_pid_record.is_file())
+    {
+        if let Some(status) = outer
+            .try_wait()
+            .map_err(|error| format!("poll Prettier signal-cleanup adapter: {error}"))?
+        {
+            return Err(format!(
+                "Prettier signal-cleanup adapter exited {status:?} before becoming ready"
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(format!(
+                "Prettier signal-cleanup child did not become ready within {startup_timeout:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let parse_pid = |path: &Path, label: &str| -> Result<u32, String> {
+        std::fs::read_to_string(path)
+            .map_err(|error| format!("read Prettier {label} PID: {error}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|error| format!("parse Prettier {label} PID: {error}"))
+    };
+    let child_pid = parse_pid(&child_pid_record, "child")?;
+    let descendant_pid = parse_pid(&descendant_pid_record, "descendant")?;
+    let private_config = PathBuf::from(
+        std::fs::read_to_string(&private_config_record)
+            .map_err(|error| format!("read Prettier signal private config: {error}"))?
+            .trim(),
+    );
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process_group(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "send SIGTERM to Prettier adapter {outer_pid}: {term:?}"
+        ));
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(outer.wait_with_output());
+    });
+    let output = match receiver.recv_timeout(timeout.min(Duration::from_secs(5))) {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            let _ = signal_process_group(child_pid, "KILL");
+            return Err(format!("wait for signaled Prettier adapter: {error}"));
+        }
+        Err(error) => {
+            let _ = signal_process_group(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            return Err(format!("signaled Prettier adapter did not finish: {error}"));
+        }
+    };
+    let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+    let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+    let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+    if child_alive || descendant_alive || group_alive {
+        let _ = signal_process_group(child_pid, "KILL");
+        return Err(format!(
+            "Prettier signal cleanup leaked processes: child={child_alive} descendant={descendant_alive} group={group_alive}"
+        ));
+    }
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr) != "velvet-glove-prettier: received signal 15\n"
+        || private_config.exists()
+        || private_config.parent().is_some_and(Path::exists)
+    {
+        return Err(format!(
+            "Prettier signal cleanup mismatch: status={:?} stdout={:?} stderr={:?} private={private_config:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }
 
 fn verify_betterleaks_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {

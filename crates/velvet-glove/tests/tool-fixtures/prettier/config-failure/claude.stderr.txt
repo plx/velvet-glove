@@ -1,0 +1,485 @@
+error: Prettier: phase `format` failed; diagnostics: <workspace>/.velvet-glove/prettier-agent-hook/test-session_prettier-tool_prettier-tool-failure.txt
+Prettier failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: python -I -c import json
+import os
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+
+MARKER = "__VELVET_GLOVE_PRETTIER_FILES__"
+LIMIT = 16 * 1024 * 1024
+CONFIG_LIMIT = 1024 * 1024
+DEFAULT_CONFIG = "/dev/null"
+SAFE_CLI_OPTIONS = {
+    "--arrow-parens",
+    "--bracket-same-line",
+    "--bracket-spacing",
+    "--embedded-language-formatting",
+    "--end-of-line",
+    "--experimental-operator-position",
+    "--experimental-ternaries",
+    "--html-whitespace-sensitivity",
+    "--jsx-single-quote",
+    "--object-wrap",
+    "--parser",
+    "--print-width",
+    "--prose-wrap",
+    "--quote-props",
+    "--semi",
+    "--single-attribute-per-line",
+    "--single-quote",
+    "--tab-width",
+    "--trailing-comma",
+    "--use-tabs",
+    "--vue-indent-script-and-style",
+}
+SAFE_CONFIG_OPTIONS = {
+    "arrowParens",
+    "bracketSameLine",
+    "bracketSpacing",
+    "embeddedLanguageFormatting",
+    "endOfLine",
+    "experimentalOperatorPosition",
+    "experimentalTernaries",
+    "htmlWhitespaceSensitivity",
+    "jsxSingleQuote",
+    "objectWrap",
+    "parser",
+    "printWidth",
+    "proseWrap",
+    "quoteProps",
+    "semi",
+    "singleAttributePerLine",
+    "singleQuote",
+    "tabWidth",
+    "trailingComma",
+    "useTabs",
+    "vueIndentScriptAndStyle",
+}
+
+
+def fail(message):
+    print(f"velvet-glove-prettier: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+if len(sys.argv) < 6 or sys.argv[4:].count(MARKER) != 1:
+    fail("invalid adapter arguments")
+
+requested_node = sys.argv[1]
+requested_tool = sys.argv[2]
+phase = sys.argv[3]
+payload = sys.argv[4:]
+marker_index = payload.index(MARKER)
+extra_args = payload[:marker_index]
+requested_files = payload[marker_index + 1 :]
+if phase not in ("format", "verify") or not requested_files:
+    fail("invalid phase or empty file selection")
+
+config_argument = None
+forwarded_args = []
+for argument in extra_args:
+    if "\n" in argument or "\r" in argument:
+        fail("extra arguments cannot contain line breaks")
+    if argument == "--" or not argument.startswith("--") or "=" not in argument:
+        fail(
+            f"unsupported argument {argument!r}; use a permitted long --name=value option"
+        )
+    option, value = argument.split("=", 1)
+    if option != option.lower() or not value:
+        fail(f"unsupported argument {argument!r}; option names are lowercase and values nonempty")
+    if option == "--config":
+        if config_argument is not None:
+            fail("at most one explicit config is supported")
+        config_argument = value
+    elif option not in SAFE_CLI_OPTIONS:
+        fail(f"unsupported argument {argument!r}; option can bypass the controlled contract")
+    else:
+        forwarded_args.append(argument)
+
+workspace = os.path.realpath(os.getcwd())
+if not os.path.isdir(workspace):
+    fail(f"working directory is not a real directory: {workspace}")
+
+
+def controlled_path(value, label):
+    if not value or "\n" in value or "\r" in value:
+        fail(f"{label} is not a nonempty single-line path")
+    lexical = os.path.abspath(value)
+    try:
+        inside = os.path.commonpath((workspace, lexical)) == workspace
+    except ValueError:
+        inside = False
+    if not inside:
+        fail(f"{label} escapes the project root: {value}")
+    if os.path.realpath(lexical) != lexical:
+        fail(f"{label} traverses a symlink: {value}")
+    return lexical
+
+
+files = []
+file_identities = set()
+for requested in requested_files:
+    path = controlled_path(requested, "selected path")
+    try:
+        info = os.lstat(path)
+        if (
+            os.path.islink(path)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+        ):
+            fail(f"selected path is not a unique regular file: {requested}")
+        with open(path, "rb"):
+            pass
+    except OSError as error:
+        fail(f"cannot read selected path {requested}: {error}")
+    identity = (info.st_dev, info.st_ino)
+    if identity in file_identities:
+        fail(f"selected paths repeat or alias one file: {requested}")
+    file_identities.add(identity)
+    try:
+        path.encode("utf-8")
+    except UnicodeError as error:
+        fail(f"selected path is not UTF-8: {error}")
+    files.append(path)
+
+config_path = None
+validated_config_bytes = None
+
+
+def validate_config(value, label):
+    if not isinstance(value, dict):
+        fail(f"{label} must be a JSON object")
+    for key, option_value in value.items():
+        if key == "$schema":
+            if not isinstance(option_value, str):
+                fail(f"{label} $schema must be a string")
+        elif key == "overrides":
+            fail(f"{label} overrides are unsupported because config is copied outside the project")
+        elif key not in SAFE_CONFIG_OPTIONS:
+            fail(f"{label} contains unsupported option {key!r}")
+
+
+if config_argument is not None:
+    config_path = controlled_path(config_argument, "config path")
+    name = os.path.basename(config_path)
+    if name != ".prettierrc" and not name.endswith(".json"):
+        fail("explicit config must be JSON named .prettierrc or ending in .json")
+    config_fd = None
+    try:
+        open_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        config_fd = os.open(config_path, open_flags)
+        info = os.fstat(config_fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            fail(f"config is not a unique regular file: {config_argument}")
+        with os.fdopen(config_fd, "rb") as config_file:
+            config_fd = None
+            config_bytes = config_file.read(CONFIG_LIMIT + 1)
+    except OSError as error:
+        fail(f"cannot read config {config_argument}: {error}")
+    finally:
+        if config_fd is not None:
+            os.close(config_fd)
+    if len(config_bytes) > CONFIG_LIMIT:
+        fail("config exceeds the 1 MiB validation limit")
+    try:
+        document = json.loads(config_bytes.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        fail(f"config is not canonical UTF-8 JSON: {error}")
+    if name == "package.json":
+        if not isinstance(document, dict) or "prettier" not in document:
+            fail("package.json config has no prettier object")
+        document = document["prettier"]
+    validate_config(document, "Prettier config")
+    validated_config_bytes = (
+        json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode("utf-8")
+
+
+def resolve_program(requested, label, must_be_executable):
+    resolved = requested if os.path.dirname(requested) else shutil.which(requested)
+    if resolved is None:
+        fail(f"cannot resolve {label} {requested!r}")
+    resolved = os.path.realpath(resolved)
+    try:
+        info = os.stat(resolved)
+    except OSError as error:
+        fail(f"cannot inspect {label} {resolved}: {error}")
+    if not stat.S_ISREG(info.st_mode) or not os.access(resolved, os.R_OK):
+        fail(f"resolved {label} is not a readable regular file: {resolved}")
+    if must_be_executable and not os.access(resolved, os.X_OK):
+        fail(f"resolved {label} is not executable: {resolved}")
+    return resolved
+
+
+node = resolve_program(requested_node, "Node executable", True)
+tool = resolve_program(requested_tool, "Prettier CLI", False)
+
+environment = {}
+for name in (
+    "VELVET_GLOVE_TOOL_TRACE_DIR",
+    "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+):
+    if name in os.environ:
+        environment[name] = os.environ[name]
+environment.update(
+    {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC",
+        "TERM": "dumb",
+        "CI": "1",
+        "NO_COLOR": "1",
+        "FORCE_COLOR": "0",
+        "CLICOLOR": "0",
+    }
+)
+
+process = None
+pending_signal = None
+cleaning = False
+
+
+class AdapterSignal(BaseException):
+    def __init__(self, signum):
+        super().__init__(f"received signal {signum}")
+        self.signum = signum
+
+
+def signal_group(signum):
+    if process is None:
+        return
+    try:
+        os.killpg(process.pid, signum)
+    except (OSError, ValueError):
+        pass
+
+
+def stop_child(initial_signal=None):
+    global process
+    global cleaning
+    child = process
+    if child is None:
+        return
+    cleaning = True
+    try:
+        try:
+            running = child.poll() is None
+        except (OSError, ValueError):
+            running = True
+        if running:
+            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)
+            try:
+                child.wait(timeout=1)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                pass
+        signal_group(signal.SIGKILL)
+        try:
+            child.wait(timeout=1)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    finally:
+        process = None
+        cleaning = False
+
+
+def forward_signal(signum, _frame):
+    global pending_signal
+    pending_signal = signum
+    if process is not None and not cleaning:
+        signal_group(signum)
+        raise AdapterSignal(signum)
+
+
+previous_handlers = {}
+stdout_chunks = []
+stderr_chunks = []
+total = 0
+adapter_error = None
+private_config_dir = None
+private_config_path = None
+try:
+    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, forward_signal)
+    if pending_signal is not None:
+        raise AdapterSignal(pending_signal)
+    config_for_child = DEFAULT_CONFIG
+    if validated_config_bytes is not None:
+        temp_root = os.path.realpath(tempfile.gettempdir())
+        temp_info = os.stat(temp_root)
+        if not stat.S_ISDIR(temp_info.st_mode):
+            raise OSError(f"temporary root is not a directory: {temp_root}")
+        if os.path.commonpath((workspace, temp_root)) == workspace:
+            raise OSError(f"temporary root must be outside the project: {temp_root}")
+        private_config_dir = tempfile.mkdtemp(
+            prefix="velvet-glove-prettier-config-", dir=temp_root
+        )
+        os.chmod(private_config_dir, 0o700)
+        private_config_path = os.path.join(private_config_dir, "config.json")
+        private_fd = os.open(
+            private_config_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        try:
+            os.fchmod(private_fd, 0o600)
+            with os.fdopen(private_fd, "wb") as private_config:
+                private_fd = None
+                private_config.write(validated_config_bytes)
+                private_config.flush()
+                os.fsync(private_config.fileno())
+        finally:
+            if private_fd is not None:
+                os.close(private_fd)
+        config_for_child = private_config_path
+    child_args = [node, tool, f"--config={config_for_child}"]
+    if phase == "format":
+        child_args.extend(("--write", "--log-level=error"))
+    else:
+        child_args.extend(("--list-different", "--log-level=log"))
+    child_args.extend(forwarded_args)
+    child_args.extend(
+        (
+            "--no-editorconfig",
+            "--ignore-path=/dev/null",
+            "--with-node-modules",
+            "--no-color",
+            "--",
+        )
+    )
+    child_args.extend(files)
+    if pending_signal is not None:
+        raise AdapterSignal(pending_signal)
+    process = subprocess.Popen(
+        child_args,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=workspace,
+        env=environment,
+        start_new_session=True,
+    )
+    if pending_signal is not None:
+        raise AdapterSignal(pending_signal)
+    selector = selectors.DefaultSelector()
+    for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
+        if stream is None:
+            raise OSError("failed to capture tool output")
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream, selectors.EVENT_READ, target)
+    while selector.get_map():
+        if pending_signal is not None:
+            raise InterruptedError(f"received signal {pending_signal}")
+        for key, _ in selector.select(timeout=0.1):
+            chunk = os.read(key.fileobj.fileno(), 65536)
+            if chunk:
+                total += len(chunk)
+                if total > LIMIT:
+                    raise BufferError(f"combined output exceeded {LIMIT} bytes")
+                key.data.append(chunk)
+            else:
+                selector.unregister(key.fileobj)
+                key.fileobj.close()
+    returncode = process.wait()
+except AdapterSignal as error:
+    stop_child(error.signum)
+    adapter_error = error
+    returncode = 2
+except BaseException as error:
+    stop_child()
+    adapter_error = error
+    returncode = 2
+finally:
+    cleaning = True
+    try:
+        for signum, handler in previous_handlers.items():
+            try:
+                signal.signal(signum, handler)
+            except (OSError, ValueError):
+                pass
+    finally:
+        cleaning = False
+    if private_config_path is not None:
+        try:
+            os.unlink(private_config_path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            if adapter_error is None:
+                adapter_error = error
+                returncode = 2
+    if private_config_dir is not None:
+        try:
+            os.rmdir(private_config_dir)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            if adapter_error is None:
+                adapter_error = error
+                returncode = 2
+    if pending_signal is not None and adapter_error is None:
+        adapter_error = AdapterSignal(pending_signal)
+        returncode = 2
+process = None
+
+stdout_bytes = b"".join(stdout_chunks)
+stderr_bytes = b"".join(stderr_chunks)
+
+
+def forward_raw():
+    if stdout_bytes:
+        sys.stdout.buffer.write(stdout_bytes)
+    if stderr_bytes:
+        sys.stderr.buffer.write(stderr_bytes)
+
+
+if adapter_error is not None:
+    forward_raw()
+    fail(str(adapter_error))
+
+if returncode == 0 and not stdout_bytes and not stderr_bytes:
+    raise SystemExit(0)
+
+if phase == "verify" and returncode == 1 and not stderr_bytes:
+    try:
+        output = stdout_bytes.decode("utf-8")
+    except UnicodeError as error:
+        forward_raw()
+        fail(f"invalid list-different UTF-8: {error}")
+    if not output.endswith("\n"):
+        forward_raw()
+        fail("list-different output has no final newline")
+    rendered_different = output.splitlines()
+    if not rendered_different:
+        forward_raw()
+        fail("list-different output is empty")
+    different = [os.path.abspath(path) for path in rendered_different]
+    if len(different) != len(set(different)):
+        forward_raw()
+        fail("list-different output repeats files")
+    selected = set(files)
+    if any(path not in selected for path in different):
+        forward_raw()
+        fail("list-different output names a file outside the selection")
+    different_set = set(different)
+    for path in files:
+        if path in different_set:
+            print(f"prettier: formatting differs: {path}", file=sys.stderr)
+    raise SystemExit(1)
+
+forward_raw()
+fail(f"native Prettier exited {returncode} without valid completion evidence") node /private/tmp/vg-worktree-issue36/target/prettier-audit/node_modules/prettier/bin/prettier.cjs format --print-width=wide __VELVET_GLOVE_PRETTIER_FILES__ <workspace>/example.js
+status: Some(2)
+classification: Some(Failure)
+stderr:
+[error] Invalid --print-width value. Expected an integer, but received null.
+velvet-glove-prettier: native Prettier exited 1 without valid completion evidence
+artifact: <workspace>/.velvet-glove/prettier-agent-hook/test-session_prettier-tool_prettier-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
