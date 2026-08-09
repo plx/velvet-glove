@@ -1,33 +1,905 @@
 /// ghalint — GitHub Actions workflow linter (run mode; workspace-wide).
+///
+/// ghalint 1.5.6 discovers only direct `.github/workflows/*.yml` files and
+/// then direct `*.yaml` files. It exits one for policy findings, workflow YAML
+/// parse failures, and configuration failures while emitting timestamped human
+/// logs. The isolated adapter inventories that exact physical set, refuses the
+/// native zero-file success, snapshots the retained project, and accepts status
+/// one only when every log line matches the pinned source-diagnostic grammar.
 
 module velvet_glove.builtins.tools.GhalintWorkflow
 
 import "../Config.pkl" as Config
+
+ghalintWorkflowAdapter: String = #"""
+  import hashlib
+  import json
+  import os
+  import re
+  import selectors
+  import shlex
+  import shutil
+  import signal
+  import stat
+  import subprocess
+  import sys
+  import tempfile
+  import time
+
+  MARKER = "__VELVET_GLOVE_GHALINT_WORKFLOW_FILES__"
+  VERSION = "1.5.6+velvet-glove.1"
+  MAX_CONFIG_BYTES = 1024 * 1024
+  MAX_FILE_BYTES = 16 * 1024 * 1024
+  MAX_WORKSPACE_BYTES = 128 * 1024 * 1024
+  MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+  MAX_FILES = 8192
+  MAX_DIRECTORIES = 8192
+  MAX_WORKFLOWS = 4096
+  MAX_LOG_LINES = 16384
+  SKIPPED_DIRECTORIES = frozenset((".git", ".velvet-glove", "node_modules", "target"))
+  CONFIG_CANDIDATES = (
+      "ghalint.yaml",
+      ".ghalint.yaml",
+      ".github/ghalint.yaml",
+      "ghalint.yml",
+      ".ghalint.yml",
+      ".github/ghalint.yml",
+  )
+  POLICY_IDS = {
+      "job_permissions": "001",
+      "deny_read_all_permission": "002",
+      "deny_write_all_permission": "003",
+      "deny_inherit_secrets": "004",
+      "workflow_secrets": "005",
+      "job_secrets": "006",
+      "deny_job_container_latest_image": "007",
+      "action_ref_should_be_full_length_commit_sha": "008",
+      "github_app_should_limit_repositories": "009",
+      "github_app_should_limit_permissions": "010",
+      "job_timeout_minutes_is_required": "012",
+      "checkout_persist_credentials_should_be_false": "013",
+  }
+  POLICY_MESSAGES = frozenset((
+      "the workflow violates policies",
+      "the job violates policies",
+      "the step violates policies",
+  ))
+  POLICY_OPTIONAL_FIELDS = frozenset((
+      "action_name",
+      "env_name",
+      "image",
+      "input_key",
+      "permission",
+      "repositories",
+      "step_id",
+      "step_name",
+  ))
+  TIMESTAMP = re.compile(
+      r"^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+      r"[ 0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]\.[0-9]{3} ERR "
+  )
+  KEY = re.compile(r"^[a-z][a-z0-9_]*$")
+  HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+
+
+  class ContractError(Exception):
+      pass
+
+
+  class AdapterSignal(BaseException):
+      def __init__(self, signum):
+          super().__init__(f"received signal {signum}")
+          self.signum = signum
+
+
+  def reject(message):
+      raise ContractError(message)
+
+
+  def safe_text(value, label, allow_empty=False):
+      if not isinstance(value, str) or (not allow_empty and not value):
+          reject(f"{label} is not a {'possibly empty' if allow_empty else 'nonempty'} string")
+      if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+          reject(f"{label} contains a control character")
+      try:
+          value.encode("utf-8")
+      except UnicodeError as error:
+          reject(f"{label} is not UTF-8 encodable: {error}")
+      return value
+
+
+  def safe_path(value, label):
+      return safe_text(value, label)
+
+
+  def beneath(root, path):
+      try:
+          return os.path.commonpath((root, path)) == root
+      except ValueError:
+          return False
+
+
+  def stable_fields(metadata):
+      return (
+          metadata.st_dev,
+          metadata.st_ino,
+          metadata.st_mode,
+          metadata.st_nlink,
+          metadata.st_size,
+          metadata.st_mtime_ns,
+      )
+
+
+  def inspect_directory(path, label):
+      safe_path(path, label)
+      try:
+          before = os.lstat(path)
+          if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+              reject(f"{label} is not a physical directory: {path}")
+          flags = os.O_RDONLY
+          if hasattr(os, "O_CLOEXEC"):
+              flags |= os.O_CLOEXEC
+          if hasattr(os, "O_DIRECTORY"):
+              flags |= os.O_DIRECTORY
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          descriptor = os.open(path, flags)
+          try:
+              opened = os.fstat(descriptor)
+          finally:
+              os.close(descriptor)
+      except ContractError:
+          raise
+      except OSError as error:
+          reject(f"cannot inspect {label} {path}: {error}")
+      if not stat.S_ISDIR(opened.st_mode) or (
+          opened.st_dev,
+          opened.st_ino,
+      ) != (before.st_dev, before.st_ino):
+          reject(f"{label} changed while opening: {path}")
+      return {
+          "dev": opened.st_dev,
+          "ino": opened.st_ino,
+          "mode": stat.S_IMODE(opened.st_mode),
+          "mtime_ns": opened.st_mtime_ns,
+      }
+
+
+  def inspect_file(path, label, limit):
+      safe_path(path, label)
+      if os.path.realpath(path) != path:
+          reject(f"{label} traverses a symbolic link: {path}")
+      try:
+          before = os.lstat(path)
+          if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+              reject(f"{label} is not a regular file: {path}")
+          if before.st_nlink != 1:
+              reject(f"{label} must have exactly one hard link: {path}")
+          flags = os.O_RDONLY
+          if hasattr(os, "O_CLOEXEC"):
+              flags |= os.O_CLOEXEC
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          descriptor = os.open(path, flags)
+          try:
+              opened = os.fstat(descriptor)
+              if not stat.S_ISREG(opened.st_mode) or (
+                  opened.st_dev,
+                  opened.st_ino,
+              ) != (before.st_dev, before.st_ino):
+                  reject(f"{label} changed while opening: {path}")
+              chunks = []
+              total = 0
+              while True:
+                  chunk = os.read(descriptor, min(65536, limit + 1 - total))
+                  if not chunk:
+                      break
+                  chunks.append(chunk)
+                  total += len(chunk)
+                  if total > limit:
+                      reject(f"{label} exceeds {limit} bytes: {path}")
+              after = os.fstat(descriptor)
+          finally:
+              os.close(descriptor)
+      except ContractError:
+          raise
+      except OSError as error:
+          reject(f"cannot inspect {label} {path}: {error}")
+      if stable_fields(opened) != stable_fields(after):
+          reject(f"{label} changed while reading: {path}")
+      data = b"".join(chunks)
+      return {
+          "dev": after.st_dev,
+          "ino": after.st_ino,
+          "mode": stat.S_IMODE(after.st_mode),
+          "nlink": after.st_nlink,
+          "size": after.st_size,
+          "mtime_ns": after.st_mtime_ns,
+          "sha256": hashlib.sha256(data).hexdigest(),
+          "data": data,
+      }
+
+
+  def relative(project, path):
+      return os.path.relpath(path, project).replace(os.sep, "/")
+
+
+  def scan_workspace(project):
+      files = {}
+      directories = {}
+      seen = set()
+      total = 0
+
+      def walk_error(error):
+          reject(f"cannot walk retained project: {error}")
+
+      for directory, child_directories, names in os.walk(
+          project, topdown=True, followlinks=False, onerror=walk_error
+      ):
+          child_directories.sort()
+          names.sort()
+          rel_directory = relative(project, directory)
+          if len(directories) >= MAX_DIRECTORIES:
+              reject(f"retained project exceeds {MAX_DIRECTORIES} directories")
+          directories[rel_directory] = inspect_directory(
+              directory, "retained project directory"
+          )
+          retained = []
+          for name in child_directories:
+              path = os.path.join(directory, name)
+              safe_path(path, "retained project path")
+              if name in SKIPPED_DIRECTORIES:
+                  continue
+              try:
+                  metadata = os.lstat(path)
+              except OSError as error:
+                  reject(f"cannot inspect retained project directory {path}: {error}")
+              if stat.S_ISLNK(metadata.st_mode):
+                  reject(f"retained project contains a symbolic-link directory: {path}")
+              if not stat.S_ISDIR(metadata.st_mode):
+                  reject(f"retained project directory is not a directory: {path}")
+              retained.append(name)
+          child_directories[:] = retained
+          for name in names:
+              path = os.path.join(directory, name)
+              snapshot = inspect_file(path, "retained project file", MAX_FILE_BYTES)
+              identity = (snapshot["dev"], snapshot["ino"])
+              if identity in seen:
+                  reject(f"retained project contains an aliased file: {path}")
+              seen.add(identity)
+              total += snapshot["size"]
+              if len(files) >= MAX_FILES:
+                  reject(f"retained project exceeds {MAX_FILES} files")
+              if total > MAX_WORKSPACE_BYTES:
+                  reject(f"retained project exceeds {MAX_WORKSPACE_BYTES} bytes")
+              files[relative(project, path)] = snapshot
+      return files, directories
+
+
+  def compare_workspace(before_files, before_directories, after_files, after_directories):
+      if set(before_files) != set(after_files):
+          reject("ghalint changed retained project file topology")
+      if set(before_directories) != set(after_directories):
+          reject("ghalint changed retained project directory topology")
+      changed = sorted(
+          path for path in before_files if before_files[path] != after_files[path]
+      )
+      if changed:
+          reject(f"ghalint changed retained project files: {changed!r}")
+      changed_directories = sorted(
+          path
+          for path in before_directories
+          if before_directories[path] != after_directories[path]
+      )
+      if changed_directories:
+          reject(
+              f"ghalint changed retained project directories: {changed_directories!r}"
+          )
+
+
+  def validate_project(value):
+      project = safe_path(value, "project root")
+      if not os.path.isabs(project) or os.path.normpath(project) != project:
+          reject(f"project root is not normalized and absolute: {project}")
+      if os.path.realpath(project) != project:
+          reject(f"project root is not physical: {project}")
+      inspect_directory(project, "project root")
+      return project
+
+
+  def workflow_inventory(project):
+      github = os.path.join(project, ".github")
+      workflows = os.path.join(github, "workflows")
+      inspect_directory(github, "GitHub metadata directory")
+      inspect_directory(workflows, "workflow directory")
+      by_suffix = {".yml": [], ".yaml": []}
+      try:
+          entries = sorted(os.scandir(workflows), key=lambda entry: entry.name)
+      except OSError as error:
+          reject(f"cannot list workflow directory {workflows}: {error}")
+      seen = set()
+      for entry in entries:
+          safe_text(entry.name, "workflow entry name")
+          suffix = next(
+              (candidate for candidate in (".yml", ".yaml") if entry.name.endswith(candidate)),
+              None,
+          )
+          if suffix is None:
+              continue
+          snapshot = inspect_file(entry.path, "workflow file", MAX_FILE_BYTES)
+          identity = (snapshot["dev"], snapshot["ino"])
+          if identity in seen:
+              reject(f"workflow inventory contains an aliased file: {entry.path}")
+          seen.add(identity)
+          by_suffix[suffix].append(entry.path)
+      inventory = by_suffix[".yml"] + by_suffix[".yaml"]
+      if not inventory:
+          reject("ghalint workflow inventory is empty")
+      if len(inventory) > MAX_WORKFLOWS:
+          reject(f"ghalint workflow inventory exceeds {MAX_WORKFLOWS} files")
+      return workflows, inventory
+
+
+  def selected_files(values, workflows, inventory):
+      if not values:
+          reject("runner supplied zero workflow candidates")
+      selected = []
+      seen = set()
+      inventory_set = set(inventory)
+      for index, value in enumerate(values):
+          path = safe_path(value, f"selected workflow[{index}]")
+          if not os.path.isabs(path) or os.path.normpath(path) != path:
+              reject(f"selected workflow is not normalized and absolute: {path}")
+          if os.path.dirname(path) != workflows or path not in inventory_set:
+              reject(f"selected workflow is outside the top-level native inventory: {path}")
+          if path in seen:
+              reject(f"selected workflow is duplicated: {path}")
+          seen.add(path)
+          selected.append(path)
+      return selected
+
+
+  def config_source(project, extra):
+      if len(extra) > 1:
+          reject("ghalint accepts at most one controlled --config=<path> override")
+      if extra:
+          argument = safe_text(extra[0], "ghalint extra argument")
+          prefix = "--config="
+          if not argument.startswith(prefix) or argument == prefix:
+              reject("ghalint extra arguments must be exactly --config=<relative-yaml-path>")
+          relative_path = safe_path(argument[len(prefix):], "ghalint config path")
+          if (
+              os.path.isabs(relative_path)
+              or os.path.normpath(relative_path) != relative_path
+              or relative_path in (".", "..")
+              or relative_path.startswith(".." + os.sep)
+              or not relative_path.endswith((".yml", ".yaml"))
+          ):
+              reject(f"ghalint config path is not a normalized relative YAML path: {relative_path}")
+          parts = relative_path.split(os.sep)
+          if any(part in SKIPPED_DIRECTORIES for part in parts):
+              reject(f"ghalint config path enters a skipped directory: {relative_path}")
+          source = os.path.join(project, relative_path)
+          return source, inspect_file(source, "ghalint config", MAX_CONFIG_BYTES)
+
+      discovered = []
+      for candidate in CONFIG_CANDIDATES:
+          path = os.path.join(project, *candidate.split("/"))
+          try:
+              metadata = os.lstat(path)
+          except FileNotFoundError:
+              continue
+          except OSError as error:
+              reject(f"cannot inspect discovered ghalint config {path}: {error}")
+          if stat.S_ISLNK(metadata.st_mode):
+              reject(f"discovered ghalint config is a symbolic link: {path}")
+          discovered.append(path)
+      if len(discovered) > 1:
+          reject(f"multiple implicit ghalint configs are ambiguous: {discovered!r}")
+      if discovered:
+          source = discovered[0]
+          return source, inspect_file(source, "ghalint config", MAX_CONFIG_BYTES)
+      return None, None
+
+
+  def temporary_root(project):
+      value = os.environ.get("TMPDIR") or tempfile.gettempdir()
+      value = safe_path(value, "TMPDIR")
+      if not os.path.isabs(value):
+          reject("TMPDIR must name an absolute directory")
+      resolved = os.path.realpath(value)
+      safe_path(resolved, "resolved TMPDIR")
+      if not os.path.isabs(resolved) or os.path.normpath(resolved) != resolved:
+          reject("TMPDIR did not resolve to a normalized absolute directory")
+      inspect_directory(resolved, "TMPDIR")
+      if beneath(project, resolved):
+          reject("TMPDIR must be outside the project")
+      return resolved
+
+
+  def private_config(project, source_snapshot):
+      root = tempfile.mkdtemp(
+          prefix="velvet-glove-ghalint-workflow-",
+          dir=temporary_root(project),
+      )
+      os.chmod(root, 0o700)
+      config = os.path.join(root, "ghalint.yaml")
+      data = (
+          b"excludes: []\n"
+          if source_snapshot is None
+          else source_snapshot["data"]
+      )
+      flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+      if hasattr(os, "O_CLOEXEC"):
+          flags |= os.O_CLOEXEC
+      descriptor = os.open(config, flags, 0o600)
+      try:
+          written = 0
+          while written < len(data):
+              written += os.write(descriptor, data[written:])
+          os.fsync(descriptor)
+      finally:
+          os.close(descriptor)
+      if stat.S_IMODE(os.lstat(config).st_mode) != 0o600:
+          reject("private ghalint config does not have mode 0600")
+      snapshot = inspect_file(config, "private ghalint config", MAX_CONFIG_BYTES)
+      if snapshot["data"] != data:
+          reject("private ghalint config bytes differ from the validated source")
+      return root, config, snapshot
+
+
+  def resolve_tool(value):
+      name = safe_path(value, "ghalint executable")
+      if os.sep in name and not os.path.isabs(name):
+          reject(f"ghalint executable path is not absolute: {name}")
+      candidate = name if os.path.isabs(name) else shutil.which(name)
+      if candidate is None:
+          reject(f"cannot resolve ghalint executable {name!r}")
+      resolved = os.path.realpath(os.path.abspath(candidate))
+      snapshot = inspect_file(resolved, "ghalint executable", 128 * 1024 * 1024)
+      if not os.access(resolved, os.X_OK):
+          reject(f"ghalint executable is not executable: {resolved}")
+      return resolved, snapshot
+
+
+  def same_file(path, expected, label, limit):
+      observed = inspect_file(path, label, limit)
+      if observed != expected:
+          reject(f"{label} changed during execution: {path}")
+
+
+  def child_environment(tool, private_root, temporary):
+      return {
+          "PATH": os.pathsep.join((os.path.dirname(tool), "/usr/bin", "/bin")),
+          "HOME": private_root,
+          "TMPDIR": temporary,
+          "XDG_CACHE_HOME": private_root,
+          "XDG_CONFIG_HOME": private_root,
+          "XDG_DATA_HOME": private_root,
+          "LANG": "C",
+          "LC_ALL": "C",
+          "TZ": "UTC",
+          "TERM": "dumb",
+          "CI": "1",
+          "NO_COLOR": "1",
+          "CLICOLOR": "0",
+          "FORCE_COLOR": "0",
+          "GHALINT_LOG_COLOR": "never",
+          "GHALINT_LOG_LEVEL": "error",
+      }
+
+
+  def process_group_exists(pid):
+      try:
+          os.killpg(pid, 0)
+          return True
+      except ProcessLookupError:
+          return False
+      except PermissionError:
+          return True
+
+
+  def terminate_group(pid):
+      for chosen, deadline in ((signal.SIGTERM, 0.5), (signal.SIGKILL, 0.5)):
+          try:
+              os.killpg(pid, chosen)
+          except ProcessLookupError:
+              return
+          end = time.monotonic() + deadline
+          while time.monotonic() < end:
+              if not process_group_exists(pid):
+                  return
+              time.sleep(0.01)
+
+
+  def run_child(argv, cwd, environment, signal_state):
+      blocked = None
+      if hasattr(signal, "pthread_sigmask"):
+          blocked = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
+      try:
+          child = subprocess.Popen(
+              argv,
+              cwd=cwd,
+              env=environment,
+              stdin=subprocess.DEVNULL,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              start_new_session=True,
+          )
+          signal_state["child"] = child.pid
+      except OSError as error:
+          reject(f"cannot launch pinned ghalint: {error}")
+      finally:
+          if blocked is not None:
+              signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+
+      selector = selectors.DefaultSelector()
+      output = {"stdout": bytearray(), "stderr": bytearray()}
+      try:
+          for name, stream in (("stdout", child.stdout), ("stderr", child.stderr)):
+              os.set_blocking(stream.fileno(), False)
+              selector.register(stream, selectors.EVENT_READ, name)
+          while selector.get_map():
+              if signal_state["signal"] is not None:
+                  raise AdapterSignal(signal_state["signal"])
+              for key, _ in selector.select(0.1):
+                  chunk = os.read(key.fileobj.fileno(), 65536)
+                  if not chunk:
+                      selector.unregister(key.fileobj)
+                      continue
+                  output[key.data].extend(chunk)
+                  if len(output["stdout"]) + len(output["stderr"]) > MAX_OUTPUT_BYTES:
+                      reject(f"combined ghalint output exceeds {MAX_OUTPUT_BYTES} bytes")
+          status = child.wait()
+          if signal_state["signal"] is not None:
+              raise AdapterSignal(signal_state["signal"])
+      except BaseException:
+          terminate_group(child.pid)
+          try:
+              child.wait(timeout=1)
+          except (subprocess.TimeoutExpired, ChildProcessError):
+              pass
+          raise
+      finally:
+          selector.close()
+          signal_state["child"] = None
+      leftover = process_group_exists(child.pid)
+      if leftover:
+          terminate_group(child.pid)
+          reject("ghalint left a same-group descendant after exit")
+      return status, bytes(output["stdout"]), bytes(output["stderr"])
+
+
+  def parse_fields(text):
+      try:
+          tokens = shlex.split(text, posix=True)
+      except ValueError as error:
+          reject(f"ghalint log fields are malformed: {error}")
+      fields = {}
+      for token in tokens:
+          if "=" not in token:
+              reject(f"ghalint log field lacks '=': {token!r}")
+          key, value = token.split("=", 1)
+          if not KEY.fullmatch(key) or key in fields:
+              reject(f"ghalint log field key is invalid or duplicated: {key!r}")
+          safe_text(value, f"ghalint log field {key}", allow_empty=True)
+          fields[key] = value
+      return fields
+
+
+  def common_fields(fields):
+      if fields.get("program") != "ghalint" or fields.get("version") != VERSION:
+          reject("ghalint log does not bind the pinned program and version")
+
+
+  def workflow_path(fields, inventory_relatives):
+      path = fields.get("workflow_file_path")
+      if path not in inventory_relatives:
+          reject(f"ghalint log names a workflow outside the inventory: {path!r}")
+      return path
+
+
+  def parse_logs(stderr, inventory_relatives, private_config_path):
+      try:
+          text = stderr.decode("utf-8")
+      except UnicodeError as error:
+          reject(f"ghalint stderr is not UTF-8: {error}")
+      if not text.endswith("\n"):
+          reject("ghalint stderr does not end with a newline")
+      lines = text.splitlines()
+      if not lines or len(lines) > MAX_LOG_LINES:
+          reject("ghalint emitted an invalid number of log lines")
+      records = []
+      operational = []
+      messages = tuple(sorted(POLICY_MESSAGES, key=len, reverse=True)) + (
+          "read a workflow file",
+          "ghalint failed",
+      )
+      for line in lines:
+          match = TIMESTAMP.match(line)
+          if match is None:
+              reject(f"ghalint emitted an unrecognized timestamped log line: {line!r}")
+          payload = line[match.end():]
+          message = next(
+              (
+                  candidate
+                  for candidate in messages
+                  if payload.startswith(candidate + " ")
+              ),
+              None,
+          )
+          if message is None:
+              reject(f"ghalint emitted an unrecognized log message: {payload!r}")
+          fields = parse_fields(payload[len(message) + 1:])
+          common_fields(fields)
+          common = {"program", "version"}
+          if message in POLICY_MESSAGES:
+              allowed = common | {
+                  "workflow_file_path",
+                  "policy_name",
+                  "reference",
+                  "job_name",
+                  "error",
+              } | POLICY_OPTIONAL_FIELDS
+              if set(fields) - allowed:
+                  reject(f"ghalint policy log has unknown fields: {sorted(set(fields) - allowed)!r}")
+              policy = fields.get("policy_name")
+              policy_id = POLICY_IDS.get(policy)
+              if policy_id is None:
+                  reject(f"ghalint log names an unknown policy: {policy!r}")
+              expected_reference = (
+                  "https://github.com/suzuki-shunsuke/ghalint/blob/main/"
+                  f"docs/policies/{policy_id}.md"
+              )
+              if fields.get("reference") != expected_reference or not fields.get("error"):
+                  reject("ghalint policy log has inconsistent reference or error fields")
+              path = workflow_path(fields, inventory_relatives)
+              if message != "the workflow violates policies" and not fields.get("job_name"):
+                  reject("ghalint job or step policy log omits job_name")
+              records.append({
+                  "kind": "policy",
+                  "file": path,
+                  "message": message,
+                  "policy": policy,
+                  "job": fields.get("job_name"),
+                  "step": fields.get("step_id") or fields.get("step_name"),
+                  "error": fields["error"],
+              })
+          elif message == "read a workflow file":
+              allowed = common | {"workflow_file_path", "reference", "error"}
+              if set(fields) - allowed:
+                  reject(f"ghalint parse log has unknown fields: {sorted(set(fields) - allowed)!r}")
+              path = workflow_path(fields, inventory_relatives)
+              error = fields.get("error", "")
+              reference = fields.get("reference")
+              if not error.startswith("parse a workflow file as YAML:"):
+                  operational.append(f"cannot read {path}")
+              elif reference not in (
+                  None,
+                  "https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/codes/001.md",
+              ):
+                  reject("ghalint workflow parse log has an unexpected reference")
+              else:
+                  records.append({
+                      "kind": "parse",
+                      "file": path,
+                      "message": message,
+                      "policy": None,
+                      "job": None,
+                      "step": None,
+                      "error": error,
+                  })
+          else:
+              allowed = common | {"config_file", "reference", "error"}
+              if set(fields) - allowed:
+                  reject(f"ghalint failure log has unknown fields: {sorted(set(fields) - allowed)!r}")
+              error = fields.get("error", "")
+              if (
+                  fields.get("config_file") != private_config_path
+                  or not error.startswith((
+                      "read a configuration file:",
+                      "validate a configuration file:",
+                  ))
+              ):
+                  operational.append("native ghalint failed outside its configuration grammar")
+              else:
+                  operational.append("ghalint configuration is invalid")
+      return records, operational
+
+
+  def execute():
+      if len(sys.argv) < 5:
+          reject("adapter invocation is incomplete")
+      tool, tool_snapshot = resolve_tool(sys.argv[1])
+      project = validate_project(sys.argv[2])
+      marker_indices = [
+          index for index, value in enumerate(sys.argv[3:], start=3) if value == MARKER
+      ]
+      if len(marker_indices) != 1:
+          reject(f"adapter requires exactly one {MARKER!r} marker")
+      marker = marker_indices[0]
+      extra = sys.argv[3:marker]
+      workflows, inventory = workflow_inventory(project)
+      selected_files(sys.argv[marker + 1:], workflows, inventory)
+      inventory_relatives = frozenset(relative(project, path) for path in inventory)
+      config_path, config_snapshot = config_source(project, extra)
+      baseline_files, baseline_directories = scan_workspace(project)
+      temporary = temporary_root(project)
+      private_root = None
+      signal_state = {"child": None, "signal": None}
+
+      def handle_signal(signum, _frame):
+          if signal_state["signal"] is None:
+              signal_state["signal"] = signum
+          child = signal_state["child"]
+          if child is not None:
+              try:
+                  os.killpg(child, signum)
+              except ProcessLookupError:
+                  pass
+
+      previous_handlers = {
+          chosen: signal.signal(chosen, handle_signal) for chosen in HANDLED_SIGNALS
+      }
+      try:
+          private_root, private_path, private_snapshot = private_config(
+              project, config_snapshot
+          )
+          environment = child_environment(tool, private_root, temporary)
+          version_status, version_stdout, version_stderr = run_child(
+              [tool, "--version"], project, environment, signal_state
+          )
+          if (
+              version_status != 0
+              or version_stdout != f"ghalint version {VERSION}\n".encode("ascii")
+              or version_stderr
+          ):
+              reject("ghalint executable failed the exact pinned version probe")
+          same_file(tool, tool_snapshot, "ghalint executable", 128 * 1024 * 1024)
+          if config_path is not None:
+              same_file(config_path, config_snapshot, "ghalint config", MAX_CONFIG_BYTES)
+          same_file(private_path, private_snapshot, "private ghalint config", MAX_CONFIG_BYTES)
+          current_files, current_directories = scan_workspace(project)
+          compare_workspace(
+              baseline_files,
+              baseline_directories,
+              current_files,
+              current_directories,
+          )
+
+          status, stdout, stderr = run_child(
+              [
+                  tool,
+                  "--log-color=never",
+                  "--log-level=error",
+                  f"--config={private_path}",
+                  "run",
+              ],
+              project,
+              environment,
+              signal_state,
+          )
+          same_file(tool, tool_snapshot, "ghalint executable", 128 * 1024 * 1024)
+          if config_path is not None:
+              same_file(config_path, config_snapshot, "ghalint config", MAX_CONFIG_BYTES)
+          same_file(private_path, private_snapshot, "private ghalint config", MAX_CONFIG_BYTES)
+          after_files, after_directories = scan_workspace(project)
+          compare_workspace(
+              baseline_files,
+              baseline_directories,
+              after_files,
+              after_directories,
+          )
+          if stdout:
+              reject("ghalint emitted unexpected stdout")
+          if status == 0:
+              if stderr:
+                  reject("clean ghalint execution emitted stderr")
+              return 0
+          if status != 1:
+              reject(f"ghalint exited with operational status {status}")
+          records, operational = parse_logs(
+              stderr, inventory_relatives, private_path
+          )
+          if operational:
+              reject("; ".join(sorted(set(operational))))
+          if not records:
+              reject("ghalint status one contained no source diagnostics")
+          records.sort(key=lambda record: json.dumps(record, sort_keys=True))
+          report = json.dumps(
+              {"status": "issues", "issues": records},
+              ensure_ascii=True,
+              sort_keys=True,
+              separators=(",", ":"),
+          )
+          sys.stdout.buffer.write((report + "\n").encode("ascii"))
+          return 1
+      except AdapterSignal as error:
+          raise ContractError(str(error))
+      finally:
+          for chosen, previous in previous_handlers.items():
+              signal.signal(chosen, previous)
+          if private_root is not None:
+              try:
+                  shutil.rmtree(private_root)
+              except OSError as error:
+                  active = sys.exc_info()[1]
+                  message = f"cannot remove private ghalint directory: {error}"
+                  if active is not None:
+                      message = f"{active}; {message}"
+                  raise ContractError(message) from error
+
+
+  try:
+      raise SystemExit(execute())
+  except ContractError as error:
+      print(f"velvet-glove-ghalint-workflow: {error}", file=sys.stderr)
+      raise SystemExit(2)
+  """#
+
+ghalintWorkflowArgv: Listing<String | Config.ArgToken> = new Listing<String | Config.ArgToken> {
+  new Config.ToolExecutable {}
+  new Config.ProjectRoot {}
+  new Config.ExtraArgs {}
+  "__VELVET_GLOVE_GHALINT_WORKFLOW_FILES__"
+  new Config.Files {}
+}
 
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "ghalint-workflow"
   displayName = "ghalint (workflow)"
   executable = "ghalint"
   installHint =
-    "install ghalint with `brew install suzuki-shunsuke/ghalint/ghalint` or `go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@latest`"
+    "use the Velvet Glove ghalint 1.5.6+velvet-glove.1 source-build recipe"
 
   files = new Config.FileSelection {
     include = new Listing<String> {
-      "*.yml"; "*.yaml"
-      "**/*.yml"; "**/*.yaml"
+      ".github/workflows/*.yml"
+      ".github/workflows/*.yaml"
     }
   }
+
+  phaseInvocation = "workspace"
+
+  workflows = new Mapping<String, Config.Workflow> {
+    ["verify"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        program = "python"
+        argv = new Listing<String | Config.ArgToken> {
+          "-I"
+          "-c"
+          ghalintWorkflowAdapter
+          ...ghalintWorkflowArgv
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+          unexpected = "failure"
+        }
+        issuesOnStdout = true
+      }
+      checkScope = "workspace"
+      invocation = "workspace"
+    }
+  }
+  workflowOrder = new Listing<String> { "verify" }
 
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
-        "run"
-        new Config.ExtraArgs {}
+        "-I"
+        "-c"
+        ghalintWorkflowAdapter
+        ...ghalintWorkflowArgv
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
+        unexpected = "failure"
       }
     }
   }
