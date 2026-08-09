@@ -180,6 +180,36 @@
             "match": "exact",
             "expected": "v24.18.0"
           }
+        },
+      {
+        "id": "@astrojs/check",
+        "version": "0.9.10",
+        "installationSource": "@astrojs/check 0.9.10 in the exact npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+        "runtimeComponentIds": ["node"],
+          "integrity": {
+            "kind": "npm-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/node/package-lock.json"
+          },
+          "probe": {
+            "argv": ["node", "-p", "JSON.parse(require('node:fs').readFileSync(require('node:path').join(require.resolve('@astrojs/check'), '..', '..', 'package.json'))).version"],
+            "match": "exact",
+            "expected": "0.9.10"
+          }
+        },
+      {
+        "id": "typescript",
+        "version": "6.0.3",
+        "installationSource": "TypeScript 6.0.3 in the exact npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+        "runtimeComponentIds": ["node"],
+          "integrity": {
+            "kind": "npm-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/node/package-lock.json"
+          },
+          "probe": {
+            "argv": ["node", "-p", "require('typescript/package.json').version"],
+            "match": "exact",
+            "expected": "6.0.3"
+          }
         }
       ],
       "auxiliaryPrograms": ["npm"],
@@ -555,6 +585,25 @@
       "caseExecutables": ["sort-package-json"],
       "cases": ["clean", "unformatted"],
       "representativeCase": "unformatted"
+    },
+    {
+      "id": "astro-macos-arm64",
+      "toolId": "astro",
+      "environmentId": "macos-arm64-node",
+      "version": "7.2.0",
+      "installationSource": "exact npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+      "integrity": {
+        "kind": "npm-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/node/package-lock.json"
+      },
+      "probe": {
+        "argv": ["astro", "--version"],
+        "match": "exact",
+        "expected": "   astro  v7.2.0"
+      },
+      "caseExecutables": ["astro", "node"],
+      "cases": ["clean", "type-error", "multi-file-project", "operational-failure"],
+      "representativeCase": "multi-file-project"
     },
     {
       "id": "black-macos-arm64",

@@ -145,6 +145,65 @@ fn asciidoctor_adapter_distinguishes_document_issues_from_cli_failures() {
     assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
 }
 
+#[test]
+fn astro_adapter_requires_a_completed_workspace_check() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let astro = spec(&specs, "astro");
+
+    assert_eq!(astro.workspace_indicator.as_deref(), Some("package.json"));
+    assert_eq!(astro.phase_invocation, InvocationGranularity::Workspace);
+    assert!(
+        astro.workflows.is_empty(),
+        "astro uses compatibility translation"
+    );
+
+    let verify = astro.phases.get("verify").expect("astro verify phase");
+    assert_eq!(verify.program.as_deref(), Some("node"));
+    assert_eq!(verify.argv.len(), 7);
+    assert_eq!(verify.argv[0], literal("--input-type=commonjs"));
+    assert_eq!(verify.argv[1], literal("-e"));
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("astro adapter must be a literal Node program")
+    };
+    for required in [
+        "spawnSync",
+        "ASTRO_TELEMETRY_DISABLED: \"1\"",
+        "CI: \"1\"",
+        "delete environment.DEBUG",
+        "--silent",
+        "--noSync",
+        "--no-watch",
+        "--root",
+        "--minimumSeverity=error",
+        "--minimumFailingSeverity=error",
+        "const maxBufferBytes = 16 * 1024 * 1024",
+        "maxBuffer: maxBufferBytes",
+        "Result \\(([1-9][0-9]*) files?\\)",
+        "child.status === 0 && footer && errors === 0",
+        "child.status === 1 && footer && errors > 0",
+        "process.exit(2)",
+        "would bypass controlled project validation",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "astro adapter omits {required:?}"
+        );
+    }
+    assert_eq!(verify.argv[3], literal("--"));
+    assert_eq!(verify.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[5], literal("check"));
+    assert_eq!(verify.argv[6], token(ArgToken::ExtraArgs));
+    assert!(
+        !verify
+            .argv
+            .iter()
+            .any(|element| element == &token(ArgToken::Files)),
+        "astro must scan its workspace instead of accepting ignored file arguments"
+    );
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+}
+
 fn spec(specs: &std::collections::BTreeMap<String, ToolSpec>, key: &str) -> ToolSpec {
     specs
         .get(key)

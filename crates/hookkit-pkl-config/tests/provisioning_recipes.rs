@@ -311,6 +311,15 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         assert!(!recipe.installation_source.trim().is_empty());
         validate_integrity(&root, &recipe.integrity, &recipe.id);
         validate_probe(&recipe.probe, &recipe.id);
+        if recipe.tool_id == "astro" {
+            validate_npm_lock_package(
+                &root,
+                &recipe.integrity,
+                "astro",
+                &recipe.version,
+                "sha512-lLTYzx3fOvCmtwD3JVBLQcbORbIOW1/j0R+3IvJx/XKwMGrk7mFnF0BYSOeRiNw1qHUR5mdA6+hRnyvyDfqrWQ==",
+            );
+        }
         match &tool.provenance.upstream {
             UpstreamProvenance::Recorded {
                 version,
@@ -339,6 +348,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         recipe_tools,
         BTreeSet::from([
             "asciidoctor",
+            "astro",
             "black",
             "go-fmt",
             "jq",
@@ -663,6 +673,46 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                 other => panic!("unexpected archive component {other}"),
             }
         }
+        "npm-lock" => {
+            assert_eq!(component.mise_tool, None);
+            assert_eq!(
+                component.runtime_component_ids,
+                ["node"],
+                "{}: Node runtime dependency",
+                component.id
+            );
+            let (expected_integrity, package_probe) = match component.id.as_str() {
+                "@astrojs/check" => (
+                    "sha512-zgx/UQMozdjOa3bOxjgeCFdtpE3c9rRX6xHwa+2QXvy8z8Akifu2AtubHyv/zzC2znO8dl8fFWL4K+Ba9kS8HQ==",
+                    "JSON.parse(require('node:fs').readFileSync(require('node:path').join(require.resolve('@astrojs/check'), '..', '..', 'package.json'))).version",
+                ),
+                "typescript" => (
+                    "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==",
+                    "require('typescript/package.json').version",
+                ),
+                other => panic!("unexpected npm-locked component {other}"),
+            };
+            validate_npm_lock_package(
+                root,
+                &component.integrity,
+                &component.id,
+                &component.version,
+                expected_integrity,
+            );
+            assert_eq!(
+                component
+                    .probe
+                    .argv
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["node", "-p", package_probe],
+                "{}: observed package probe",
+                component.id
+            );
+            assert_eq!(component.probe.match_kind, "exact");
+            assert_eq!(component.probe.expected, component.version);
+        }
         "runtime-bundled" => {
             assert_eq!(component.mise_tool, None);
             match component.id.as_str() {
@@ -719,6 +769,39 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
         }
         other => panic!("{}: invalid component integrity {other}", component.id),
     }
+}
+
+fn validate_npm_lock_package(
+    root: &Path,
+    integrity: &Integrity,
+    package_id: &str,
+    expected_version: &str,
+    expected_integrity: &str,
+) {
+    assert_eq!(integrity.kind, "npm-lock", "{package_id}: integrity kind");
+    let lock_path = integrity
+        .path
+        .as_deref()
+        .unwrap_or_else(|| panic!("{package_id}: missing npm lock path"));
+    let lock: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join(lock_path))
+            .unwrap_or_else(|error| panic!("{package_id}: read {lock_path}: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("{package_id}: parse {lock_path}: {error}"));
+    assert_eq!(
+        lock["packages"][""]["dependencies"][package_id], expected_version,
+        "{package_id}: root dependency pin"
+    );
+    let package_path = format!("node_modules/{package_id}");
+    let package = &lock["packages"][&package_path];
+    assert_eq!(
+        package["version"], expected_version,
+        "{package_id}: lock version"
+    );
+    assert_eq!(
+        package["integrity"], expected_integrity,
+        "{package_id}: lock integrity"
+    );
 }
 
 fn validate_probe(probe: &Probe, owner: &str) {

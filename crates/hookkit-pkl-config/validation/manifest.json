@@ -946,7 +946,10 @@
           "url": "https://github.com/asciidoctor/asciidoctor/releases/tag/v2.0.26",
           "version": "2.0.26",
           "installationSource": "Asciidoctor 2.0.26 pure-Ruby gem locked by SHA-256 in validation/provisioning/ruby/Gemfile.lock",
-          "versionCommand": ["asciidoctor", "--version"]
+          "versionCommand": [
+            "asciidoctor",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -1117,7 +1120,8 @@
         "immediate": {
           "capabilities": [
             "checker",
-            "batch"
+            "workspace-scoped",
+            "workspace-invocation"
           ],
           "requiredCases": [
             "command-coverage",
@@ -1126,8 +1130,9 @@
             "source-issue",
             "operational-failure",
             "no-mutation",
+            "workspace-scope",
             "multi-file",
-            "batch-attribution"
+            "workspace-attribution"
           ],
           "orchestrationCases": [
             "immediate-phase-order"
@@ -1137,10 +1142,10 @@
               "id": "pipeline",
               "kind": "immediate-pipeline",
               "order": 0,
-              "invocation": "batch",
+              "invocation": "workspace",
               "checkScope": null,
-              "workingDirectory": "project-root",
-              "workspaceIndicator": null,
+              "workingDirectory": "workspace",
+              "workspaceIndicator": "package.json",
               "fileIncludes": [
                 "**/*.astro",
                 "*.astro"
@@ -1152,14 +1157,18 @@
                   "role": "phase",
                   "mode": "verify",
                   "reusesImmediatePhase": null,
-                  "program": "astro",
+                  "program": "node",
                   "argv": [
+                    "--input-type=commonjs",
+                    "-e",
+                    "const { spawnSync } = require(\"node:child_process\");\nconst { writeSync } = require(\"node:fs\");\nconst tool = process.argv[1];\nif (!tool) {\n  writeSync(2, \"velvet-glove-astro: missing tool executable\\n\");\n  process.exit(2);\n}\nconst arguments = process.argv.slice(2);\nif (arguments[0] !== \"check\") {\n  writeSync(2, \"velvet-glove-astro: missing check command\\n\");\n  process.exit(2);\n}\nconst controlledOptions = [\n  \"--help\",\n  \"--version\",\n  \"--verbose\",\n  \"--no-verbose\",\n  \"--watch\",\n  \"--no-watch\",\n  \"--silent\",\n  \"--no-silent\",\n  \"--root\",\n  \"--sync\",\n  \"--nosync\",\n  \"--no-sync\",\n  \"--minimumseverity\",\n  \"--minimum-severity\",\n  \"--minimumfailingseverity\",\n  \"--minimum-failing-severity\"\n];\nconst unsupported = arguments.slice(1).find((argument) => {\n  const lowered = argument.toLowerCase();\n  const short = lowered.startsWith(\"-\") && !lowered.startsWith(\"--\");\n  return argument === \"--\" ||\n    (short && (lowered.includes(\"v\") || lowered.includes(\"w\"))) ||\n    controlledOptions.some((option) => lowered === option || lowered.startsWith(`${option}=`));\n});\nif (unsupported) {\n  writeSync(2, `velvet-glove-astro: unsupported argument ${JSON.stringify(unsupported)} would bypass controlled project validation\\n`);\n  process.exit(2);\n}\nconst environment = {\n  ...process.env,\n  ASTRO_TELEMETRY_DISABLED: \"1\",\n  CI: \"1\",\n  CLICOLOR: \"0\",\n  FORCE_COLOR: \"0\",\n  NO_COLOR: \"1\"\n};\ndelete environment.DEBUG;\nconst fixed = [\n  \"--silent\",\n  \"--noSync\",\n  \"--no-watch\",\n  \"--root\",\n  \".\",\n  \"--minimumSeverity=error\",\n  \"--minimumFailingSeverity=error\"\n];\nconst maxBufferBytes = 16 * 1024 * 1024;\nconst child = spawnSync(tool, [...arguments, ...fixed], {\n  encoding: \"utf8\",\n  env: environment,\n  maxBuffer: maxBufferBytes\n});\nconst ansi = /\\u001b\\[[0-?]*[ -/]*[@-~]/g;\nconst stdout = (child.stdout || \"\").replace(ansi, \"\");\nconst stderr = (child.stderr || \"\").replace(ansi, \"\");\nif (stdout) writeSync(1, stdout);\nif (stderr) writeSync(2, stderr);\nif (child.error) {\n  writeSync(2, `velvet-glove-astro: ${child.error.message}\\n`);\n  process.exit(2);\n}\nconst footer = /(?:^|\\n)Result \\(([1-9][0-9]*) files?\\):[ \\t]*\\n- ([0-9]+) errors?$/.exec(`${stdout}\\n${stderr}`.trimEnd());\nconst errors = footer ? Number(footer[2]) : -1;\nif (child.status === 0 && footer && errors === 0) process.exit(0);\nif (child.status === 1 && footer && errors > 0) process.exit(1);\nprocess.exit(2);",
+                    "--",
+                    {
+                      "type": "ToolExecutable"
+                    },
                     "check",
                     {
                       "type": "ExtraArgs"
-                    },
-                    {
-                      "type": "Files"
                     }
                   ],
                   "exitCodes": {
@@ -1169,7 +1178,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -1179,7 +1190,8 @@
               ],
               "capabilities": [
                 "checker",
-                "batch"
+                "workspace-scoped",
+                "workspace-invocation"
               ],
               "requiredCases": [
                 "command-coverage",
@@ -1187,8 +1199,9 @@
                 "source-issue",
                 "operational-failure",
                 "no-mutation",
+                "workspace-scope",
                 "multi-file",
-                "batch-attribution"
+                "workspace-attribution"
               ]
             }
           ]
@@ -1196,7 +1209,8 @@
         "deferred": {
           "capabilities": [
             "checker",
-            "batch"
+            "workspace-scoped",
+            "workspace-invocation"
           ],
           "requiredCases": [
             "command-coverage",
@@ -1205,8 +1219,9 @@
             "source-issue",
             "operational-failure",
             "no-mutation",
+            "workspace-scope",
             "multi-file",
-            "batch-attribution"
+            "workspace-attribution"
           ],
           "orchestrationCases": [
             "deferred-lifecycle"
@@ -1216,10 +1231,10 @@
               "id": "verify",
               "kind": "compatibility-workflow",
               "order": 0,
-              "invocation": "batch",
-              "checkScope": "target-files",
-              "workingDirectory": "project-root",
-              "workspaceIndicator": null,
+              "invocation": "workspace",
+              "checkScope": "workspace",
+              "workingDirectory": "workspace",
+              "workspaceIndicator": "package.json",
               "fileIncludes": [
                 "**/*.astro",
                 "*.astro"
@@ -1231,14 +1246,18 @@
                   "role": "workflow-check",
                   "mode": "verify",
                   "reusesImmediatePhase": "verify",
-                  "program": "astro",
+                  "program": "node",
                   "argv": [
+                    "--input-type=commonjs",
+                    "-e",
+                    "const { spawnSync } = require(\"node:child_process\");\nconst { writeSync } = require(\"node:fs\");\nconst tool = process.argv[1];\nif (!tool) {\n  writeSync(2, \"velvet-glove-astro: missing tool executable\\n\");\n  process.exit(2);\n}\nconst arguments = process.argv.slice(2);\nif (arguments[0] !== \"check\") {\n  writeSync(2, \"velvet-glove-astro: missing check command\\n\");\n  process.exit(2);\n}\nconst controlledOptions = [\n  \"--help\",\n  \"--version\",\n  \"--verbose\",\n  \"--no-verbose\",\n  \"--watch\",\n  \"--no-watch\",\n  \"--silent\",\n  \"--no-silent\",\n  \"--root\",\n  \"--sync\",\n  \"--nosync\",\n  \"--no-sync\",\n  \"--minimumseverity\",\n  \"--minimum-severity\",\n  \"--minimumfailingseverity\",\n  \"--minimum-failing-severity\"\n];\nconst unsupported = arguments.slice(1).find((argument) => {\n  const lowered = argument.toLowerCase();\n  const short = lowered.startsWith(\"-\") && !lowered.startsWith(\"--\");\n  return argument === \"--\" ||\n    (short && (lowered.includes(\"v\") || lowered.includes(\"w\"))) ||\n    controlledOptions.some((option) => lowered === option || lowered.startsWith(`${option}=`));\n});\nif (unsupported) {\n  writeSync(2, `velvet-glove-astro: unsupported argument ${JSON.stringify(unsupported)} would bypass controlled project validation\\n`);\n  process.exit(2);\n}\nconst environment = {\n  ...process.env,\n  ASTRO_TELEMETRY_DISABLED: \"1\",\n  CI: \"1\",\n  CLICOLOR: \"0\",\n  FORCE_COLOR: \"0\",\n  NO_COLOR: \"1\"\n};\ndelete environment.DEBUG;\nconst fixed = [\n  \"--silent\",\n  \"--noSync\",\n  \"--no-watch\",\n  \"--root\",\n  \".\",\n  \"--minimumSeverity=error\",\n  \"--minimumFailingSeverity=error\"\n];\nconst maxBufferBytes = 16 * 1024 * 1024;\nconst child = spawnSync(tool, [...arguments, ...fixed], {\n  encoding: \"utf8\",\n  env: environment,\n  maxBuffer: maxBufferBytes\n});\nconst ansi = /\\u001b\\[[0-?]*[ -/]*[@-~]/g;\nconst stdout = (child.stdout || \"\").replace(ansi, \"\");\nconst stderr = (child.stderr || \"\").replace(ansi, \"\");\nif (stdout) writeSync(1, stdout);\nif (stderr) writeSync(2, stderr);\nif (child.error) {\n  writeSync(2, `velvet-glove-astro: ${child.error.message}\\n`);\n  process.exit(2);\n}\nconst footer = /(?:^|\\n)Result \\(([1-9][0-9]*) files?\\):[ \\t]*\\n- ([0-9]+) errors?$/.exec(`${stdout}\\n${stderr}`.trimEnd());\nconst errors = footer ? Number(footer[2]) : -1;\nif (child.status === 0 && footer && errors === 0) process.exit(0);\nif (child.status === 1 && footer && errors > 0) process.exit(1);\nprocess.exit(2);",
+                    "--",
+                    {
+                      "type": "ToolExecutable"
+                    },
                     "check",
                     {
                       "type": "ExtraArgs"
-                    },
-                    {
-                      "type": "Files"
                     }
                   ],
                   "exitCodes": {
@@ -1248,7 +1267,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -1258,7 +1279,8 @@
               ],
               "capabilities": [
                 "checker",
-                "batch"
+                "workspace-scoped",
+                "workspace-invocation"
               ],
               "requiredCases": [
                 "command-coverage",
@@ -1266,26 +1288,39 @@
                 "source-issue",
                 "operational-failure",
                 "no-mutation",
+                "workspace-scope",
                 "multi-file",
-                "batch-attribution"
+                "workspace-attribution"
               ]
             }
           ]
         }
       },
-      "fixtureCases": [],
+      "fixtureCases": [
+        "clean",
+        "type-error",
+        "multi-file-project",
+        "operational-failure"
+      ],
       "dependencies": {
         "provisioningGroup": "node",
         "primaryExecutable": "astro",
-        "programOverrides": [],
+        "programOverrides": [
+          "node"
+        ],
         "wrapperExecutables": []
       },
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 13
+          "status": "recorded",
+          "url": "https://github.com/withastro/astro/releases/tag/astro%407.2.0",
+          "version": "7.2.0",
+          "installationSource": "exact npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+          "versionCommand": [
+            "astro",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -1317,7 +1352,7 @@
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -1330,19 +1365,22 @@
             "source-issue",
             "operational-failure",
             "no-mutation",
+            "workspace-scope",
             "multi-file",
-            "batch-attribution"
+            "workspace-attribution"
           ],
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No probe-backed immediate rendered-command contract is recorded for this target.",
-          "trackingIssue": 7
+          "references": [
+            "cargo:test/run_all_tool_fixtures[astro/immediate-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -1355,19 +1393,30 @@
             "source-issue",
             "operational-failure",
             "no-mutation",
+            "workspace-scope",
             "multi-file",
-            "batch-attribution"
+            "workspace-attribution"
           ],
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 13
+          "references": [
+            "recipe:astro-macos-arm64",
+            "artifact:clean/pinned-environment.json#astro-7.2.0",
+            "artifact:clean/fixtures/report.json#astro/clean/immediate",
+            "artifact:type-error/pinned-environment.json#astro-7.2.0",
+            "artifact:type-error/fixtures/report.json#astro/type-error/immediate",
+            "artifact:multi-file-project/pinned-environment.json#astro-7.2.0",
+            "artifact:multi-file-project/fixtures/report.json#astro/multi-file-project/immediate",
+            "artifact:operational-failure/pinned-environment.json#astro-7.2.0",
+            "artifact:operational-failure/fixtures/report.json#astro/operational-failure/immediate"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -1380,19 +1429,22 @@
             "source-issue",
             "operational-failure",
             "no-mutation",
+            "workspace-scope",
             "multi-file",
-            "batch-attribution"
+            "workspace-attribution"
           ],
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No probe-backed deferred rendered-command contract is recorded for this target.",
-          "trackingIssue": 8
+          "references": [
+            "cargo:test/run_all_tool_fixtures[astro/compatibility-deferred-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -1405,15 +1457,26 @@
             "source-issue",
             "operational-failure",
             "no-mutation",
+            "workspace-scope",
             "multi-file",
-            "batch-attribution"
+            "workspace-attribution"
           ],
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 13
+          "references": [
+            "recipe:astro-macos-arm64",
+            "artifact:clean/pinned-environment.json#astro-7.2.0",
+            "artifact:clean/fixtures/report.json#astro/clean/deferred",
+            "artifact:type-error/pinned-environment.json#astro-7.2.0",
+            "artifact:type-error/fixtures/report.json#astro/type-error/deferred",
+            "artifact:multi-file-project/pinned-environment.json#astro-7.2.0",
+            "artifact:multi-file-project/fixtures/report.json#astro/multi-file-project/deferred",
+            "artifact:operational-failure/pinned-environment.json#astro-7.2.0",
+            "artifact:operational-failure/fixtures/report.json#astro/operational-failure/deferred"
+          ],
+          "reason": null,
+          "trackingIssue": null
         }
       ],
       "exceptions": []
@@ -2443,7 +2506,10 @@
           "url": "https://github.com/psf/black",
           "version": "26.5.1",
           "installationSource": "Python wheel closure with SHA-256 hashes in validation/provisioning/python/requirements-macos-arm64.txt",
-          "versionCommand": ["black", "--version"]
+          "versionCommand": [
+            "black",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -14077,7 +14143,10 @@
           "url": "https://go.dev/",
           "version": "go1.26.3",
           "installationSource": "gofmt in the Go 1.26.3 archive pinned by validation/provisioning/mise.lock",
-          "versionCommand": ["go", "version"]
+          "versionCommand": [
+            "go",
+            "version"
+          ]
         }
       },
       "constraints": {
@@ -19549,7 +19618,10 @@
           "url": "https://github.com/jqlang/jq/releases/tag/jq-1.8.2",
           "version": "1.8.2",
           "installationSource": "jqlang/jq 1.8.2 macOS arm64 release asset locked by SHA-256 with GitHub SLSA provenance",
-          "versionCommand": ["jq", "--version"]
+          "versionCommand": [
+            "jq",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -31797,7 +31869,12 @@
           "url": "https://github.com/rubocop/rubocop",
           "version": "1.30.1",
           "installationSource": "Pure-Ruby Bundler graph with package checksums plus runtime gems from the SHA-256-pinned Ruby archive",
-          "versionCommand": ["bundle", "exec", "rubocop", "--version"]
+          "versionCommand": [
+            "bundle",
+            "exec",
+            "rubocop",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -33684,7 +33761,10 @@
           "url": "https://github.com/rust-lang/rustfmt",
           "version": "rustfmt 1.8.0 (Rust 1.90.0)",
           "installationSource": "official dated Rust 1.90.0 rustfmt archive pinned by SHA-256 in validation/provisioning/recipes.json",
-          "versionCommand": ["rustfmt", "--version"]
+          "versionCommand": [
+            "rustfmt",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -35778,7 +35858,10 @@
           "url": "https://github.com/keithamus/sort-package-json",
           "version": "3.6.1",
           "installationSource": "npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
-          "versionCommand": ["sort-package-json", "--version"]
+          "versionCommand": [
+            "sort-package-json",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -38599,7 +38682,10 @@
           "url": "https://github.com/realm/SwiftLint",
           "version": "0.65.0",
           "installationSource": "SwiftLint release archive pinned by validation/provisioning/mise.lock",
-          "versionCommand": ["swiftlint", "version"]
+          "versionCommand": [
+            "swiftlint",
+            "version"
+          ]
         }
       },
       "constraints": {

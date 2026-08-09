@@ -135,12 +135,13 @@ just validate-plugins
 # Complete local pre-PR check, including the plugin checks above.
 just check
 
-# Exact selected real-tool contract (macOS 26+, Apple developer tools,
+# Exact selected real-tool contracts (macOS 26+, Apple developer tools,
 # Apple silicon, mise 2026.5.15).
 just tool-case jq multi-file-fragments
+just tool-case astro multi-file-project
 
-# Eight behavior-rich contracts across data formats, Node, Python, Go, Rust,
-# Ruby, and native macOS.
+# Nine behavior-rich contracts across seven environments: data formats, Node,
+# Python, Go, Rust, Ruby, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -162,6 +163,16 @@ whitespace-separated top-level values rather than requiring exactly one JSON
 document. The exact artifact URLs, SHA-256 digests, status mapping, and
 provenance identity are in the
 [pinned environment guide](docs/pinned-tool-environments.md#jq-validation-contract).
+
+The Node lane also pins Astro 7.2.0, `@astrojs/check` 0.9.10, and TypeScript
+6.0.3. Its evaluated adapter performs one error-only check for the whole
+workspace, requires Astro's positive-file `Result` footer before accepting
+status zero or one, and treats an incomplete or configuration-failed check as
+an operational failure. The representative proves project scope with two clean
+selected files and an unselected failing third file. Exact provenance,
+integrities, repeat and no-mutation evidence, and the conservative attribution
+and side-effect limitations are in the
+[Astro contract](docs/pinned-tool-environments.md#astro-validation-contract).
 
 The Ruby lane also pins the dependency-free Asciidoctor 2.0.26 gem by SHA-256.
 Its checked command runs in safe mode through a small Ruby preflight adapter:
