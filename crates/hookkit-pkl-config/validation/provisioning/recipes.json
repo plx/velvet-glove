@@ -271,6 +271,72 @@
       ]
     },
     {
+      "id": "macos-arm64-prettier",
+      "provisioningGroup": "prettier",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "prettier-node",
+          "version": "24.19.0",
+          "installationSource": "official Node.js v24.19.0 Darwin arm64 release archive locked by the SHA-256 published in the release SHASUMS256.txt",
+          "integrity": {
+            "kind": "sha256-archive",
+            "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz",
+            "sha256": "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d",
+            "archiveFormat": "tar-gz",
+            "archiveRoot": "node-v24.19.0-darwin-arm64",
+            "minOsVersion": "11.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["prettier-node", "--version"],
+            "match": "exact",
+            "expected": "v24.19.0"
+          }
+        },
+        {
+          "id": "prettier-npm",
+          "version": "11.17.0",
+          "installationSource": "npm CLI bundled in the checksum-pinned official Node.js v24.19.0 Darwin arm64 archive",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "prettier-node"
+          },
+          "probe": {
+            "argv": ["prettier-npm", "--version"],
+            "match": "exact",
+            "expected": "11.17.0"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["prettier-node", "prettier-npm"],
+      "bootstrap": [
+        {
+          "id": "prettier-npm-ci",
+          "argv": [
+            "{state}/prettier-environment-node-24.19.0-prettier-3.9.6/node/bin/node",
+            "{state}/prettier-environment-node-24.19.0-prettier-3.9.6/node/lib/node_modules/npm/bin/npm-cli.js",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--prefix",
+            "{state}/prettier-environment-node-24.19.0-prettier-3.9.6/package"
+          ],
+          "environment": {
+            "NPM_CONFIG_USERCONFIG": "/dev/null",
+            "NPM_CONFIG_GLOBALCONFIG": "{home}/npm-globalconfig"
+          },
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/prettier/package-lock.json"
+        }
+      ]
+    },
+    {
       "id": "macos-arm64-python",
       "provisioningGroup": "python",
       "platform": "macos",
@@ -959,6 +1025,25 @@
       },
       "caseExecutables": ["biome", "node", "python"],
       "cases": ["clean", "autofix", "source-issue", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
+    },
+    {
+      "id": "prettier-macos-arm64",
+      "toolId": "prettier",
+      "environmentId": "macos-arm64-prettier",
+      "version": "3.9.6",
+      "installationSource": "Prettier 3.9.6 from the exact one-package npm dependency graph with registry SHA-512 integrity in validation/provisioning/prettier/package-lock.json, executed only by the checksum-pinned Node.js 24.19.0 runtime",
+      "integrity": {
+        "kind": "npm-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/prettier/package-lock.json"
+      },
+      "probe": {
+        "argv": ["prettier", "--version"],
+        "match": "exact",
+        "expected": "3.9.6"
+      },
+      "caseExecutables": ["node", "prettier", "python"],
+      "cases": ["clean", "unformatted", "multi-file", "config-failure"],
       "representativeCase": "multi-file"
     },
     {

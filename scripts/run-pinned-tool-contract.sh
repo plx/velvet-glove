@@ -70,6 +70,7 @@ artifact_dir=$(CDPATH='' cd -- "$artifact_dir" && pwd -P)
 run_home=$(mktemp -d "/private/tmp/velvet-glove-pinned.XXXXXX")
 rust_extract_dir=
 clippy_extract_dir=
+prettier_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
 cleanup() {
@@ -81,6 +82,9 @@ cleanup() {
   esac
   case $clippy_extract_dir in
     "$state_dir"/clippy-extract.*) rm -rf -- "$clippy_extract_dir" ;;
+  esac
+  case $prettier_extract_dir in
+    "$state_dir"/prettier-extract.*) rm -rf -- "$prettier_extract_dir" ;;
   esac
   case $ruby_extract_dir in
     "$state_dir"/ruby-extract.*) rm -rf -- "$ruby_extract_dir" ;;
@@ -470,6 +474,110 @@ if needs_group node; then
   cp "$provisioning_dir/node/package.json" "$state_dir/node/package.json"
   cp "$provisioning_dir/node/package-lock.json" "$state_dir/node/package-lock.json"
   provision_exec npm ci --ignore-scripts --prefix "$state_dir/node"
+fi
+
+prettier_root="$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6"
+if needs_group prettier; then
+  prettier_node_archive=$(fetch_component_archive prettier-node)
+  prettier_node_identity=$(component_integrity_json prettier-node)
+  prettier_npm_identity=$(component_integrity_json prettier-npm)
+  prettier_package_json="$provisioning_dir/prettier/package.json"
+  prettier_package_lock="$provisioning_dir/prettier/package-lock.json"
+  prettier_npm_global_config="$run_home/npm-globalconfig"
+  : >"$prettier_npm_global_config"
+  read -r prettier_package_sha256 _ < <(/usr/bin/shasum -a 256 "$prettier_package_json")
+  read -r prettier_lock_sha256 _ < <(/usr/bin/shasum -a 256 "$prettier_package_lock")
+  prettier_identity=$("$jq_bin" -cn \
+    --argjson node "$prettier_node_identity" \
+    --argjson npm "$prettier_npm_identity" \
+    --arg packageSha256 "$prettier_package_sha256" \
+    --arg packageLockSha256 "$prettier_lock_sha256" \
+    '{node: $node, npm: $npm, prettier: {version: "3.9.6", packageSha256: $packageSha256, packageLockSha256: $packageLockSha256}}')
+  if [[ -e $prettier_root && ! -d $prettier_root ]]; then
+    echo "error: controlled Prettier environment root is not a directory: $prettier_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $prettier_root ]]; then
+    echo "==> Installing the checksum-verified Node 24.19.0 and npm integrity-locked Prettier 3.9.6 closure"
+    prettier_extract_dir=$(mktemp -d "$state_dir/prettier-extract.XXXXXX")
+    prettier_install_root="$prettier_extract_dir/install"
+    mkdir -p "$prettier_install_root/package"
+    /usr/bin/tar -xf "$prettier_node_archive" -C "$prettier_extract_dir"
+    prettier_archive_root=$(printf '%s\n' "$prettier_node_identity" | \
+      "$jq_bin" -r '.integrity.archiveRoot')
+    mv "$prettier_extract_dir/$prettier_archive_root" "$prettier_install_root/node"
+    cp "$prettier_package_json" "$prettier_install_root/package/package.json"
+    cp "$prettier_package_lock" "$prettier_install_root/package/package-lock.json"
+    env -i "${provisioning_env[@]}" \
+      "NPM_CONFIG_USERCONFIG=/dev/null" \
+      "NPM_CONFIG_GLOBALCONFIG=$prettier_npm_global_config" \
+      "NPM_CONFIG_CACHE=$state_dir/npm-cache/prettier-3.9.6" \
+      "$prettier_install_root/node/bin/node" \
+      "$prettier_install_root/node/lib/node_modules/npm/bin/npm-cli.js" \
+      ci --ignore-scripts --no-audit --no-fund --prefix "$prettier_install_root/package"
+    read -r observed_prettier_package_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$prettier_install_root/package/package.json"
+    )
+    read -r observed_prettier_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$prettier_install_root/package/package-lock.json"
+    )
+    if [[ $observed_prettier_package_sha256 != "$prettier_package_sha256" || \
+      $observed_prettier_lock_sha256 != "$prettier_lock_sha256" ]]; then
+      echo "error: npm ci changed the exact Prettier package manifest or lock" >&2
+      exit 1
+    fi
+    printf '%s\n' "$prettier_identity" >"$prettier_install_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$prettier_install_root/node" prettier-node
+    mv "$prettier_install_root" "$prettier_root"
+    rm -rf -- "$prettier_extract_dir"
+    prettier_extract_dir=
+  fi
+  prettier_node="$prettier_root/node/bin/node"
+  prettier_npm_cli="$prettier_root/node/lib/node_modules/npm/bin/npm-cli.js"
+  prettier_cli="$prettier_root/package/node_modules/prettier/bin/prettier.cjs"
+  if [[ ! -x $prettier_node || ! -f $prettier_npm_cli || ! -f $prettier_cli ]]; then
+    echo "error: controlled Prettier environment is incomplete: $prettier_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $prettier_root/.velvet-glove-artifacts.json ]] || \
+    [[ $(<"$prettier_root/.velvet-glove-artifacts.json") != "$prettier_identity" ]]; then
+    echo "error: controlled Prettier environment does not match the declared Node archive and npm lock: $prettier_root" >&2
+    exit 1
+  fi
+  read -r observed_prettier_package_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$prettier_root/package/package.json"
+  )
+  read -r observed_prettier_lock_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$prettier_root/package/package-lock.json"
+  )
+  if [[ $observed_prettier_package_sha256 != "$prettier_package_sha256" || \
+    $observed_prettier_lock_sha256 != "$prettier_lock_sha256" ]]; then
+    echo "error: controlled Prettier environment manifest or lock digest drifted" >&2
+    exit 1
+  fi
+  if [[ $(find "$prettier_root/package/node_modules" -mindepth 1 -maxdepth 1 -type d ! -name .bin -print | LC_ALL=C sort) != \
+    "$prettier_root/package/node_modules/prettier" ]]; then
+    echo "error: controlled Prettier npm graph is not the declared one-package closure" >&2
+    exit 1
+  fi
+  if [[ $(readlink "$prettier_root/package/node_modules/.bin/prettier") != \
+    "../prettier/bin/prettier.cjs" ]]; then
+    echo "error: controlled Prettier npm bin link escapes the declared package" >&2
+    exit 1
+  fi
+  verify_macho_closure "$prettier_root/node" prettier-node
+  if [[ $(env -i "${provisioning_env[@]}" "$prettier_node" --version) != "v24.19.0" ]]; then
+    echo "error: controlled Prettier Node runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$prettier_node" "$prettier_npm_cli" --version) != "11.17.0" ]]; then
+    echo "error: controlled Prettier npm runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$prettier_node" "$prettier_cli" --version) != "3.9.6" ]]; then
+    echo "error: controlled Prettier CLI failed its exact version probe" >&2
+    exit 1
+  fi
 fi
 
 if needs_group python; then

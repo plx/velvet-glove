@@ -404,6 +404,72 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         groups.insert(environment.provisioning_group.as_str());
         environments.insert(environment.id.as_str(), environment);
     }
+    let shared_node_environment = environments
+        .get("macos-arm64-node")
+        .expect("shared Node environment");
+    assert_eq!(
+        shared_node_environment
+            .components
+            .iter()
+            .find(|component| component.id == "node")
+            .expect("shared Node component")
+            .version,
+        "24.18.0",
+        "Prettier provisioning must not churn the shared Node closure"
+    );
+    let prettier_environment = environments
+        .get("macos-arm64-prettier")
+        .expect("dedicated Prettier environment");
+    assert_eq!(prettier_environment.provisioning_group, "prettier");
+    assert_eq!(
+        prettier_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["prettier-node", "prettier-npm"])
+    );
+    assert_eq!(
+        prettier_environment
+            .auxiliary_programs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["prettier-node", "prettier-npm"])
+    );
+    let prettier_bootstrap = prettier_environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "prettier-npm-ci")
+        .expect("dedicated Prettier npm bootstrap");
+    assert_eq!(prettier_bootstrap.network, "required");
+    assert_eq!(
+        prettier_bootstrap.lockfile.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/prettier/package-lock.json")
+    );
+    assert_eq!(
+        prettier_bootstrap.argv,
+        [
+            "{state}/prettier-environment-node-24.19.0-prettier-3.9.6/node/bin/node",
+            "{state}/prettier-environment-node-24.19.0-prettier-3.9.6/node/lib/node_modules/npm/bin/npm-cli.js",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--prefix",
+            "{state}/prettier-environment-node-24.19.0-prettier-3.9.6/package",
+        ]
+    );
+    assert_eq!(
+        prettier_bootstrap.environment,
+        BTreeMap::from([
+            (
+                "NPM_CONFIG_GLOBALCONFIG".to_owned(),
+                "{home}/npm-globalconfig".to_owned()
+            ),
+            ("NPM_CONFIG_USERCONFIG".to_owned(), "/dev/null".to_owned()),
+        ])
+    );
     let mise_lock = std::fs::read_to_string(root.join(&registry.mise.lock)).expect("mise lock");
     for component in registry.shared_components.iter().chain(
         registry
@@ -420,6 +486,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "data-formats",
             "go",
             "node",
+            "prettier",
             "python",
             "ruby",
             "rust",
@@ -522,6 +589,37 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
                 "sha512-vxo/Ls3/PYdQWyLhYYcgMOCzQypAjcY+iihS8M0wW03l16TCLW4zqZzGo75gm1VdCMj38hTVZ31KBWrZ4G9dJw==",
             );
         }
+        if recipe.tool_id == "prettier" {
+            validate_npm_lock_package(
+                &root,
+                &recipe.integrity,
+                "prettier",
+                &recipe.version,
+                "sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g==",
+            );
+            let lock_path = recipe.integrity.path.as_deref().expect("Prettier npm lock");
+            let lock: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join(lock_path)).expect("read Prettier npm lock"),
+            )
+            .expect("parse Prettier npm lock");
+            assert_eq!(
+                lock["packages"]
+                    .as_object()
+                    .expect("Prettier packages")
+                    .len(),
+                2,
+                "Prettier closure must contain only its root and one package"
+            );
+            let package: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join(
+                    "crates/hookkit-pkl-config/validation/provisioning/prettier/package.json",
+                ))
+                .expect("read Prettier package manifest"),
+            )
+            .expect("parse Prettier package manifest");
+            assert_eq!(package["engines"]["node"], "24.19.0");
+            assert_eq!(package["dependencies"]["prettier"], "3.9.6");
+        }
         match &tool.provenance.upstream {
             UpstreamProvenance::Recorded {
                 version,
@@ -559,6 +657,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-fmt",
             "go-fmt",
             "jq",
+            "prettier",
             "rubocop",
             "rustfmt",
             "sort-package-json",
@@ -615,6 +714,59 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-fmt closure omits {required}"
         );
     }
+}
+
+#[test]
+fn prettier_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    let harness = std::fs::read_to_string(root.join("crates/velvet-glove/tests/tool_fixtures.rs"))
+        .expect("real-tool fixture harness");
+    let mise_lock = std::fs::read_to_string(
+        root.join("crates/hookkit-pkl-config/validation/provisioning/mise.lock"),
+    )
+    .expect("shared mise lock");
+
+    assert!(outer.contains("fetch_component_archive prettier-node"));
+    assert!(
+        outer.contains(
+            "prettier_root=\"$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6\""
+        )
+    );
+    assert!(outer.contains("\"$prettier_install_root/node/bin/node\" \\"));
+    assert!(
+        outer.contains("\"$prettier_install_root/node/lib/node_modules/npm/bin/npm-cli.js\" \\")
+    );
+    assert!(outer.contains("ci --ignore-scripts --no-audit --no-fund"));
+    assert!(outer.contains("verify_macho_closure \"$prettier_root/node\" prettier-node"));
+    assert!(inner.contains(
+        "export VELVET_GLOVE_FIXTURE_PRETTIER_ROOT=\"$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6\""
+    ));
+    assert!(inner.contains("prettier_node=\"$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/node/bin/node\""));
+    assert!(inner.contains(
+        "prettier_cli=\"$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/package/node_modules/prettier/bin/prettier.cjs\""
+    ));
+    let path_export = inner
+        .lines()
+        .find(|line| line.starts_with("export PATH="))
+        .expect("controlled PATH export");
+    assert!(
+        !path_export.contains("prettier-environment"),
+        "dedicated Node must not leak into the shared representative PATH"
+    );
+    assert!(
+        harness.contains("const PRETTIER_ROOT_ENV: &str = \"VELVET_GLOVE_FIXTURE_PRETTIER_ROOT\";")
+    );
+    assert!(harness.contains("\"node\" if prettier_toolchain.is_some()"));
+    assert!(harness.contains("expected.arguments.first().map(PathBuf::from)"));
+    assert!(mise_lock.contains("version = \"24.18.0\""));
+    assert!(
+        !mise_lock.contains("24.19.0"),
+        "dedicated Prettier Node must not alter the shared mise graph"
+    );
 }
 
 fn validate_components<'a>(
@@ -1073,6 +1225,21 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                         ]
                     );
                 }
+                "prettier-node" => {
+                    assert_eq!(component.version, "24.19.0");
+                    assert_eq!(
+                        component.integrity.url.as_deref(),
+                        Some("https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz")
+                    );
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d")
+                    );
+                    assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
+                    assert!(component.runtime_component_ids.is_empty());
+                    assert_eq!(component.probe.argv, ["prettier-node", "--version"]);
+                    assert_eq!(component.probe.expected, "v24.19.0");
+                }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");
                     assert_eq!(
@@ -1184,6 +1351,15 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                         Some("cargo-clippy-toolchain")
                     );
                     assert_eq!(component.version, "0.1.97");
+                }
+                "prettier-npm" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("prettier-node")
+                    );
+                    assert_eq!(component.version, "11.17.0");
+                    assert_eq!(component.probe.argv, ["prettier-npm", "--version"]);
+                    assert_eq!(component.probe.expected, "11.17.0");
                 }
                 other => panic!("unexpected runtime-bundled component {other}"),
             }
