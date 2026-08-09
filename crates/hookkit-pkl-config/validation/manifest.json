@@ -8098,106 +8098,26 @@
     },
     {
       "builtin": "contextlint",
-      "id": "contextlint",
-      "specPath": "crates/hookkit-pkl-config/src/builtins/tools/contextlint.pkl",
-      "trackingIssue": 19,
-      "support": "enabled",
-      "surfaces": {
-        "immediate": "supported",
-        "deferred": "compatibility"
+      "constraints": {
+        "architectures": [
+          "x86-64",
+          "aarch64"
+        ],
+        "caseNetwork": "denied",
+        "platforms": [
+          "linux",
+          "macos"
+        ]
       },
       "contracts": {
-        "immediate": {
-          "capabilities": [
-            "checker",
-            "workspace-scoped",
-            "batch"
-          ],
-          "requiredCases": [
-            "command-coverage",
-            "immediate-phase-order",
-            "clean",
-            "source-issue",
-            "operational-failure",
-            "no-mutation",
-            "workspace-scope",
-            "multi-file",
-            "batch-attribution",
-            "workspace-attribution"
-          ],
-          "orchestrationCases": [
-            "immediate-phase-order"
-          ],
-          "targets": [
-            {
-              "id": "pipeline",
-              "kind": "immediate-pipeline",
-              "order": 0,
-              "invocation": "batch",
-              "checkScope": null,
-              "workingDirectory": "workspace",
-              "workspaceIndicator": "contextlint.config.json",
-              "fileIncludes": [
-                "**/*.markdown",
-                "**/*.md",
-                "*.markdown",
-                "*.md"
-              ],
-              "fileExcludes": [],
-              "commands": [
-                {
-                  "id": "verify",
-                  "role": "phase",
-                  "mode": "verify",
-                  "reusesImmediatePhase": null,
-                  "program": "contextlint",
-                  "argv": [
-                    {
-                      "type": "ExtraArgs"
-                    },
-                    {
-                      "type": "Files"
-                    }
-                  ],
-                  "exitCodes": {
-                    "clean": [
-                      0
-                    ],
-                    "issues": [
-                      1
-                    ],
-                    "failure": [],
-                    "unexpected": "failure"
-                  },
-                  "issuesOnStdout": false,
-                  "writes": "none",
-                  "extraArgs": []
-                }
-              ],
-              "capabilities": [
-                "checker",
-                "workspace-scoped",
-                "batch"
-              ],
-              "requiredCases": [
-                "command-coverage",
-                "clean",
-                "source-issue",
-                "operational-failure",
-                "no-mutation",
-                "workspace-scope",
-                "multi-file",
-                "batch-attribution",
-                "workspace-attribution"
-              ]
-            }
-          ]
-        },
         "deferred": {
           "capabilities": [
             "checker",
             "workspace-scoped",
-            "batch"
+            "workspace-invocation"
+          ],
+          "orchestrationCases": [
+            "deferred-lifecycle"
           ],
           "requiredCases": [
             "command-coverage",
@@ -8208,39 +8128,33 @@
             "no-mutation",
             "workspace-scope",
             "multi-file",
-            "batch-attribution",
             "workspace-attribution"
-          ],
-          "orchestrationCases": [
-            "deferred-lifecycle"
           ],
           "targets": [
             {
-              "id": "verify",
-              "kind": "compatibility-workflow",
-              "order": 0,
-              "invocation": "batch",
-              "checkScope": "workspace",
-              "workingDirectory": "workspace",
-              "workspaceIndicator": "contextlint.config.json",
-              "fileIncludes": [
-                "**/*.markdown",
-                "**/*.md",
-                "*.markdown",
-                "*.md"
+              "capabilities": [
+                "checker",
+                "workspace-scoped",
+                "workspace-invocation"
               ],
-              "fileExcludes": [],
+              "checkScope": "workspace",
               "commands": [
                 {
-                  "id": "verify",
-                  "role": "workflow-check",
-                  "mode": "verify",
-                  "reusesImmediatePhase": "verify",
-                  "program": "contextlint",
                   "argv": [
+                    "-I",
+                    "-c",
+                    "import hashlib\nimport json\nimport os\nimport re\nimport selectors\nimport shutil\nimport signal\nimport stat\nimport subprocess\nimport sys\nimport tempfile\nimport time\n\nMARKER = \"__VELVET_GLOVE_CONTEXTLINT_FILES__\"\nVERSION = \"1.1.1\"\nMAX_CONFIG_BYTES = 1024 * 1024\nMAX_FILE_BYTES = 16 * 1024 * 1024\nMAX_TOTAL_BYTES = 64 * 1024 * 1024\nMAX_FILES = 4096\nMAX_ENTRIES = 100000\nMAX_OUTPUT_BYTES = 16 * 1024 * 1024\nEXCLUDED_DIRECTORIES = frozenset((\".git\", \"node_modules\", \".velvet-glove\"))\n# glob 13.0.6 expands braces before minimatch 10.2.6 parses a pattern.\n# This is minimatch.escape(..., magicalBraces=True)'s POSIX magic set.\nGLOB_MAGIC = frozenset(\"*?()[]{}\\\\\")\nRULES = frozenset((\n    \"tbl001\", \"tbl002\", \"tbl003\", \"tbl004\", \"tbl005\", \"tbl006\",\n    \"sec001\", \"sec002\", \"str001\",\n    \"ref001\", \"ref002\", \"ref003\", \"ref004\", \"ref005\", \"ref006\",\n    \"chk001\", \"ctx001\", \"ctx002\", \"grp001\", \"grp002\", \"grp003\",\n))\nPROBE_CONFIG = (\n    b'{\"rules\":[{\"rule\":\"sec001\",\"options\":{\"sections\":'\n    b'[\"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"]}}]}\\n'\n)\nPROBE_DOCUMENT = b\"# Probe\\n\"\nPROBE_REPORT = [{\n    \"file\": \"probe.md\",\n    \"line\": 0,\n    \"severity\": \"error\",\n    \"message\": 'Missing required section \"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"',\n    \"ruleId\": \"SEC-001\",\n}]\n\n\nclass AdapterFailure(Exception):\n    pass\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef reject(message):\n    raise AdapterFailure(message)\n\n\ndef reject_glob_magic_path(path, description):\n    absolute = os.path.abspath(path)\n    for component in absolute.split(os.sep):\n        magic = \"\".join(sorted(set(component).intersection(GLOB_MAGIC)))\n        if magic:\n            reject(\n                f\"{description} contains Contextlint glob magic {magic!r}: {path}\"\n            )\n\n\ndef duplicate_safe_object(pairs):\n    value = {}\n    for key, item in pairs:\n        if key in value:\n            reject(f\"configuration contains duplicate key {key!r}\")\n        value[key] = item\n    return value\n\n\ndef read_bounded(path, limit, description):\n    flags = os.O_RDONLY\n    if hasattr(os, \"O_NOFOLLOW\"):\n        flags |= os.O_NOFOLLOW\n    try:\n        before = os.lstat(path)\n        if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):\n            reject(f\"{description} is not a regular file: {path}\")\n        if before.st_nlink != 1:\n            reject(f\"{description} must have exactly one hard link: {path}\")\n        descriptor = os.open(path, flags)\n        try:\n            opened = os.fstat(descriptor)\n            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):\n                reject(f\"{description} changed while opening: {path}\")\n            chunks = []\n            total = 0\n            while True:\n                chunk = os.read(descriptor, min(65536, limit + 1 - total))\n                if not chunk:\n                    break\n                chunks.append(chunk)\n                total += len(chunk)\n                if total > limit:\n                    reject(f\"{description} exceeds {limit} bytes: {path}\")\n        finally:\n            os.close(descriptor)\n    except AdapterFailure:\n        raise\n    except OSError as error:\n        reject(f\"cannot read {description} {path}: {error}\")\n    data = b\"\".join(chunks)\n    identity = (\n        before.st_dev,\n        before.st_ino,\n        before.st_mode,\n        before.st_nlink,\n        before.st_size,\n        before.st_mtime_ns,\n        hashlib.sha256(data).hexdigest(),\n    )\n    return data, identity\n\n\ndef parse_json_bytes(data, description):\n    try:\n        text = data.decode(\"utf-8\")\n        return json.loads(text, object_pairs_hook=duplicate_safe_object)\n    except AdapterFailure:\n        raise\n    except (UnicodeError, json.JSONDecodeError) as error:\n        reject(f\"invalid UTF-8 JSON in {description}: {error}\")\n\n\ndef resolve_program(name, description):\n    if not name or \"\\x00\" in name:\n        reject(f\"invalid {description} name\")\n    candidate = shutil.which(name)\n    if candidate is None:\n        reject(f\"cannot resolve {description} {name!r}\")\n    absolute = os.path.abspath(candidate)\n    try:\n        metadata = os.stat(absolute)\n    except OSError as error:\n        reject(f\"cannot inspect {description} {absolute}: {error}\")\n    if not stat.S_ISREG(metadata.st_mode) or not os.access(absolute, os.X_OK):\n        reject(f\"{description} is not an executable regular file: {absolute}\")\n    return absolute\n\n\ndef validate_package_graph(tool_program):\n    resolved = os.path.realpath(tool_program)\n    cursor = os.path.dirname(resolved)\n    graph = None\n    while True:\n        if os.path.basename(cursor) == \"node_modules\":\n            graph = cursor\n            break\n        parent = os.path.dirname(cursor)\n        if parent == cursor:\n            break\n        cursor = parent\n    if graph is None:\n        reject(f\"contextlint executable is outside a node_modules graph: {tool_program}\")\n    graph = os.path.realpath(graph)\n    cli_entry = os.path.realpath(\n        os.path.join(graph, \"@contextlint\", \"cli\", \"dist\", \"index.js\")\n    )\n    if resolved != cli_entry:\n        reject(\n            \"contextlint executable does not resolve to \"\n            f\"@contextlint/cli/dist/index.js: {tool_program}\"\n        )\n    cli_manifest_path = os.path.join(graph, \"@contextlint\", \"cli\", \"package.json\")\n    core_manifest_path = os.path.join(graph, \"@contextlint\", \"core\", \"package.json\")\n    cli_bytes, _ = read_bounded(cli_manifest_path, MAX_CONFIG_BYTES, \"CLI manifest\")\n    core_bytes, _ = read_bounded(core_manifest_path, MAX_CONFIG_BYTES, \"core manifest\")\n    cli = parse_json_bytes(cli_bytes, \"CLI manifest\")\n    core = parse_json_bytes(core_bytes, \"core manifest\")\n    cli_valid = (\n        isinstance(cli, dict)\n        and cli.get(\"name\") == \"@contextlint/cli\"\n        and cli.get(\"version\") == VERSION\n        and cli.get(\"type\") == \"module\"\n        and cli.get(\"bin\") == {\"contextlint\": \"dist/index.js\"}\n        and isinstance(cli.get(\"dependencies\"), dict)\n        and cli[\"dependencies\"].get(\"@contextlint/core\") == VERSION\n    )\n    core_valid = (\n        isinstance(core, dict)\n        and core.get(\"name\") == \"@contextlint/core\"\n        and core.get(\"version\") == VERSION\n        and core.get(\"type\") == \"module\"\n    )\n    if not cli_valid or not core_valid:\n        reject(f\"contextlint package graph is not the exact supported {VERSION} pair\")\n    return graph, cli_entry\n\n\ndef validate_config(config_bytes):\n    config = parse_json_bytes(config_bytes, \"contextlint.config.json\")\n    if not isinstance(config, dict):\n        reject(\"contextlint.config.json must contain a JSON object\")\n    rules = config.get(\"rules\")\n    if not isinstance(rules, list) or not rules:\n        reject(\"contextlint.config.json must declare at least one rule\")\n    for index, entry in enumerate(rules):\n        if not isinstance(entry, dict) or entry.get(\"rule\") not in RULES:\n            reject(f\"contextlint.config.json rules[{index}] is not a pinned built-in rule\")\n    return config\n\n\ndef inventory_workspace(workspace):\n    files = []\n    seen_inodes = set()\n    entries = 0\n    total_bytes = 0\n\n    def visit(directory):\n        nonlocal entries, total_bytes\n        try:\n            directory_metadata = os.lstat(directory)\n            if not stat.S_ISDIR(directory_metadata.st_mode) or stat.S_ISLNK(directory_metadata.st_mode):\n                reject(f\"workspace traversal encountered a non-directory: {directory}\")\n            children = sorted(os.scandir(directory), key=lambda item: item.name)\n        except AdapterFailure:\n            raise\n        except OSError as error:\n            reject(f\"cannot inventory workspace directory {directory}: {error}\")\n        for child in children:\n            entries += 1\n            if entries > MAX_ENTRIES:\n                reject(f\"workspace inventory exceeds {MAX_ENTRIES} entries\")\n            path = child.path\n            try:\n                metadata = child.stat(follow_symlinks=False)\n            except OSError as error:\n                reject(f\"cannot inspect workspace entry {path}: {error}\")\n            if stat.S_ISLNK(metadata.st_mode):\n                reject(f\"workspace inventory rejects symbolic links: {path}\")\n            if stat.S_ISDIR(metadata.st_mode):\n                if child.name in EXCLUDED_DIRECTORIES:\n                    continue\n                reject_glob_magic_path(path, \"workspace inventory path\")\n                visit(path)\n                continue\n            lowered = child.name.lower()\n            if not (lowered.endswith(\".md\") or lowered.endswith(\".markdown\")):\n                continue\n            reject_glob_magic_path(path, \"workspace inventory path\")\n            if not stat.S_ISREG(metadata.st_mode):\n                reject(f\"Markdown inventory entry is not a regular file: {path}\")\n            if metadata.st_nlink != 1:\n                reject(f\"Markdown inventory entry must have one hard link: {path}\")\n            inode = (metadata.st_dev, metadata.st_ino)\n            if inode in seen_inodes:\n                reject(f\"Markdown inventory contains a duplicate inode: {path}\")\n            seen_inodes.add(inode)\n            if len(files) >= MAX_FILES:\n                reject(f\"workspace inventory exceeds {MAX_FILES} Markdown files\")\n            data, identity = read_bounded(path, MAX_FILE_BYTES, \"Markdown file\")\n            total_bytes += len(data)\n            if total_bytes > MAX_TOTAL_BYTES:\n                reject(f\"workspace Markdown inventory exceeds {MAX_TOTAL_BYTES} bytes\")\n            files.append((os.path.realpath(path), identity))\n\n    visit(workspace)\n    files.sort(key=lambda item: item[0])\n    if not files:\n        reject(\"workspace contains no physical Markdown files\")\n    return files\n\n\nPRIVATE_ROOT_PREFIX = \"velvet-glove-contextlint-probe-\"\n\n\ndef normalize_private_error(error, root=None):\n    message = str(error)\n    if root is not None:\n        return message.replace(root, \"<private-probe>\")\n    if isinstance(error, OSError) and error.filename is not None:\n        candidate = os.path.abspath(os.fsdecode(error.filename))\n        parent = os.path.dirname(candidate)\n        if os.path.basename(candidate).startswith(PRIVATE_ROOT_PREFIX):\n            return message.replace(candidate, \"<private-probe>\")\n        if os.path.basename(parent).startswith(PRIVATE_ROOT_PREFIX):\n            return message.replace(parent, \"<private-probe>\")\n    return message\n\n\ndef create_private_run_root(workspace):\n    base = os.environ.get(\"TMPDIR\", \"/tmp\")\n    if not os.path.isabs(base):\n        reject(\"TMPDIR must be absolute\")\n    reject_glob_magic_path(base, \"TMPDIR\")\n    base = os.path.realpath(base)\n    reject_glob_magic_path(base, \"resolved TMPDIR\")\n    if not os.path.isdir(base):\n        reject(f\"TMPDIR is not a directory: {base}\")\n    try:\n        inside_workspace = os.path.commonpath((workspace, base)) == workspace\n    except ValueError:\n        inside_workspace = False\n    if inside_workspace:\n        reject(\"TMPDIR must resolve outside the Contextlint workspace\")\n    root = None\n    created = []\n    try:\n        root = tempfile.mkdtemp(prefix=PRIVATE_ROOT_PREFIX, dir=base)\n        created.append(root)\n        os.chmod(root, 0o700)\n        for name in (\"home\", \"tmp\", \"xdg-cache\"):\n            path = os.path.join(root, name)\n            os.mkdir(path, 0o700)\n            os.chmod(path, 0o700)\n            created.append(path)\n    except OSError as error:\n        for path in reversed(created):\n            try:\n                os.rmdir(path)\n            except OSError:\n                pass\n        reject(\n            \"cannot create private completion-probe root: \"\n            + normalize_private_error(error, root)\n        )\n    return root\n\n\ndef write_private_file(path, data):\n    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, \"O_CLOEXEC\", 0)\n    if hasattr(os, \"O_NOFOLLOW\"):\n        flags |= os.O_NOFOLLOW\n    descriptor = os.open(path, flags, 0o600)\n    try:\n        os.fchmod(descriptor, 0o600)\n        offset = 0\n        while offset < len(data):\n            offset += os.write(descriptor, data[offset:])\n        os.fsync(descriptor)\n    finally:\n        os.close(descriptor)\n\n\nprocess = None\npending_signal = None\nreported_signal = None\ncleaning = False\nactive_workspace = None\nprivate_run_root = None\nhandled_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef process_group_exists():\n    if process is None:\n        return False\n    try:\n        os.killpg(process.pid, 0)\n        return True\n    except ProcessLookupError:\n        return False\n    except PermissionError:\n        return True\n\n\ndef sweep_process_group():\n    if not process_group_exists():\n        return False\n    signal_group(signal.SIGKILL)\n    deadline = time.monotonic() + 1\n    while process_group_exists() and time.monotonic() < deadline:\n        time.sleep(0.01)\n    if process_group_exists():\n        raise AdapterFailure(\"cannot reap same-group descendants after child exit\")\n    return True\n\n\ndef stop_child(initial_signal=None):\n    global process, cleaning\n    child = process\n    if child is None:\n        return None\n    cleanup_error = None\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n        deadline = time.monotonic() + 1\n        while process_group_exists() and time.monotonic() < deadline:\n            time.sleep(0.01)\n        if process_group_exists():\n            cleanup_error = AdapterFailure(\n                \"cannot reap same-group descendants during child cleanup\"\n            )\n    finally:\n        process = None\n        cleaning = False\n    return cleanup_error\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\ndef append_adapter_error(primary, secondary):\n    if secondary is None:\n        return primary\n    if primary is None:\n        return secondary\n    return AdapterFailure(f\"{primary}; {secondary}\")\n\n\ndef apply_pending_signal(primary):\n    global reported_signal\n    if pending_signal is None or pending_signal == reported_signal:\n        return primary\n    reported_signal = pending_signal\n    return append_adapter_error(primary, AdapterSignal(pending_signal))\n\n\ndef drain_blocked_signals(primary):\n    global pending_signal\n    drained = False\n    while True:\n        queued = sorted(set(signal.sigpending()).intersection(handled_signals), key=int)\n        if not queued:\n            return primary, drained\n        pending_signal = int(signal.sigwait({queued[0]}))\n        primary = apply_pending_signal(primary)\n        drained = True\n\n\ndef child_environment(run_root):\n    environment = {\n        \"PATH\": \"/usr/bin:/bin\",\n        \"HOME\": os.path.join(run_root, \"home\"),\n        \"TMPDIR\": os.path.join(run_root, \"tmp\"),\n        \"XDG_CACHE_HOME\": os.path.join(run_root, \"xdg-cache\"),\n        \"LANG\": \"C\",\n        \"LC_ALL\": \"C\",\n        \"TZ\": \"UTC\",\n        \"TERM\": \"dumb\",\n        \"CI\": \"1\",\n        \"NO_COLOR\": \"1\",\n        \"CLICOLOR\": \"0\",\n        \"FORCE_COLOR\": \"0\",\n        \"NODE_DISABLE_COLORS\": \"1\",\n        \"UV_THREADPOOL_SIZE\": \"1\",\n    }\n    for name in (\n        \"VELVET_GLOVE_TOOL_TRACE_DIR\",\n        \"VELVET_GLOVE_TOOL_TRACE_SENTINEL\",\n    ):\n        if name in os.environ:\n            environment[name] = os.environ[name]\n    return environment\n\n\ndef run_child(arguments, cwd, environment):\n    global process, pending_signal\n    stdout_chunks = []\n    stderr_chunks = []\n    total = 0\n    child = None\n    selector = selectors.DefaultSelector()\n    spawn_mask = None\n    leader_exit_deadline = None\n    try:\n        spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n        try:\n            queued = sorted(\n                set(signal.sigpending()).intersection(handled_signals), key=int\n            )\n            if queued:\n                pending_signal = int(signal.sigwait({queued[0]}))\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            child = subprocess.Popen(\n                arguments,\n                cwd=cwd,\n                stdin=subprocess.DEVNULL,\n                stdout=subprocess.PIPE,\n                stderr=subprocess.PIPE,\n                env=environment,\n                start_new_session=True,\n            )\n            process = child\n        finally:\n            signal.pthread_sigmask(signal.SIG_SETMASK, spawn_mask)\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n            if stream is None:\n                reject(\"failed to capture contextlint output\")\n            os.set_blocking(stream.fileno(), False)\n            selector.register(stream, selectors.EVENT_READ, target)\n        while selector.get_map():\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            events = selector.select(timeout=0.1)\n            for key, _ in events:\n                chunk = os.read(key.fileobj.fileno(), 65536)\n                if chunk:\n                    total += len(chunk)\n                    if total > MAX_OUTPUT_BYTES:\n                        raise BufferError(\n                            f\"combined contextlint output exceeded {MAX_OUTPUT_BYTES} bytes\"\n                        )\n                    key.data.append(chunk)\n                else:\n                    selector.unregister(key.fileobj)\n                    key.fileobj.close()\n            if process.poll() is not None and selector.get_map():\n                if sweep_process_group():\n                    raise AdapterFailure(\n                        \"native Contextlint left same-group descendants after child exit\"\n                    )\n                if leader_exit_deadline is None:\n                    leader_exit_deadline = time.monotonic() + 0.25\n                elif time.monotonic() >= leader_exit_deadline:\n                    raise AdapterFailure(\n                        \"native Contextlint child exited without closing output pipes\"\n                    )\n        returncode = process.wait()\n        if sweep_process_group():\n            raise AdapterFailure(\n                \"native Contextlint left same-group descendants after child exit\"\n            )\n        process = None\n        return returncode, b\"\".join(stdout_chunks), b\"\".join(stderr_chunks)\n    except AdapterSignal as error:\n        cleanup_error = stop_child(pending_signal)\n        if cleanup_error is not None:\n            raise append_adapter_error(error, cleanup_error) from error\n        raise\n    except BaseException as error:\n        cleanup_error = stop_child()\n        if cleanup_error is not None:\n            raise append_adapter_error(error, cleanup_error) from error\n        raise\n    finally:\n        selector.close()\n        if child is not None:\n            for stream in (child.stdout, child.stderr):\n                if stream is not None:\n                    try:\n                        stream.close()\n                    except OSError:\n                        pass\n\n\ndef node_arguments(node_program, cli_entry, readable_roots, config, cwd, files):\n    arguments = [node_program, \"--disable-proto=throw\", \"--permission\"]\n    for root in readable_roots:\n        arguments.append(f\"--allow-fs-read={root}\")\n    arguments.extend((\n        cli_entry,\n        \"lint\",\n        \"--config\", config,\n        \"--cwd\", cwd,\n        \"--format\", \"json\",\n        \"--\",\n    ))\n    arguments.extend(files)\n    return arguments\n\n\ndef parse_report(stdout_bytes, description):\n    report = parse_json_bytes(stdout_bytes, description)\n    if not isinstance(report, list):\n        reject(f\"{description} is not a JSON array\")\n    expected_keys = {\"file\", \"line\", \"severity\", \"message\", \"ruleId\"}\n    for index, item in enumerate(report):\n        valid = (\n            isinstance(item, dict)\n            and set(item) == expected_keys\n            and isinstance(item.get(\"file\"), str)\n            and type(item.get(\"line\")) is int\n            and item[\"line\"] >= 0\n            and item.get(\"severity\") in (\"error\", \"warning\")\n            and isinstance(item.get(\"message\"), str)\n            and isinstance(item.get(\"ruleId\"), str)\n            and re.fullmatch(r\"[A-Z]{3}-[0-9]{3}\", item[\"ruleId\"]) is not None\n        )\n        if not valid:\n            reject(f\"{description} entry {index} has an invalid shape\")\n    return report\n\n\ndef verify_snapshots(paths):\n    for path, expected, limit, description in paths:\n        _, observed = read_bounded(path, limit, description)\n        if observed != expected:\n            reject(f\"{description} changed during contextlint: {path}\")\n\n\ndef sanitize(text, workspace, run_root):\n    stable = text.replace(run_root, \"<private-probe>\")\n    stable = stable.replace(workspace, \"<workspace>\")\n    return stable\n\n\ndef cleanup_private_root(root):\n    if root is None:\n        return\n    for name in (\"contextlint.config.json\", \"project.config.json\", \"probe.md\"):\n        path = os.path.join(root, name)\n        if os.path.lexists(path):\n            os.unlink(path)\n    for name in (\"home\", \"tmp\", \"xdg-cache\"):\n        path = os.path.join(root, name)\n        if os.path.lexists(path):\n            os.rmdir(path)\n    os.rmdir(root)\n\n\ndef main():\n    global active_workspace, private_run_root, cleaning, reported_signal\n    if len(sys.argv) < 6:\n        reject(\"invalid adapter arguments\")\n    node_name = sys.argv[1]\n    tool_name = sys.argv[2]\n    indicator_argument = sys.argv[3]\n    payload = sys.argv[4:]\n    if payload.count(MARKER) != 1 or payload[0] != MARKER:\n        reject(\"forwarded arguments are unsupported and file marker is invalid\")\n    candidates = payload[1:]\n    if not candidates:\n        reject(\"runner selected zero candidate files\")\n\n    node_program = resolve_program(node_name, \"Node executable\")\n    tool_program = resolve_program(tool_name, \"contextlint executable\")\n    graph, cli_entry = validate_package_graph(tool_program)\n\n    lexical_indicator = os.path.abspath(indicator_argument)\n    if os.path.basename(lexical_indicator) != \"contextlint.config.json\":\n        reject(f\"invalid workspace indicator: {indicator_argument}\")\n    indicator = os.path.realpath(lexical_indicator)\n    if lexical_indicator != indicator:\n        reject(\"workspace indicator traverses a symbolic link\")\n    workspace = os.path.dirname(indicator)\n    active_workspace = workspace\n    reject_glob_magic_path(indicator, \"workspace indicator\")\n    config_bytes, config_identity = read_bounded(\n        indicator, MAX_CONFIG_BYTES, \"contextlint.config.json\"\n    )\n    validate_config(config_bytes)\n\n    inventory = inventory_workspace(workspace)\n    inventory_paths = [path for path, _ in inventory]\n    inventory_set = set(inventory_paths)\n    candidate_paths = []\n    for candidate in candidates:\n        absolute = os.path.abspath(candidate)\n        reject_glob_magic_path(absolute, \"runner candidate\")\n        canonical = os.path.realpath(absolute)\n        if absolute != canonical or canonical not in inventory_set:\n            reject(f\"runner candidate is outside the physical Markdown inventory: {candidate}\")\n        candidate_paths.append(canonical)\n    if len(set(candidate_paths)) != len(candidate_paths):\n        reject(\"runner candidate list contains duplicates\")\n\n    snapshots = [(indicator, config_identity, MAX_CONFIG_BYTES, \"contextlint.config.json\")]\n    snapshots.extend(\n        (path, identity, MAX_FILE_BYTES, \"Markdown file\")\n        for path, identity in inventory\n    )\n\n    run_root = None\n    result = None\n    try:\n        run_root = create_private_run_root(workspace)\n        private_run_root = run_root\n        probe_config = os.path.join(run_root, \"contextlint.config.json\")\n        project_config = os.path.join(run_root, \"project.config.json\")\n        probe_document = os.path.join(run_root, \"probe.md\")\n        write_private_file(probe_config, PROBE_CONFIG)\n        write_private_file(project_config, config_bytes)\n        write_private_file(probe_document, PROBE_DOCUMENT)\n        private_config_bytes, _ = read_bounded(\n            project_config, MAX_CONFIG_BYTES, \"private contextlint.config.json copy\"\n        )\n        if private_config_bytes != config_bytes:\n            reject(\"private contextlint.config.json copy changed while being created\")\n        environment = child_environment(run_root)\n\n        probe_args = node_arguments(\n            node_program,\n            cli_entry,\n            (graph, run_root),\n            probe_config,\n            run_root,\n            (probe_document,),\n        )\n        probe_status, probe_stdout, probe_stderr = run_child(\n            probe_args, run_root, environment\n        )\n        probe_report = parse_report(probe_stdout, \"private completion report\")\n        if probe_status != 1 or probe_stderr or probe_report != PROBE_REPORT:\n            reject(\n                \"private SEC-001 completion probe did not return its exact pinned result\"\n            )\n\n        command_args = node_arguments(\n            node_program,\n            cli_entry,\n            (graph, workspace, run_root),\n            project_config,\n            workspace,\n            inventory_paths,\n        )\n        status, stdout_bytes, stderr_bytes = run_child(\n            command_args, workspace, environment\n        )\n        verify_snapshots(snapshots)\n\n        if status in (0, 1):\n            if stderr_bytes:\n                reject(\"contextlint emitted stderr with a lint status\")\n            report = parse_report(stdout_bytes, \"project completion report\")\n            has_errors = any(item[\"severity\"] == \"error\" for item in report)\n            if (status == 1) != has_errors:\n                reject(\"contextlint exit status contradicts its JSON severities\")\n            relative_inventory = {\n                os.path.relpath(path, workspace).replace(os.sep, \"/\")\n                for path in inventory_paths\n            }\n            for item in report:\n                if item[\"file\"] != \"(project)\" and item[\"file\"] not in relative_inventory:\n                    reject(\n                        f\"contextlint attributed a diagnostic outside the inventory: {item['file']}\"\n                    )\n                item[\"message\"] = sanitize(item[\"message\"], workspace, run_root)\n            report.sort(\n                key=lambda item: (\n                    item[\"file\"], item[\"line\"], item[\"ruleId\"],\n                    item[\"severity\"], item[\"message\"],\n                )\n            )\n            stable = json.dumps(\n                report, ensure_ascii=False, sort_keys=True, separators=(\",\", \":\")\n            ) + \"\\n\"\n            result = (1 if report else 0, stable.encode(\"utf-8\"), b\"\")\n        else:\n            stdout = sanitize(stdout_bytes.decode(\"utf-8\", \"replace\"), workspace, run_root)\n            stderr = sanitize(stderr_bytes.decode(\"utf-8\", \"replace\"), workspace, run_root)\n            diagnostic = stdout.encode(\"utf-8\") + stderr.encode(\"utf-8\")\n            diagnostic += (\n                f\"velvet-glove-contextlint: contextlint exited with operational status {status}\\n\"\n            ).encode(\"utf-8\")\n            result = (2, b\"\", diagnostic)\n    finally:\n        primary_error = sys.exc_info()[1]\n        cleanup_error = stop_child()\n        cleaning = True\n        try:\n            if run_root is not None:\n                cleanup_private_root(run_root)\n        except OSError as error:\n            cleanup_failure = AdapterFailure(\n                \"cannot remove private completion-probe root: \"\n                + normalize_private_error(error, run_root)\n            )\n            cleanup_error = append_adapter_error(cleanup_error, cleanup_failure)\n        finally:\n            cleaning = False\n        if cleanup_error is not None:\n            if isinstance(primary_error, AdapterSignal):\n                reported_signal = primary_error.signum\n            if primary_error is not None:\n                raise append_adapter_error(primary_error, cleanup_error)\n            raise cleanup_error\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    if result is None:\n        reject(\"contextlint adapter produced no result\")\n    return result\n\n\nprevious_handlers = {}\nadapter_error = None\nresult = None\ntry:\n    for signum in handled_signals:\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    result = main()\nexcept AdapterSignal as error:\n    adapter_error = append_adapter_error(error, stop_child(error.signum))\n    reported_signal = error.signum\nexcept AdapterFailure as error:\n    adapter_error = append_adapter_error(error, stop_child())\nexcept BaseException as error:\n    adapter_error = append_adapter_error(\n        RuntimeError(f\"adapter failure: {error}\"), stop_child()\n    )\nfinally:\n    cleaning = True\n    blocked_mask = None\n    try:\n        try:\n            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n        except (OSError, ValueError) as error:\n            adapter_error = append_adapter_error(\n                adapter_error, AdapterFailure(f\"cannot block cleanup signals: {error}\")\n            )\n        adapter_error = apply_pending_signal(adapter_error)\n        if blocked_mask is not None:\n            while True:\n                adapter_error, drained = drain_blocked_signals(adapter_error)\n                if not drained:\n                    break\n    finally:\n        # Keep these signals blocked through diagnostics and process exit.\n        # Unblocking after restoring default handlers would reopen the\n        # post-cleanup termination window closed by this cutoff.\n        try:\n            for signum, handler in previous_handlers.items():\n                try:\n                    signal.signal(signum, handler)\n                except (OSError, ValueError):\n                    pass\n        finally:\n            cleaning = False\n\nif adapter_error is not None:\n    message = normalize_private_error(adapter_error, private_run_root)\n    if active_workspace is not None:\n        message = message.replace(active_workspace, \"<workspace>\")\n    print(f\"velvet-glove-contextlint: {message}\", file=sys.stderr)\n    raise SystemExit(2)\nif result is None:\n    print(\"velvet-glove-contextlint: adapter produced no result\", file=sys.stderr)\n    raise SystemExit(2)\nstatus, stdout_bytes, stderr_bytes = result\nif stdout_bytes:\n    sys.stdout.buffer.write(stdout_bytes)\nif stderr_bytes:\n    sys.stderr.buffer.write(stderr_bytes)\nraise SystemExit(status)",
+                    "node",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    {
+                      "type": "WorkspaceIndicator"
+                    },
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_CONTEXTLINT_FILES__",
                     {
                       "type": "Files"
                     }
@@ -8249,22 +8163,42 @@
                     "clean": [
                       0
                     ],
+                    "failure": [
+                      2
+                    ],
                     "issues": [
                       1
                     ],
-                    "failure": [],
                     "unexpected": "failure"
                   },
+                  "extraArgs": [],
+                  "id": "verify",
                   "issuesOnStdout": false,
-                  "writes": "none",
-                  "extraArgs": []
+                  "mode": "verify",
+                  "program": "python",
+                  "reusesImmediatePhase": "verify",
+                  "role": "workflow-check",
+                  "writes": "none"
                 }
               ],
-              "capabilities": [
-                "checker",
-                "workspace-scoped",
-                "batch"
+              "fileExcludes": [
+                "**/.git/**",
+                "**/.velvet-glove/**",
+                "**/node_modules/**",
+                ".git/**",
+                ".velvet-glove/**",
+                "node_modules/**"
               ],
+              "fileIncludes": [
+                "**/*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+                "**/*.[mM][dD]",
+                "*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+                "*.[mM][dD]"
+              ],
+              "id": "verify",
+              "invocation": "workspace",
+              "kind": "compatibility-workflow",
+              "order": 0,
               "requiredCases": [
                 "command-coverage",
                 "clean",
@@ -8273,64 +8207,173 @@
                 "no-mutation",
                 "workspace-scope",
                 "multi-file",
-                "batch-attribution",
                 "workspace-attribution"
-              ]
+              ],
+              "workingDirectory": "workspace",
+              "workspaceIndicator": "contextlint.config.json"
+            }
+          ]
+        },
+        "immediate": {
+          "capabilities": [
+            "checker",
+            "workspace-scoped",
+            "workspace-invocation"
+          ],
+          "orchestrationCases": [
+            "immediate-phase-order"
+          ],
+          "requiredCases": [
+            "command-coverage",
+            "immediate-phase-order",
+            "clean",
+            "source-issue",
+            "operational-failure",
+            "no-mutation",
+            "workspace-scope",
+            "multi-file",
+            "workspace-attribution"
+          ],
+          "targets": [
+            {
+              "capabilities": [
+                "checker",
+                "workspace-scoped",
+                "workspace-invocation"
+              ],
+              "checkScope": null,
+              "commands": [
+                {
+                  "argv": [
+                    "-I",
+                    "-c",
+                    "import hashlib\nimport json\nimport os\nimport re\nimport selectors\nimport shutil\nimport signal\nimport stat\nimport subprocess\nimport sys\nimport tempfile\nimport time\n\nMARKER = \"__VELVET_GLOVE_CONTEXTLINT_FILES__\"\nVERSION = \"1.1.1\"\nMAX_CONFIG_BYTES = 1024 * 1024\nMAX_FILE_BYTES = 16 * 1024 * 1024\nMAX_TOTAL_BYTES = 64 * 1024 * 1024\nMAX_FILES = 4096\nMAX_ENTRIES = 100000\nMAX_OUTPUT_BYTES = 16 * 1024 * 1024\nEXCLUDED_DIRECTORIES = frozenset((\".git\", \"node_modules\", \".velvet-glove\"))\n# glob 13.0.6 expands braces before minimatch 10.2.6 parses a pattern.\n# This is minimatch.escape(..., magicalBraces=True)'s POSIX magic set.\nGLOB_MAGIC = frozenset(\"*?()[]{}\\\\\")\nRULES = frozenset((\n    \"tbl001\", \"tbl002\", \"tbl003\", \"tbl004\", \"tbl005\", \"tbl006\",\n    \"sec001\", \"sec002\", \"str001\",\n    \"ref001\", \"ref002\", \"ref003\", \"ref004\", \"ref005\", \"ref006\",\n    \"chk001\", \"ctx001\", \"ctx002\", \"grp001\", \"grp002\", \"grp003\",\n))\nPROBE_CONFIG = (\n    b'{\"rules\":[{\"rule\":\"sec001\",\"options\":{\"sections\":'\n    b'[\"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"]}}]}\\n'\n)\nPROBE_DOCUMENT = b\"# Probe\\n\"\nPROBE_REPORT = [{\n    \"file\": \"probe.md\",\n    \"line\": 0,\n    \"severity\": \"error\",\n    \"message\": 'Missing required section \"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"',\n    \"ruleId\": \"SEC-001\",\n}]\n\n\nclass AdapterFailure(Exception):\n    pass\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef reject(message):\n    raise AdapterFailure(message)\n\n\ndef reject_glob_magic_path(path, description):\n    absolute = os.path.abspath(path)\n    for component in absolute.split(os.sep):\n        magic = \"\".join(sorted(set(component).intersection(GLOB_MAGIC)))\n        if magic:\n            reject(\n                f\"{description} contains Contextlint glob magic {magic!r}: {path}\"\n            )\n\n\ndef duplicate_safe_object(pairs):\n    value = {}\n    for key, item in pairs:\n        if key in value:\n            reject(f\"configuration contains duplicate key {key!r}\")\n        value[key] = item\n    return value\n\n\ndef read_bounded(path, limit, description):\n    flags = os.O_RDONLY\n    if hasattr(os, \"O_NOFOLLOW\"):\n        flags |= os.O_NOFOLLOW\n    try:\n        before = os.lstat(path)\n        if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):\n            reject(f\"{description} is not a regular file: {path}\")\n        if before.st_nlink != 1:\n            reject(f\"{description} must have exactly one hard link: {path}\")\n        descriptor = os.open(path, flags)\n        try:\n            opened = os.fstat(descriptor)\n            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):\n                reject(f\"{description} changed while opening: {path}\")\n            chunks = []\n            total = 0\n            while True:\n                chunk = os.read(descriptor, min(65536, limit + 1 - total))\n                if not chunk:\n                    break\n                chunks.append(chunk)\n                total += len(chunk)\n                if total > limit:\n                    reject(f\"{description} exceeds {limit} bytes: {path}\")\n        finally:\n            os.close(descriptor)\n    except AdapterFailure:\n        raise\n    except OSError as error:\n        reject(f\"cannot read {description} {path}: {error}\")\n    data = b\"\".join(chunks)\n    identity = (\n        before.st_dev,\n        before.st_ino,\n        before.st_mode,\n        before.st_nlink,\n        before.st_size,\n        before.st_mtime_ns,\n        hashlib.sha256(data).hexdigest(),\n    )\n    return data, identity\n\n\ndef parse_json_bytes(data, description):\n    try:\n        text = data.decode(\"utf-8\")\n        return json.loads(text, object_pairs_hook=duplicate_safe_object)\n    except AdapterFailure:\n        raise\n    except (UnicodeError, json.JSONDecodeError) as error:\n        reject(f\"invalid UTF-8 JSON in {description}: {error}\")\n\n\ndef resolve_program(name, description):\n    if not name or \"\\x00\" in name:\n        reject(f\"invalid {description} name\")\n    candidate = shutil.which(name)\n    if candidate is None:\n        reject(f\"cannot resolve {description} {name!r}\")\n    absolute = os.path.abspath(candidate)\n    try:\n        metadata = os.stat(absolute)\n    except OSError as error:\n        reject(f\"cannot inspect {description} {absolute}: {error}\")\n    if not stat.S_ISREG(metadata.st_mode) or not os.access(absolute, os.X_OK):\n        reject(f\"{description} is not an executable regular file: {absolute}\")\n    return absolute\n\n\ndef validate_package_graph(tool_program):\n    resolved = os.path.realpath(tool_program)\n    cursor = os.path.dirname(resolved)\n    graph = None\n    while True:\n        if os.path.basename(cursor) == \"node_modules\":\n            graph = cursor\n            break\n        parent = os.path.dirname(cursor)\n        if parent == cursor:\n            break\n        cursor = parent\n    if graph is None:\n        reject(f\"contextlint executable is outside a node_modules graph: {tool_program}\")\n    graph = os.path.realpath(graph)\n    cli_entry = os.path.realpath(\n        os.path.join(graph, \"@contextlint\", \"cli\", \"dist\", \"index.js\")\n    )\n    if resolved != cli_entry:\n        reject(\n            \"contextlint executable does not resolve to \"\n            f\"@contextlint/cli/dist/index.js: {tool_program}\"\n        )\n    cli_manifest_path = os.path.join(graph, \"@contextlint\", \"cli\", \"package.json\")\n    core_manifest_path = os.path.join(graph, \"@contextlint\", \"core\", \"package.json\")\n    cli_bytes, _ = read_bounded(cli_manifest_path, MAX_CONFIG_BYTES, \"CLI manifest\")\n    core_bytes, _ = read_bounded(core_manifest_path, MAX_CONFIG_BYTES, \"core manifest\")\n    cli = parse_json_bytes(cli_bytes, \"CLI manifest\")\n    core = parse_json_bytes(core_bytes, \"core manifest\")\n    cli_valid = (\n        isinstance(cli, dict)\n        and cli.get(\"name\") == \"@contextlint/cli\"\n        and cli.get(\"version\") == VERSION\n        and cli.get(\"type\") == \"module\"\n        and cli.get(\"bin\") == {\"contextlint\": \"dist/index.js\"}\n        and isinstance(cli.get(\"dependencies\"), dict)\n        and cli[\"dependencies\"].get(\"@contextlint/core\") == VERSION\n    )\n    core_valid = (\n        isinstance(core, dict)\n        and core.get(\"name\") == \"@contextlint/core\"\n        and core.get(\"version\") == VERSION\n        and core.get(\"type\") == \"module\"\n    )\n    if not cli_valid or not core_valid:\n        reject(f\"contextlint package graph is not the exact supported {VERSION} pair\")\n    return graph, cli_entry\n\n\ndef validate_config(config_bytes):\n    config = parse_json_bytes(config_bytes, \"contextlint.config.json\")\n    if not isinstance(config, dict):\n        reject(\"contextlint.config.json must contain a JSON object\")\n    rules = config.get(\"rules\")\n    if not isinstance(rules, list) or not rules:\n        reject(\"contextlint.config.json must declare at least one rule\")\n    for index, entry in enumerate(rules):\n        if not isinstance(entry, dict) or entry.get(\"rule\") not in RULES:\n            reject(f\"contextlint.config.json rules[{index}] is not a pinned built-in rule\")\n    return config\n\n\ndef inventory_workspace(workspace):\n    files = []\n    seen_inodes = set()\n    entries = 0\n    total_bytes = 0\n\n    def visit(directory):\n        nonlocal entries, total_bytes\n        try:\n            directory_metadata = os.lstat(directory)\n            if not stat.S_ISDIR(directory_metadata.st_mode) or stat.S_ISLNK(directory_metadata.st_mode):\n                reject(f\"workspace traversal encountered a non-directory: {directory}\")\n            children = sorted(os.scandir(directory), key=lambda item: item.name)\n        except AdapterFailure:\n            raise\n        except OSError as error:\n            reject(f\"cannot inventory workspace directory {directory}: {error}\")\n        for child in children:\n            entries += 1\n            if entries > MAX_ENTRIES:\n                reject(f\"workspace inventory exceeds {MAX_ENTRIES} entries\")\n            path = child.path\n            try:\n                metadata = child.stat(follow_symlinks=False)\n            except OSError as error:\n                reject(f\"cannot inspect workspace entry {path}: {error}\")\n            if stat.S_ISLNK(metadata.st_mode):\n                reject(f\"workspace inventory rejects symbolic links: {path}\")\n            if stat.S_ISDIR(metadata.st_mode):\n                if child.name in EXCLUDED_DIRECTORIES:\n                    continue\n                reject_glob_magic_path(path, \"workspace inventory path\")\n                visit(path)\n                continue\n            lowered = child.name.lower()\n            if not (lowered.endswith(\".md\") or lowered.endswith(\".markdown\")):\n                continue\n            reject_glob_magic_path(path, \"workspace inventory path\")\n            if not stat.S_ISREG(metadata.st_mode):\n                reject(f\"Markdown inventory entry is not a regular file: {path}\")\n            if metadata.st_nlink != 1:\n                reject(f\"Markdown inventory entry must have one hard link: {path}\")\n            inode = (metadata.st_dev, metadata.st_ino)\n            if inode in seen_inodes:\n                reject(f\"Markdown inventory contains a duplicate inode: {path}\")\n            seen_inodes.add(inode)\n            if len(files) >= MAX_FILES:\n                reject(f\"workspace inventory exceeds {MAX_FILES} Markdown files\")\n            data, identity = read_bounded(path, MAX_FILE_BYTES, \"Markdown file\")\n            total_bytes += len(data)\n            if total_bytes > MAX_TOTAL_BYTES:\n                reject(f\"workspace Markdown inventory exceeds {MAX_TOTAL_BYTES} bytes\")\n            files.append((os.path.realpath(path), identity))\n\n    visit(workspace)\n    files.sort(key=lambda item: item[0])\n    if not files:\n        reject(\"workspace contains no physical Markdown files\")\n    return files\n\n\nPRIVATE_ROOT_PREFIX = \"velvet-glove-contextlint-probe-\"\n\n\ndef normalize_private_error(error, root=None):\n    message = str(error)\n    if root is not None:\n        return message.replace(root, \"<private-probe>\")\n    if isinstance(error, OSError) and error.filename is not None:\n        candidate = os.path.abspath(os.fsdecode(error.filename))\n        parent = os.path.dirname(candidate)\n        if os.path.basename(candidate).startswith(PRIVATE_ROOT_PREFIX):\n            return message.replace(candidate, \"<private-probe>\")\n        if os.path.basename(parent).startswith(PRIVATE_ROOT_PREFIX):\n            return message.replace(parent, \"<private-probe>\")\n    return message\n\n\ndef create_private_run_root(workspace):\n    base = os.environ.get(\"TMPDIR\", \"/tmp\")\n    if not os.path.isabs(base):\n        reject(\"TMPDIR must be absolute\")\n    reject_glob_magic_path(base, \"TMPDIR\")\n    base = os.path.realpath(base)\n    reject_glob_magic_path(base, \"resolved TMPDIR\")\n    if not os.path.isdir(base):\n        reject(f\"TMPDIR is not a directory: {base}\")\n    try:\n        inside_workspace = os.path.commonpath((workspace, base)) == workspace\n    except ValueError:\n        inside_workspace = False\n    if inside_workspace:\n        reject(\"TMPDIR must resolve outside the Contextlint workspace\")\n    root = None\n    created = []\n    try:\n        root = tempfile.mkdtemp(prefix=PRIVATE_ROOT_PREFIX, dir=base)\n        created.append(root)\n        os.chmod(root, 0o700)\n        for name in (\"home\", \"tmp\", \"xdg-cache\"):\n            path = os.path.join(root, name)\n            os.mkdir(path, 0o700)\n            os.chmod(path, 0o700)\n            created.append(path)\n    except OSError as error:\n        for path in reversed(created):\n            try:\n                os.rmdir(path)\n            except OSError:\n                pass\n        reject(\n            \"cannot create private completion-probe root: \"\n            + normalize_private_error(error, root)\n        )\n    return root\n\n\ndef write_private_file(path, data):\n    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, \"O_CLOEXEC\", 0)\n    if hasattr(os, \"O_NOFOLLOW\"):\n        flags |= os.O_NOFOLLOW\n    descriptor = os.open(path, flags, 0o600)\n    try:\n        os.fchmod(descriptor, 0o600)\n        offset = 0\n        while offset < len(data):\n            offset += os.write(descriptor, data[offset:])\n        os.fsync(descriptor)\n    finally:\n        os.close(descriptor)\n\n\nprocess = None\npending_signal = None\nreported_signal = None\ncleaning = False\nactive_workspace = None\nprivate_run_root = None\nhandled_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef process_group_exists():\n    if process is None:\n        return False\n    try:\n        os.killpg(process.pid, 0)\n        return True\n    except ProcessLookupError:\n        return False\n    except PermissionError:\n        return True\n\n\ndef sweep_process_group():\n    if not process_group_exists():\n        return False\n    signal_group(signal.SIGKILL)\n    deadline = time.monotonic() + 1\n    while process_group_exists() and time.monotonic() < deadline:\n        time.sleep(0.01)\n    if process_group_exists():\n        raise AdapterFailure(\"cannot reap same-group descendants after child exit\")\n    return True\n\n\ndef stop_child(initial_signal=None):\n    global process, cleaning\n    child = process\n    if child is None:\n        return None\n    cleanup_error = None\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n        deadline = time.monotonic() + 1\n        while process_group_exists() and time.monotonic() < deadline:\n            time.sleep(0.01)\n        if process_group_exists():\n            cleanup_error = AdapterFailure(\n                \"cannot reap same-group descendants during child cleanup\"\n            )\n    finally:\n        process = None\n        cleaning = False\n    return cleanup_error\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\ndef append_adapter_error(primary, secondary):\n    if secondary is None:\n        return primary\n    if primary is None:\n        return secondary\n    return AdapterFailure(f\"{primary}; {secondary}\")\n\n\ndef apply_pending_signal(primary):\n    global reported_signal\n    if pending_signal is None or pending_signal == reported_signal:\n        return primary\n    reported_signal = pending_signal\n    return append_adapter_error(primary, AdapterSignal(pending_signal))\n\n\ndef drain_blocked_signals(primary):\n    global pending_signal\n    drained = False\n    while True:\n        queued = sorted(set(signal.sigpending()).intersection(handled_signals), key=int)\n        if not queued:\n            return primary, drained\n        pending_signal = int(signal.sigwait({queued[0]}))\n        primary = apply_pending_signal(primary)\n        drained = True\n\n\ndef child_environment(run_root):\n    environment = {\n        \"PATH\": \"/usr/bin:/bin\",\n        \"HOME\": os.path.join(run_root, \"home\"),\n        \"TMPDIR\": os.path.join(run_root, \"tmp\"),\n        \"XDG_CACHE_HOME\": os.path.join(run_root, \"xdg-cache\"),\n        \"LANG\": \"C\",\n        \"LC_ALL\": \"C\",\n        \"TZ\": \"UTC\",\n        \"TERM\": \"dumb\",\n        \"CI\": \"1\",\n        \"NO_COLOR\": \"1\",\n        \"CLICOLOR\": \"0\",\n        \"FORCE_COLOR\": \"0\",\n        \"NODE_DISABLE_COLORS\": \"1\",\n        \"UV_THREADPOOL_SIZE\": \"1\",\n    }\n    for name in (\n        \"VELVET_GLOVE_TOOL_TRACE_DIR\",\n        \"VELVET_GLOVE_TOOL_TRACE_SENTINEL\",\n    ):\n        if name in os.environ:\n            environment[name] = os.environ[name]\n    return environment\n\n\ndef run_child(arguments, cwd, environment):\n    global process, pending_signal\n    stdout_chunks = []\n    stderr_chunks = []\n    total = 0\n    child = None\n    selector = selectors.DefaultSelector()\n    spawn_mask = None\n    leader_exit_deadline = None\n    try:\n        spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n        try:\n            queued = sorted(\n                set(signal.sigpending()).intersection(handled_signals), key=int\n            )\n            if queued:\n                pending_signal = int(signal.sigwait({queued[0]}))\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            child = subprocess.Popen(\n                arguments,\n                cwd=cwd,\n                stdin=subprocess.DEVNULL,\n                stdout=subprocess.PIPE,\n                stderr=subprocess.PIPE,\n                env=environment,\n                start_new_session=True,\n            )\n            process = child\n        finally:\n            signal.pthread_sigmask(signal.SIG_SETMASK, spawn_mask)\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n            if stream is None:\n                reject(\"failed to capture contextlint output\")\n            os.set_blocking(stream.fileno(), False)\n            selector.register(stream, selectors.EVENT_READ, target)\n        while selector.get_map():\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            events = selector.select(timeout=0.1)\n            for key, _ in events:\n                chunk = os.read(key.fileobj.fileno(), 65536)\n                if chunk:\n                    total += len(chunk)\n                    if total > MAX_OUTPUT_BYTES:\n                        raise BufferError(\n                            f\"combined contextlint output exceeded {MAX_OUTPUT_BYTES} bytes\"\n                        )\n                    key.data.append(chunk)\n                else:\n                    selector.unregister(key.fileobj)\n                    key.fileobj.close()\n            if process.poll() is not None and selector.get_map():\n                if sweep_process_group():\n                    raise AdapterFailure(\n                        \"native Contextlint left same-group descendants after child exit\"\n                    )\n                if leader_exit_deadline is None:\n                    leader_exit_deadline = time.monotonic() + 0.25\n                elif time.monotonic() >= leader_exit_deadline:\n                    raise AdapterFailure(\n                        \"native Contextlint child exited without closing output pipes\"\n                    )\n        returncode = process.wait()\n        if sweep_process_group():\n            raise AdapterFailure(\n                \"native Contextlint left same-group descendants after child exit\"\n            )\n        process = None\n        return returncode, b\"\".join(stdout_chunks), b\"\".join(stderr_chunks)\n    except AdapterSignal as error:\n        cleanup_error = stop_child(pending_signal)\n        if cleanup_error is not None:\n            raise append_adapter_error(error, cleanup_error) from error\n        raise\n    except BaseException as error:\n        cleanup_error = stop_child()\n        if cleanup_error is not None:\n            raise append_adapter_error(error, cleanup_error) from error\n        raise\n    finally:\n        selector.close()\n        if child is not None:\n            for stream in (child.stdout, child.stderr):\n                if stream is not None:\n                    try:\n                        stream.close()\n                    except OSError:\n                        pass\n\n\ndef node_arguments(node_program, cli_entry, readable_roots, config, cwd, files):\n    arguments = [node_program, \"--disable-proto=throw\", \"--permission\"]\n    for root in readable_roots:\n        arguments.append(f\"--allow-fs-read={root}\")\n    arguments.extend((\n        cli_entry,\n        \"lint\",\n        \"--config\", config,\n        \"--cwd\", cwd,\n        \"--format\", \"json\",\n        \"--\",\n    ))\n    arguments.extend(files)\n    return arguments\n\n\ndef parse_report(stdout_bytes, description):\n    report = parse_json_bytes(stdout_bytes, description)\n    if not isinstance(report, list):\n        reject(f\"{description} is not a JSON array\")\n    expected_keys = {\"file\", \"line\", \"severity\", \"message\", \"ruleId\"}\n    for index, item in enumerate(report):\n        valid = (\n            isinstance(item, dict)\n            and set(item) == expected_keys\n            and isinstance(item.get(\"file\"), str)\n            and type(item.get(\"line\")) is int\n            and item[\"line\"] >= 0\n            and item.get(\"severity\") in (\"error\", \"warning\")\n            and isinstance(item.get(\"message\"), str)\n            and isinstance(item.get(\"ruleId\"), str)\n            and re.fullmatch(r\"[A-Z]{3}-[0-9]{3}\", item[\"ruleId\"]) is not None\n        )\n        if not valid:\n            reject(f\"{description} entry {index} has an invalid shape\")\n    return report\n\n\ndef verify_snapshots(paths):\n    for path, expected, limit, description in paths:\n        _, observed = read_bounded(path, limit, description)\n        if observed != expected:\n            reject(f\"{description} changed during contextlint: {path}\")\n\n\ndef sanitize(text, workspace, run_root):\n    stable = text.replace(run_root, \"<private-probe>\")\n    stable = stable.replace(workspace, \"<workspace>\")\n    return stable\n\n\ndef cleanup_private_root(root):\n    if root is None:\n        return\n    for name in (\"contextlint.config.json\", \"project.config.json\", \"probe.md\"):\n        path = os.path.join(root, name)\n        if os.path.lexists(path):\n            os.unlink(path)\n    for name in (\"home\", \"tmp\", \"xdg-cache\"):\n        path = os.path.join(root, name)\n        if os.path.lexists(path):\n            os.rmdir(path)\n    os.rmdir(root)\n\n\ndef main():\n    global active_workspace, private_run_root, cleaning, reported_signal\n    if len(sys.argv) < 6:\n        reject(\"invalid adapter arguments\")\n    node_name = sys.argv[1]\n    tool_name = sys.argv[2]\n    indicator_argument = sys.argv[3]\n    payload = sys.argv[4:]\n    if payload.count(MARKER) != 1 or payload[0] != MARKER:\n        reject(\"forwarded arguments are unsupported and file marker is invalid\")\n    candidates = payload[1:]\n    if not candidates:\n        reject(\"runner selected zero candidate files\")\n\n    node_program = resolve_program(node_name, \"Node executable\")\n    tool_program = resolve_program(tool_name, \"contextlint executable\")\n    graph, cli_entry = validate_package_graph(tool_program)\n\n    lexical_indicator = os.path.abspath(indicator_argument)\n    if os.path.basename(lexical_indicator) != \"contextlint.config.json\":\n        reject(f\"invalid workspace indicator: {indicator_argument}\")\n    indicator = os.path.realpath(lexical_indicator)\n    if lexical_indicator != indicator:\n        reject(\"workspace indicator traverses a symbolic link\")\n    workspace = os.path.dirname(indicator)\n    active_workspace = workspace\n    reject_glob_magic_path(indicator, \"workspace indicator\")\n    config_bytes, config_identity = read_bounded(\n        indicator, MAX_CONFIG_BYTES, \"contextlint.config.json\"\n    )\n    validate_config(config_bytes)\n\n    inventory = inventory_workspace(workspace)\n    inventory_paths = [path for path, _ in inventory]\n    inventory_set = set(inventory_paths)\n    candidate_paths = []\n    for candidate in candidates:\n        absolute = os.path.abspath(candidate)\n        reject_glob_magic_path(absolute, \"runner candidate\")\n        canonical = os.path.realpath(absolute)\n        if absolute != canonical or canonical not in inventory_set:\n            reject(f\"runner candidate is outside the physical Markdown inventory: {candidate}\")\n        candidate_paths.append(canonical)\n    if len(set(candidate_paths)) != len(candidate_paths):\n        reject(\"runner candidate list contains duplicates\")\n\n    snapshots = [(indicator, config_identity, MAX_CONFIG_BYTES, \"contextlint.config.json\")]\n    snapshots.extend(\n        (path, identity, MAX_FILE_BYTES, \"Markdown file\")\n        for path, identity in inventory\n    )\n\n    run_root = None\n    result = None\n    try:\n        run_root = create_private_run_root(workspace)\n        private_run_root = run_root\n        probe_config = os.path.join(run_root, \"contextlint.config.json\")\n        project_config = os.path.join(run_root, \"project.config.json\")\n        probe_document = os.path.join(run_root, \"probe.md\")\n        write_private_file(probe_config, PROBE_CONFIG)\n        write_private_file(project_config, config_bytes)\n        write_private_file(probe_document, PROBE_DOCUMENT)\n        private_config_bytes, _ = read_bounded(\n            project_config, MAX_CONFIG_BYTES, \"private contextlint.config.json copy\"\n        )\n        if private_config_bytes != config_bytes:\n            reject(\"private contextlint.config.json copy changed while being created\")\n        environment = child_environment(run_root)\n\n        probe_args = node_arguments(\n            node_program,\n            cli_entry,\n            (graph, run_root),\n            probe_config,\n            run_root,\n            (probe_document,),\n        )\n        probe_status, probe_stdout, probe_stderr = run_child(\n            probe_args, run_root, environment\n        )\n        probe_report = parse_report(probe_stdout, \"private completion report\")\n        if probe_status != 1 or probe_stderr or probe_report != PROBE_REPORT:\n            reject(\n                \"private SEC-001 completion probe did not return its exact pinned result\"\n            )\n\n        command_args = node_arguments(\n            node_program,\n            cli_entry,\n            (graph, workspace, run_root),\n            project_config,\n            workspace,\n            inventory_paths,\n        )\n        status, stdout_bytes, stderr_bytes = run_child(\n            command_args, workspace, environment\n        )\n        verify_snapshots(snapshots)\n\n        if status in (0, 1):\n            if stderr_bytes:\n                reject(\"contextlint emitted stderr with a lint status\")\n            report = parse_report(stdout_bytes, \"project completion report\")\n            has_errors = any(item[\"severity\"] == \"error\" for item in report)\n            if (status == 1) != has_errors:\n                reject(\"contextlint exit status contradicts its JSON severities\")\n            relative_inventory = {\n                os.path.relpath(path, workspace).replace(os.sep, \"/\")\n                for path in inventory_paths\n            }\n            for item in report:\n                if item[\"file\"] != \"(project)\" and item[\"file\"] not in relative_inventory:\n                    reject(\n                        f\"contextlint attributed a diagnostic outside the inventory: {item['file']}\"\n                    )\n                item[\"message\"] = sanitize(item[\"message\"], workspace, run_root)\n            report.sort(\n                key=lambda item: (\n                    item[\"file\"], item[\"line\"], item[\"ruleId\"],\n                    item[\"severity\"], item[\"message\"],\n                )\n            )\n            stable = json.dumps(\n                report, ensure_ascii=False, sort_keys=True, separators=(\",\", \":\")\n            ) + \"\\n\"\n            result = (1 if report else 0, stable.encode(\"utf-8\"), b\"\")\n        else:\n            stdout = sanitize(stdout_bytes.decode(\"utf-8\", \"replace\"), workspace, run_root)\n            stderr = sanitize(stderr_bytes.decode(\"utf-8\", \"replace\"), workspace, run_root)\n            diagnostic = stdout.encode(\"utf-8\") + stderr.encode(\"utf-8\")\n            diagnostic += (\n                f\"velvet-glove-contextlint: contextlint exited with operational status {status}\\n\"\n            ).encode(\"utf-8\")\n            result = (2, b\"\", diagnostic)\n    finally:\n        primary_error = sys.exc_info()[1]\n        cleanup_error = stop_child()\n        cleaning = True\n        try:\n            if run_root is not None:\n                cleanup_private_root(run_root)\n        except OSError as error:\n            cleanup_failure = AdapterFailure(\n                \"cannot remove private completion-probe root: \"\n                + normalize_private_error(error, run_root)\n            )\n            cleanup_error = append_adapter_error(cleanup_error, cleanup_failure)\n        finally:\n            cleaning = False\n        if cleanup_error is not None:\n            if isinstance(primary_error, AdapterSignal):\n                reported_signal = primary_error.signum\n            if primary_error is not None:\n                raise append_adapter_error(primary_error, cleanup_error)\n            raise cleanup_error\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    if result is None:\n        reject(\"contextlint adapter produced no result\")\n    return result\n\n\nprevious_handlers = {}\nadapter_error = None\nresult = None\ntry:\n    for signum in handled_signals:\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    result = main()\nexcept AdapterSignal as error:\n    adapter_error = append_adapter_error(error, stop_child(error.signum))\n    reported_signal = error.signum\nexcept AdapterFailure as error:\n    adapter_error = append_adapter_error(error, stop_child())\nexcept BaseException as error:\n    adapter_error = append_adapter_error(\n        RuntimeError(f\"adapter failure: {error}\"), stop_child()\n    )\nfinally:\n    cleaning = True\n    blocked_mask = None\n    try:\n        try:\n            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n        except (OSError, ValueError) as error:\n            adapter_error = append_adapter_error(\n                adapter_error, AdapterFailure(f\"cannot block cleanup signals: {error}\")\n            )\n        adapter_error = apply_pending_signal(adapter_error)\n        if blocked_mask is not None:\n            while True:\n                adapter_error, drained = drain_blocked_signals(adapter_error)\n                if not drained:\n                    break\n    finally:\n        # Keep these signals blocked through diagnostics and process exit.\n        # Unblocking after restoring default handlers would reopen the\n        # post-cleanup termination window closed by this cutoff.\n        try:\n            for signum, handler in previous_handlers.items():\n                try:\n                    signal.signal(signum, handler)\n                except (OSError, ValueError):\n                    pass\n        finally:\n            cleaning = False\n\nif adapter_error is not None:\n    message = normalize_private_error(adapter_error, private_run_root)\n    if active_workspace is not None:\n        message = message.replace(active_workspace, \"<workspace>\")\n    print(f\"velvet-glove-contextlint: {message}\", file=sys.stderr)\n    raise SystemExit(2)\nif result is None:\n    print(\"velvet-glove-contextlint: adapter produced no result\", file=sys.stderr)\n    raise SystemExit(2)\nstatus, stdout_bytes, stderr_bytes = result\nif stdout_bytes:\n    sys.stdout.buffer.write(stdout_bytes)\nif stderr_bytes:\n    sys.stderr.buffer.write(stderr_bytes)\nraise SystemExit(status)",
+                    "node",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    {
+                      "type": "WorkspaceIndicator"
+                    },
+                    {
+                      "type": "ExtraArgs"
+                    },
+                    "__VELVET_GLOVE_CONTEXTLINT_FILES__",
+                    {
+                      "type": "Files"
+                    }
+                  ],
+                  "exitCodes": {
+                    "clean": [
+                      0
+                    ],
+                    "failure": [
+                      2
+                    ],
+                    "issues": [
+                      1
+                    ],
+                    "unexpected": "failure"
+                  },
+                  "extraArgs": [],
+                  "id": "verify",
+                  "issuesOnStdout": false,
+                  "mode": "verify",
+                  "program": "python",
+                  "reusesImmediatePhase": null,
+                  "role": "phase",
+                  "writes": "none"
+                }
+              ],
+              "fileExcludes": [
+                "**/.git/**",
+                "**/.velvet-glove/**",
+                "**/node_modules/**",
+                ".git/**",
+                ".velvet-glove/**",
+                "node_modules/**"
+              ],
+              "fileIncludes": [
+                "**/*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+                "**/*.[mM][dD]",
+                "*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+                "*.[mM][dD]"
+              ],
+              "id": "pipeline",
+              "invocation": "workspace",
+              "kind": "immediate-pipeline",
+              "order": 0,
+              "requiredCases": [
+                "command-coverage",
+                "clean",
+                "source-issue",
+                "operational-failure",
+                "no-mutation",
+                "workspace-scope",
+                "multi-file",
+                "workspace-attribution"
+              ],
+              "workingDirectory": "workspace",
+              "workspaceIndicator": "contextlint.config.json"
             }
           ]
         }
       },
-      "fixtureCases": [],
       "dependencies": {
-        "provisioningGroup": "docs",
         "primaryExecutable": "contextlint",
-        "programOverrides": [],
-        "wrapperExecutables": []
-      },
-      "provenance": {
-        "catalogSource": "initial-port",
-        "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 19
-        }
-      },
-      "constraints": {
-        "platforms": [
-          "linux",
-          "macos"
+        "programOverrides": [
+          "python"
         ],
-        "architectures": [
-          "x86-64",
-          "aarch64"
-        ],
-        "caseNetwork": "denied"
+        "provisioningGroup": "contextlint",
+        "wrapperExecutables": [
+          "node"
+        ]
       },
       "evidence": [
         {
-          "tier": "schema",
+          "cases": [],
+          "reason": null,
+          "references": [
+            "cargo:test/validation_manifest_matches_catalog_and_fixtures"
+          ],
           "status": "covered",
+          "surfaceCases": [],
           "surfaces": [
             "catalog"
           ],
           "targets": [],
-          "cases": [],
-          "surfaceCases": [],
-          "references": [
-            "cargo:test/validation_manifest_matches_catalog_and_fixtures"
-          ],
-          "reason": null,
+          "tier": "schema",
           "trackingIssue": null
         },
         {
-          "tier": "rendered-command",
-          "status": "gap",
+          "cases": [
+            "command-coverage",
+            "clean",
+            "source-issue",
+            "operational-failure",
+            "no-mutation",
+            "workspace-scope",
+            "multi-file",
+            "workspace-attribution"
+          ],
+          "reason": null,
+          "references": [
+            "cargo:test/run_all_tool_fixtures[contextlint/immediate-contract]"
+          ],
+          "status": "covered",
+          "surfaceCases": [
+            "immediate-phase-order"
+          ],
           "surfaces": [
             "immediate"
           ],
           "targets": [
             "pipeline"
           ],
+          "tier": "rendered-command",
+          "trackingIssue": null
+        },
+        {
           "cases": [
             "command-coverage",
             "clean",
@@ -8339,79 +8382,34 @@
             "no-mutation",
             "workspace-scope",
             "multi-file",
-            "batch-attribution",
             "workspace-attribution"
           ],
+          "reason": null,
+          "references": [
+            "recipe:contextlint-macos-arm64",
+            "artifact:clean/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:clean/fixtures/report.json#contextlint/clean/immediate",
+            "artifact:multi-file-project/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:multi-file-project/fixtures/report.json#contextlint/multi-file-project/immediate",
+            "artifact:operational-failure/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:operational-failure/fixtures/report.json#contextlint/operational-failure/immediate",
+            "artifact:source-issue/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:source-issue/fixtures/report.json#contextlint/source-issue/immediate"
+          ],
+          "status": "covered",
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No probe-backed immediate rendered-command contract is recorded for this target.",
-          "trackingIssue": 7
-        },
-        {
-          "tier": "pinned-real-tool",
-          "status": "gap",
           "surfaces": [
             "immediate"
           ],
           "targets": [
             "pipeline"
           ],
-          "cases": [
-            "command-coverage",
-            "clean",
-            "source-issue",
-            "operational-failure",
-            "no-mutation",
-            "workspace-scope",
-            "multi-file",
-            "batch-attribution",
-            "workspace-attribution"
-          ],
-          "surfaceCases": [
-            "immediate-phase-order"
-          ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 19
-        },
-        {
-          "tier": "rendered-command",
-          "status": "gap",
-          "surfaces": [
-            "deferred"
-          ],
-          "targets": [
-            "verify"
-          ],
-          "cases": [
-            "command-coverage",
-            "clean",
-            "source-issue",
-            "operational-failure",
-            "no-mutation",
-            "workspace-scope",
-            "multi-file",
-            "batch-attribution",
-            "workspace-attribution"
-          ],
-          "surfaceCases": [
-            "deferred-lifecycle"
-          ],
-          "references": [],
-          "reason": "No probe-backed deferred rendered-command contract is recorded for this target.",
-          "trackingIssue": 8
-        },
-        {
           "tier": "pinned-real-tool",
-          "status": "gap",
-          "surfaces": [
-            "deferred"
-          ],
-          "targets": [
-            "verify"
-          ],
+          "trackingIssue": null
+        },
+        {
           "cases": [
             "command-coverage",
             "clean",
@@ -8420,18 +8418,92 @@
             "no-mutation",
             "workspace-scope",
             "multi-file",
-            "batch-attribution",
             "workspace-attribution"
           ],
+          "reason": null,
+          "references": [
+            "cargo:test/run_all_tool_fixtures[contextlint/compatibility-deferred-contract]"
+          ],
+          "status": "covered",
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 19
+          "surfaces": [
+            "deferred"
+          ],
+          "targets": [
+            "verify"
+          ],
+          "tier": "rendered-command",
+          "trackingIssue": null
+        },
+        {
+          "cases": [
+            "command-coverage",
+            "clean",
+            "source-issue",
+            "operational-failure",
+            "no-mutation",
+            "workspace-scope",
+            "multi-file",
+            "workspace-attribution"
+          ],
+          "reason": null,
+          "references": [
+            "recipe:contextlint-macos-arm64",
+            "artifact:clean/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:clean/fixtures/report.json#contextlint/clean/deferred",
+            "artifact:multi-file-project/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:multi-file-project/fixtures/report.json#contextlint/multi-file-project/deferred",
+            "artifact:operational-failure/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:operational-failure/fixtures/report.json#contextlint/operational-failure/deferred",
+            "artifact:source-issue/pinned-environment.json#contextlint-1.1.1-node-24.19.0-npm-11.17.0",
+            "artifact:source-issue/fixtures/report.json#contextlint/source-issue/deferred"
+          ],
+          "status": "covered",
+          "surfaceCases": [
+            "deferred-lifecycle"
+          ],
+          "surfaces": [
+            "deferred"
+          ],
+          "targets": [
+            "verify"
+          ],
+          "tier": "pinned-real-tool",
+          "trackingIssue": null
         }
       ],
-      "exceptions": []
+      "exceptions": [],
+      "fixtureCases": [
+        "clean",
+        "multi-file-project",
+        "operational-failure",
+        "source-issue"
+      ],
+      "id": "contextlint",
+      "provenance": {
+        "catalogSource": "initial-port",
+        "upstream": {
+          "installationSource": "official @contextlint/cli and @contextlint/core 1.1.1 release/tag commit 66cfbffa1175df349379f270e56673c73ff13c54 and the exact npm dependency closure with registry SHA-512 integrities in validation/provisioning/contextlint/package-lock.json, executed only by the official Node.js 24.19.0 Darwin arm64 archive pinned at SHA-256 8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d with bundled npm 11.17.0",
+          "status": "recorded",
+          "url": "https://github.com/nozomi-koborinai/contextlint/releases/tag/v1.1.1",
+          "version": "1.1.1",
+          "versionCommand": [
+            "contextlint-node",
+            "-p",
+            "JSON.parse(require('node:fs').readFileSync(process.argv[1])).version",
+            "@contextlint/cli/package.json"
+          ]
+        }
+      },
+      "specPath": "crates/hookkit-pkl-config/src/builtins/tools/contextlint.pkl",
+      "support": "enabled",
+      "surfaces": {
+        "deferred": "compatibility",
+        "immediate": "supported"
+      },
+      "trackingIssue": 19
     },
     {
       "builtin": "cppLint",

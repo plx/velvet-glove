@@ -9,12 +9,13 @@ just tool-case buf-format multi-file
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case prettier multi-file
+just tool-case contextlint multi-file-project
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all fifteen behavior-rich representative contracts across eleven environments
+Run all sixteen behavior-rich representative contracts across twelve environments
 with:
 
 ```sh
@@ -75,6 +76,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Buf data formats | Buf 1.72.0; Python 3.14.5; Apple diff | mise SHA-256; signed upstream checksum manifest; exact host-program probe | `buf-format/multi-file` |
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
 | Prettier | Node 24.19.0; npm 11.17.0; Prettier 3.9.6; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `prettier/multi-file` |
+| Contextlint | Node 24.19.0; npm 11.17.0; @contextlint/cli and core 1.1.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `contextlint/multi-file-project` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -699,6 +701,163 @@ new session or process group is outside adapter containment. Disabling plugins
 and executable configuration sharply narrows child behavior, but Prettier and
 its parser still process untrusted project bytes and are not a code sandbox.
 
+### Contextlint validation contract
+
+The separate Contextlint environment reuses the official Node.js
+[`node-v24.19.0-darwin-arm64.tar.gz`](https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz)
+release archive, SHA-256
+`8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d`,
+but installs it into a distinct case-only root. The archive supplies Node
+`v24.19.0` and npm `11.17.0`. `npm ci --ignore-scripts` installs the exact
+106-package lock closure headed by
+[`@contextlint/cli` 1.1.1](https://www.npmjs.com/package/@contextlint/cli/v/1.1.1)
+and
+[`@contextlint/core` 1.1.1](https://www.npmjs.com/package/@contextlint/core/v/1.1.1).
+Their registry integrities are, respectively,
+`sha512-QCyjqmdaoanH9L8AduX2jH7vRm2yryHpxroLai0PHHP2lijBTG96UEICCuSIHbkoQ4FXulrokQst5+eTf34v9g==`
+and
+`sha512-ui2ymL90ZlV260NZD8pgki6fwCUM1bX2wj1LbDy5H4u7w8JyTvxIBORxzhWlklDUmsXf1wVxIZXdbvuRYRsqfQ==`.
+Every nonroot locked package has a registry URL and integrity, and the graph
+contains no lifecycle scripts. The committed package and lock files have
+SHA-256
+`e8ed6fc071fc602be902f704287d2f6dcc2ca3ab6ff328c7c6805e2da4149e11`
+and
+`5befd86e5ac7979d3c062fa55d2a5486466458851e754134679e8f5f180d5fff`.
+
+The official lightweight
+[`v1.1.1` release tag](https://github.com/nozomi-koborinai/contextlint/releases/tag/v1.1.1)
+directly targets commit
+[`66cfbffa1175df349379f270e56673c73ff13c54`](https://github.com/nozomi-koborinai/contextlint/commit/66cfbffa1175df349379f270e56673c73ff13c54).
+Because a lightweight tag has no tag-object signature, the committed npm
+integrities and Node archive checksum are the executable trust boundary. The
+driver verifies both package manifests, the CLI-to-core 1.1.1 dependency, the
+CLI symlink's exact resolution to `@contextlint/cli/dist/index.js`, `npm ls
+--all`, the Node/npm probes, and the system-only Mach-O dependency closure
+before a case runs. The exact product probe reads the CLI package manifest with
+the dedicated Node runtime and returns `1.1.1`.
+
+The evaluated outer command runs through pinned Python 3.14.5 in isolated mode
+and binds the dedicated Node and canonical CLI-JS paths rather than consulting
+the shared Node graph:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> node <contextlint-cli> <workspace>/contextlint.config.json __VELVET_GLOVE_CONTEXTLINT_FILES__ {selected-files}
+```
+
+Every invocation then executes exactly two native children. The private
+positive-completion witness is:
+
+```text
+node --disable-proto=throw --permission --allow-fs-read={package-graph} --allow-fs-read={private-root} <contextlint-cli> lint --config {private-root}/contextlint.config.json --cwd {private-root} --format json -- {private-root}/probe.md
+```
+
+It must exit one with empty stderr and the byte-stable SEC-001 diagnostic for a
+missing synthetic completion section. Only then may the project command run:
+
+```text
+node --disable-proto=throw --permission --allow-fs-read={package-graph} --allow-fs-read={workspace} --allow-fs-read={private-root} <contextlint-cli> lint --config {private-root}/project.config.json --cwd {workspace} --format json -- {complete-markdown-inventory}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The adapter accepts no extra CLI arguments. The source configuration must be
+bounded UTF-8 JSON with no duplicate keys, a top-level object, and a nonempty
+`rules` list whose every `rule` is in the adapter's exact 21-rule Contextlint
+1.1.1 built-in allowlist. Per-rule `options` remain data interpreted by that
+pinned built-in rule and are not independently schema-validated by Velvet
+Glove; malformed or unsupported semantics must therefore fail through the
+native completion and status checks. Other Contextlint configuration data may
+be present, but `include` patterns never control execution scope. The validated
+source config is copied to a mode-0600 private file and only that authoritative
+copy is passed to the project child.
+
+Scope is the complete physical, case-insensitive `.md` and `.markdown`
+inventory below the indicator's real, non-symlink workspace. The runner uses
+character-class globs for every suffix letter, so mixed-case names such as
+`notes.Md`, `notes.mD`, and `guide.mArKdOwN` are selectable. Tool-local root
+and nested exclusions prevent candidates below `.git`, `node_modules`, and
+`.velvet-glove`; the adapter likewise skips only physical directories with
+those names. Every symlink the inventory encounters is rejected, including an
+excluded-root entry that is itself a symlink. Symlinks nested inside a real
+skipped directory are unwalked and outside inventory. Hard-linked Markdown
+files, duplicate inodes, nonregular Markdown entries, an empty inventory, more
+than 4,096 Markdown files, any one file over 16 MiB, more than 64 MiB total
+Markdown, and more than 100,000 traversed entries are also rejected. Runner
+candidates must be unique members of that inventory, but the project child
+receives the entire inventory, so config includes and candidate selection
+cannot hide a project or cross-file finding. The config and all Markdown
+identities, modes, sizes, mtimes, and SHA-256s are checked again after native
+completion.
+
+Native Contextlint interprets each explicit file path as a glob. To prevent a
+literal physical file from becoming a silent zero-match pattern, the adapter
+rejects any absolute indicator, traversed-directory, Markdown-inventory,
+candidate, or temporary-root path component containing a character from the
+exact pinned glob-magic set `\*?[]{}()` before launching a child. Ordinary
+non-Markdown files with those characters remain outside inventory.
+
+The private root is a unique mode-0700 directory under an absolute real
+`TMPDIR` outside the workspace; its config, authoritative config copy, and
+probe document are mode 0600 and fsynced. Node receives a minimal fixed
+home/temp/cache, locale, timezone, terminal, CI, color, and worker environment;
+ambient Node, Contextlint, npm, loader, debug, and configuration channels are
+absent. Permission mode grants only the three declared read roots and no
+writes, child processes, workers, or native addons. Raw private paths are
+normalized in child output, adapter failures, and temporary-root creation
+errors. Combined output is capped at 16 MiB.
+
+Native status zero or one is accepted only with empty stderr and an exact JSON
+array whose entries contain only `file`, `line`, `severity`, `message`, and
+`ruleId`. Status one must correspond to at least one error; status zero must
+have no error. Any nonempty validated report, including warning-only output,
+maps to Velvet Glove source status one. Empty output maps to clean. Status two
+and all other native statuses, malformed or incomplete JSON, contradictory
+severity/status, diagnostics outside the physical inventory, permission
+errors, mutation, spawn/read errors, excess output, or failed cleanup map to
+operational status two.
+
+HUP, INT, and TERM are blocked across guarded spawn, forwarded to an active
+owned process group, retained throughout private-root cleanup, and drained at
+the process-exit cutoff. Every exit path closes pipes and performs bounded
+termination/reap confirmation. A normally exiting leader with a same-group
+descendant is killed and rejected; inherited output pipes after leader exit
+also fail within a fixed bound. Cleanup errors compose with the primary error
+instead of replacing it.
+
+The four cases are `clean`, warning-only `source-issue`,
+`multi-file-project`, and `operational-failure`. The multi-file representative
+selects two documents but proves the native child receives all three physical
+documents, including an unselected file whose diagnostic and a project-level
+missing-file diagnostic must remain visible. All four execute on Claude and
+Codex immediate hooks and their compatibility-deferred workflows. Retained
+evidence binds the exact adapter, two-child argv/status sequence, managed
+Node/CLI graph, controlled environment, authoritative private config, complete
+workspace snapshots, no mutation, and clean semantic repeats.
+
+The adapter and native project command are read-only, but these controls do not
+eliminate time-of-check/time-of-use races created by another process.
+Contextlint receives file paths rather than retained descriptors, so launch and
+final snapshots detect persistent Markdown changes but cannot detect a
+transient replacement restored to the same observed identity and bytes.
+Copying the config prevents replacement after the copy from changing child
+authority, but a concurrent writer can still affect which coherent JSON
+snapshot the initial bounded read captures. Concurrent workspace topology,
+referenced-target, Markdown, config, or executable replacement therefore
+cannot be eliminated.
+
+Physical `.git`, `node_modules`, and `.velvet-glove` subtrees and ordinary
+non-Markdown workspace objects are outside inventory. Node permission mode
+grants the lexical workspace read root rather than symlink-safe physical
+containment, so built-in rule links or options targeting unwalked content in a
+real skipped subtree can follow a nested symlink for existence checks. A
+descendant that deliberately creates a new session or process group and closes
+inherited pipes is outside adapter containment. Node's permission model narrows
+Node APIs but is not an OS sandbox, and the pinned CLI still parses untrusted
+Markdown and rule data; the active macOS deny-network wrapper remains
+authoritative for network isolation.
+
 ### Cargo Clippy validation contract
 
 The dedicated Cargo Clippy environment installs selected components from the
@@ -1005,8 +1164,9 @@ status model and is therefore conservatively classified as operational.
 The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
-recipe registry. Shared Node, dedicated Prettier, Python, and Ruby package
-closures live beside it under `node/`, `prettier/`, `python/`, and `ruby/`; the
+recipe registry. Shared Node, dedicated Prettier, dedicated Contextlint,
+Python, and Ruby package closures live beside it under `node/`, `prettier/`,
+`contextlint/`, `python/`, and `ruby/`; the
 Betterleaks dependency closure and patch live under `betterleaks/`. Runtime
 components, auxiliary programs, bootstrap
 commands, platform, architecture, minimum OS, and case-network policy are
@@ -1033,11 +1193,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These fifteen smoke contracts establish the reproducible environment substrate;
+These sixteen smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
-Asciidoctor, Biome, Prettier, gofmt, Cargo Clippy, and Cargo Fmt
+Asciidoctor, Biome, Prettier, Contextlint, gofmt, Cargo Clippy, and Cargo Fmt
 are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 

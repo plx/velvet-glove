@@ -116,7 +116,7 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run the fifteen pinned representative contracts across eleven controlled
+Run the sixteen pinned representative contracts across twelve controlled
 environments with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -151,7 +151,8 @@ status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
 alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, Prettier,
-Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract cases are retained too.
+Contextlint, Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract cases are
+retained too.
 Their evidence includes
 exact pass-through program/argv/cwd/environment traces (including
 Asciidoctor's nested FATAL preflight and WARNING validation, Astro's single
@@ -189,6 +190,32 @@ swept and rejected, and a mixed dirty-valid/parse-invalid format attempt never
 reaches the write command. It does not claim protection from concurrent target
 replacement after validation, a target change after format preflight, an
 escaped process group, or partial writes after a late native failure.
+
+Contextlint traces bind a separate dedicated Node 24.19.0 executable and the
+exact `@contextlint/cli` plus `@contextlint/core` 1.1.1 graph. Every adapter
+invocation first runs the exact private SEC-001 completion probe, then passes
+the complete physical Markdown inventory to the project invocation with the
+controlled config copied into the private root. Both children receive fixed
+permission flags, exact read roots, a minimal environment, and no filesystem
+writes, child processes, workers, or native addons. The four cases distinguish
+clean completion, a warning-only source issue, project and unselected-file
+diagnostics in a multi-file workspace, and a permission failure that must map
+to operational status two. A mixed-case-only clean target and the runner's
+FileMatcher regression prove `.Md`, `.mD`, and mixed `.markdown` suffixes are
+selected while root and nested `.git`, `node_modules`, and `.velvet-glove`
+subtrees are excluded. The hostile lifecycle/no-op probes cover config-source
+replacement, active and cleanup-window signals, guarded spawn, output bounds,
+closed-stdio and inherited-pipe descendants, ancestor indicator symlinks,
+every exact Contextlint glob-magic character in a Markdown or ancestor path,
+excluded-root symlinks, and invalid or unwritable temporary roots. Every
+symlink encountered outside physically skipped directories is rejected;
+nested symlinks inside real skipped trees are unwalked and outside inventory.
+Node receives the lexical workspace read root, so built-in existence checks
+targeting skipped content can follow such a nested symlink. Concurrent
+workspace topology, referenced-target, Markdown, config, or executable
+replacement cannot be eliminated, and a descendant that deliberately escapes
+the owned session/process group is outside containment. Node permissions are
+not the OS network sandbox, so pinned evidence also requires active deny-net.
 
 gofmt traces bind the pinned executable behind an isolated Python adapter and
 record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain
