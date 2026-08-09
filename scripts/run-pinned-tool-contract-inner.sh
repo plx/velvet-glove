@@ -46,6 +46,7 @@ VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT=$(pinned_component_cache_root \
   "$state_dir" cargo-clippy-toolchain-1.97.1 "$cargo_clippy_toolchain_identity")
 export VELVET_GLOVE_FIXTURE_PRETTIER_ROOT="$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6"
 export VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT="$state_dir/contextlint-environment-node-24.19.0-contextlint-1.1.1"
+export VELVET_GLOVE_FIXTURE_DCLINT_ROOT="$state_dir/dclint-environment-node-24.19.0-dclint-3.1.0"
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -95,6 +96,10 @@ contextlint_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("contextlint") != null' >/dev/null; then
   contextlint_selected=true
 fi
+dclint_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("dclint") != null' >/dev/null; then
+  dclint_selected=true
+fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
   any(.recipes[];
@@ -109,6 +114,9 @@ contextlint_node="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/node/bin/node"
 contextlint_npm_cli="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
 contextlint_cli="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_modules/@contextlint/cli/dist/index.js"
 contextlint_cli_manifest="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_modules/@contextlint/cli/package.json"
+dclint_node="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/bin/node"
+dclint_npm_cli="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
+dclint_cli="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/.bin/dclint"
 
 while IFS= read -r program; do
   resolved=
@@ -151,6 +159,24 @@ while IFS= read -r program; do
       node)
         if [[ $shared_node_selected == false && $prettier_selected == false ]]; then
           resolved="$contextlint_node"
+        fi
+        ;;
+    esac
+  fi
+  if [[ -z $resolved && $dclint_selected == true ]]; then
+    case $program in
+      dclint-node)
+        resolved="$dclint_node"
+        ;;
+      dclint-npm)
+        resolved="$dclint_npm_cli"
+        ;;
+      dclint)
+        resolved="$dclint_cli"
+        ;;
+      node)
+        if [[ $shared_node_selected == false ]]; then
+          resolved="$dclint_node"
         fi
         ;;
     esac
@@ -215,6 +241,7 @@ while IFS= read -r probe; do
   rust_197_probe=false
   prettier_probe=false
   contextlint_probe=false
+  dclint_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
   done < <(printf '%s\n' "$probe" | jq -r '.probe.argv[]')
@@ -279,10 +306,26 @@ while IFS= read -r probe; do
         ;;
     esac
   fi
+  if [[ $dclint_selected == true ]]; then
+    case $owner in
+      dclint-node)
+        probe_argv=("$dclint_node" "${probe_argv[@]:1}")
+        dclint_probe=true
+        ;;
+      dclint-npm)
+        probe_argv=("$dclint_node" "$dclint_npm_cli" "${probe_argv[@]:1}")
+        dclint_probe=true
+        ;;
+      dclint)
+        probe_argv=("$dclint_node" "$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/dclint/bin/dclint.cjs" "${probe_argv[@]:1}")
+        dclint_probe=true
+        ;;
+    esac
+  fi
   set +e
   if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
-  elif [[ $prettier_probe == true || $contextlint_probe == true ]]; then
+  elif [[ $prettier_probe == true || $contextlint_probe == true || $dclint_probe == true ]]; then
     observed=$(env -i \
       "HOME=$HOME" \
       "USER=${USER:-runner}" \

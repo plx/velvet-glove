@@ -403,6 +403,72 @@
       ]
     },
     {
+      "id": "macos-arm64-dclint",
+      "provisioningGroup": "dclint",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "dclint-node",
+          "version": "24.19.0",
+          "installationSource": "official Node.js v24.19.0 Darwin arm64 release archive locked by the SHA-256 published in the release SHASUMS256.txt",
+          "integrity": {
+            "kind": "sha256-archive",
+            "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz",
+            "sha256": "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d",
+            "archiveFormat": "tar-gz",
+            "archiveRoot": "node-v24.19.0-darwin-arm64",
+            "minOsVersion": "11.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["dclint-node", "--version"],
+            "match": "exact",
+            "expected": "v24.19.0"
+          }
+        },
+        {
+          "id": "dclint-npm",
+          "version": "11.17.0",
+          "installationSource": "npm CLI bundled in the checksum-pinned official Node.js v24.19.0 Darwin arm64 archive",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "dclint-node"
+          },
+          "probe": {
+            "argv": ["dclint-npm", "--version"],
+            "match": "exact",
+            "expected": "11.17.0"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["dclint-node", "dclint-npm"],
+      "bootstrap": [
+        {
+          "id": "dclint-npm-ci",
+          "argv": [
+            "{state}/dclint-environment-node-24.19.0-dclint-3.1.0/node/bin/node",
+            "{state}/dclint-environment-node-24.19.0-dclint-3.1.0/node/lib/node_modules/npm/bin/npm-cli.js",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--prefix",
+            "{state}/dclint-environment-node-24.19.0-dclint-3.1.0/package"
+          ],
+          "environment": {
+            "NPM_CONFIG_USERCONFIG": "/dev/null",
+            "NPM_CONFIG_GLOBALCONFIG": "{home}/npm-globalconfig"
+          },
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/dclint/package-lock.json"
+        }
+      ]
+    },
+    {
       "id": "macos-arm64-python",
       "provisioningGroup": "python",
       "platform": "macos",
@@ -1135,6 +1201,31 @@
       "caseExecutables": ["contextlint", "node", "python"],
       "cases": ["clean", "source-issue", "multi-file-project", "operational-failure"],
       "representativeCase": "multi-file-project"
+    },
+    {
+      "id": "dclint-macos-arm64",
+      "toolId": "dclint",
+      "environmentId": "macos-arm64-dclint",
+      "version": "3.1.0",
+      "installationSource": "official dclint 3.1.0 npm package and exact one-package dependency graph with registry SHA-512 integrity in validation/provisioning/dclint/package-lock.json, executed only by the official Node.js 24.19.0 Darwin arm64 archive pinned at SHA-256 8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d with bundled npm 11.17.0",
+      "integrity": {
+        "kind": "npm-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/dclint/package-lock.json"
+      },
+      "probe": {
+        "argv": ["dclint", "--version"],
+        "match": "exact",
+        "expected": "3.1.0"
+      },
+      "caseExecutables": ["dclint", "node", "python"],
+      "cases": [
+        "clean",
+        "autofix-multi-file",
+        "source-issue",
+        "validation-issue",
+        "operational-failure"
+      ],
+      "representativeCase": "autofix-multi-file"
     },
     {
       "id": "sort-package-json-macos-arm64",

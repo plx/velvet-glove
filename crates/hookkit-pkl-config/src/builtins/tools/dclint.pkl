@@ -1,14 +1,1693 @@
 /// dclint — Docker Compose linter.
+///
+/// dclint 3.1.0 uses status 1 for both source diagnostics and operational
+/// failures. Its native fixer also rewrites every supplied valid file and can
+/// stop after partially mutating a batch. The isolated adapter validates the
+/// native JSON report, selects only files with proven fixable diagnostics for
+/// the write child, and authoritatively rechecks the complete original batch.
 
 module velvet_glove.builtins.tools.Dclint
 
 import "../Config.pkl" as Config
 
+dclintAdapter: String = #"""
+  import json
+  import math
+  import os
+  import selectors
+  import shutil
+  import signal
+  import stat
+  import subprocess
+  import sys
+  import tempfile
+  import time
+
+  MARKER = "__VELVET_GLOVE_DCLINT_FILES__"
+  INPUT_LIMIT = 64 * 1024 * 1024
+  WORKSPACE_LIMIT = 128 * 1024 * 1024
+  CONFIG_LIMIT = 1024 * 1024
+  OUTPUT_LIMIT = 32 * 1024 * 1024
+  MAX_FILES = 4096
+  MAX_WORKSPACE_FILES = 8192
+  MAX_WORKSPACE_DIRECTORIES = 8192
+  SKIPPED_DIRECTORIES = {".git", ".velvet-glove", "node" + "_modules", "target"}
+  HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+  VALIDATION_RULES = {"invalid-yaml", "invalid-schema", "unknown-error"}
+  UNSAFE_WRITE_RULES = {"no-version-field"}
+  RULE_FIXABILITY = {
+      "no-build-and-image": False,
+      "no-duplicate-container-names": False,
+      "no-duplicate-exported-ports": False,
+      "no-quotes-in-volumes": True,
+      "no-unbound-port-interfaces": False,
+      "no-version-field": False,
+      "require-project-name-field": False,
+      "require-quotes-in-ports": True,
+      "service-container-name-regex": False,
+      "service-dependencies-alphabetical-order": True,
+      "service-image-require-explicit-tag": False,
+      "service-keys-order": True,
+      "service-ports-alphabetical-order": True,
+      "services-alphabetical-order": True,
+      "top-level-properties-order": True,
+      "invalid-yaml": False,
+      "invalid-schema": False,
+      "unknown-error": False,
+  }
+  SERVICE_KEY_DEFAULT_GROUPS = {
+      "Core Definitions": ["image", "build", "container_name"],
+      "Service Dependencies": ["depends_on"],
+      "Data Management and Configuration": [
+          "volumes",
+          "volumes_from",
+          "configs",
+          "secrets",
+      ],
+      "Environment Configuration": ["environment", "env_file"],
+      "Networking": ["ports", "networks", "network_mode", "extra_hosts"],
+      "Runtime Behavior": [
+          "command",
+          "entrypoint",
+          "working_dir",
+          "restart",
+          "healthcheck",
+      ],
+      "Operational Metadata": ["logging", "labels"],
+      "Security and Execution Context": ["user", "isolation"],
+      "Other": [],
+  }
+  SERVICE_KEY_GROUPS = set(SERVICE_KEY_DEFAULT_GROUPS)
+  TOP_LEVEL_ORDER = (
+      "x-properties",
+      "version",
+      "name",
+      "include",
+      "services",
+      "models",
+      "networks",
+      "volumes",
+      "secrets",
+      "configs",
+  )
+  TOP_LEVEL_KEYS = set(TOP_LEVEL_ORDER)
+
+
+  class ContractError(Exception):
+      pass
+
+
+  class AdapterSignal(BaseException):
+      def __init__(self, signum):
+          super().__init__(f"received signal {signum}")
+          self.signum = signum
+
+
+  def reject(message):
+      raise ContractError(message)
+
+
+  def safe_text(value, label, allow_empty=False):
+      if not isinstance(value, str) or (not value and not allow_empty):
+          reject(f"{label} is not a {'possibly empty' if allow_empty else 'nonempty'} string")
+      if "\0" in value or "\n" in value or "\r" in value:
+          reject(f"{label} contains a control character")
+      try:
+          value.encode("utf-8")
+      except UnicodeError as error:
+          reject(f"{label} is not UTF-8 encodable: {error}")
+      return value
+
+
+  def safe_path_text(value, label):
+      value = safe_text(value, label)
+      if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+          reject(f"{label} contains a control character")
+      return value
+
+
+  def strict_object(pairs):
+      result = {}
+      for key, value in pairs:
+          if key in result:
+              raise ValueError(f"duplicate JSON key {key!r}")
+          result[key] = value
+      return result
+
+
+  def invalid_constant(value):
+      raise ValueError(f"non-finite JSON number {value}")
+
+
+  def parse_json(raw, label):
+      try:
+          text = raw.decode("utf-8")
+          return json.loads(
+              text,
+              object_pairs_hook=strict_object,
+              parse_constant=invalid_constant,
+          )
+      except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+          reject(f"{label} is not strict UTF-8 JSON: {error}")
+
+
+  def validate_json_tree(value, label, depth=0):
+      if depth > 32:
+          reject(f"{label} exceeds the JSON nesting limit")
+      if value is None or isinstance(value, (str, bool)):
+          return
+      if type(value) is int:
+          return
+      if type(value) is float:
+          if not math.isfinite(value):
+              reject(f"{label} contains a non-finite number")
+          return
+      if isinstance(value, list):
+          for index, item in enumerate(value):
+              validate_json_tree(item, f"{label}[{index}]", depth + 1)
+          return
+      if isinstance(value, dict):
+          for key, item in value.items():
+              safe_text(key, f"{label} key")
+              validate_json_tree(item, f"{label}.{key}", depth + 1)
+          return
+      reject(f"{label} contains an unsupported JSON value")
+
+
+  def string_list(value, label, allowed=None):
+      if not isinstance(value, list) or not value:
+          reject(f"{label} must be a nonempty array")
+      result = []
+      for index, item in enumerate(value):
+          item = safe_text(item, f"{label}[{index}]")
+          if allowed is not None and item not in allowed:
+              reject(f"{label}[{index}] has unsupported value {item!r}")
+          result.append(item)
+      if len(set(result)) != len(result):
+          reject(f"{label} contains duplicate values")
+      return result
+
+
+  def validate_rule_options(rule, options):
+      if not isinstance(options, dict):
+          reject(f"dclint rule {rule!r} options are not an object")
+      if rule == "no-build-and-image":
+          unknown = set(options) - {"checkPullPolicy"}
+          if unknown:
+              reject(f"dclint rule {rule!r} has unknown options: {sorted(unknown)!r}")
+          if "checkPullPolicy" in options and not isinstance(options["checkPullPolicy"], bool):
+              reject("dclint checkPullPolicy option is not boolean")
+      elif rule == "require-quotes-in-ports":
+          unknown = set(options) - {"quoteType", "portsSections"}
+          if unknown:
+              reject(f"dclint rule {rule!r} has unknown options: {sorted(unknown)!r}")
+          if "quoteType" in options and options["quoteType"] not in ("single", "double"):
+              reject("dclint quoteType option must be 'single' or 'double'")
+          if "portsSections" in options:
+              string_list(options["portsSections"], "dclint portsSections", {"ports", "expose"})
+      elif rule == "service-image-require-explicit-tag":
+          unknown = set(options) - {"prohibitedTags"}
+          if unknown:
+              reject(f"dclint rule {rule!r} has unknown options: {sorted(unknown)!r}")
+          if "prohibitedTags" in options:
+              string_list(options["prohibitedTags"], "dclint prohibitedTags")
+      elif rule == "service-keys-order":
+          unknown = set(options) - {"groups", "groupOrder"}
+          if unknown:
+              reject(f"dclint rule {rule!r} has unknown options: {sorted(unknown)!r}")
+          if "groups" in options:
+              groups = options["groups"]
+              if not isinstance(groups, dict):
+                  reject("dclint service-key groups option is not an object")
+              effective_groups = dict(SERVICE_KEY_DEFAULT_GROUPS)
+              for group, keys in groups.items():
+                  safe_text(group, "dclint service-key group")
+                  if group not in SERVICE_KEY_GROUPS:
+                      reject(f"dclint service-key group is unsupported: {group!r}")
+                  effective_groups[group] = string_list(
+                      keys, f"dclint service-key group {group!r}"
+                  )
+              assigned_groups = {}
+              for group, keys in effective_groups.items():
+                  for key in keys:
+                      previous = assigned_groups.get(key)
+                      if previous is not None:
+                          reject(
+                              f"dclint service key {key!r} is assigned to multiple groups: "
+                              f"{previous!r} and {group!r}"
+                          )
+                      assigned_groups[key] = group
+          if "groupOrder" in options:
+              string_list(options["groupOrder"], "dclint groupOrder", SERVICE_KEY_GROUPS)
+      elif rule == "top-level-properties-order":
+          unknown = set(options) - {"customOrder"}
+          if unknown:
+              reject(f"dclint rule {rule!r} has unknown options: {sorted(unknown)!r}")
+          if "customOrder" in options:
+              order = string_list(
+                  options["customOrder"], "dclint customOrder", TOP_LEVEL_KEYS
+              )
+              if set(order) != TOP_LEVEL_KEYS:
+                  reject(
+                      "dclint customOrder must be an exact permutation of the "
+                      "pinned Compose top-level key order"
+                  )
+      elif options:
+          reject(f"dclint rule {rule!r} does not have controlled options")
+
+
+  def validate_config(config):
+      if not isinstance(config, dict):
+          reject("dclint config root is not an object")
+      unknown = set(config) - {"$schema", "rules", "quiet", "debug", "exclude"}
+      if unknown:
+          reject(f"dclint config has unknown or executable-loading keys: {sorted(unknown)!r}")
+      if "$schema" in config:
+          safe_text(config["$schema"], "dclint config $schema")
+      for name in ("quiet", "debug"):
+          if name in config and config[name] is not False:
+              reject(f"dclint config {name} must be false to preserve controlled diagnostics")
+      if "exclude" in config and config["exclude"] != []:
+          reject("dclint config exclude must be empty to preserve selected-file scope")
+      rules = config.get("rules", {})
+      if not isinstance(rules, dict):
+          reject("dclint config rules is not an object")
+      for rule, value in rules.items():
+          safe_text(rule, "dclint config rule name")
+          if rule not in RULE_FIXABILITY or rule in VALIDATION_RULES:
+              reject(f"dclint config rule is unsupported: {rule!r}")
+          if type(value) is int and value in (0, 1, 2):
+              if rule in UNSAFE_WRITE_RULES and value != 0:
+                  reject(
+                      f"dclint rule {rule!r} cannot be enabled because its "
+                      "3.1.0 fixer can delete nested extension data"
+                  )
+              continue
+          if (
+              isinstance(value, list)
+              and len(value) == 2
+              and type(value[0]) is int
+              and value[0] in (0, 1, 2)
+          ):
+              if rule in UNSAFE_WRITE_RULES and value[0] != 0:
+                  reject(
+                      f"dclint rule {rule!r} cannot be enabled because its "
+                      "3.1.0 fixer can delete nested extension data"
+                  )
+              validate_rule_options(rule, value[1])
+              continue
+          reject(f"dclint config rule {rule!r} has an unsupported value")
+
+
+  def normalize_config(config):
+      validate_config(config)
+      rules = config.setdefault("rules", {})
+      rules.setdefault("no-version-field", 0)
+      rule = "top-level-properties-order"
+      safe_options = {"customOrder": list(TOP_LEVEL_ORDER)}
+      value = rules.get(rule)
+      if value is None:
+          rules[rule] = [1, safe_options]
+      elif type(value) is int:
+          if value in (1, 2):
+              rules[rule] = [value, safe_options]
+      else:
+          severity, options = value
+          if severity in (1, 2) and "customOrder" not in options:
+              normalized_options = dict(options)
+              normalized_options["customOrder"] = list(TOP_LEVEL_ORDER)
+              rules[rule] = [severity, normalized_options]
+      return config
+
+
+  def normalized_config_bytes(raw, label):
+      config = normalize_config(parse_json(raw, label))
+      encoded = (
+          json.dumps(config, ensure_ascii=True, separators=(",", ":")) + "\n"
+      ).encode("ascii")
+      if len(encoded) > CONFIG_LIMIT:
+          reject(f"{label} exceeds the normalized {CONFIG_LIMIT}-byte limit")
+      return encoded
+
+
+  def inspect_file(path, label, limit):
+      if os.path.realpath(path) != path:
+          reject(f"{label} traverses a symlink: {path}")
+      try:
+          info = os.lstat(path)
+          if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+              reject(f"{label} is not a unique regular file: {path}")
+          flags = os.O_RDONLY
+          if hasattr(os, "O_CLOEXEC"):
+              flags |= os.O_CLOEXEC
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          descriptor = os.open(path, flags)
+          opened = os.fstat(descriptor)
+          if (
+              not stat.S_ISREG(opened.st_mode)
+              or opened.st_nlink != 1
+              or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
+          ):
+              os.close(descriptor)
+              reject(f"{label} changed identity while opening: {path}")
+          with os.fdopen(descriptor, "rb") as source:
+              data = source.read(limit + 1)
+              final = os.fstat(source.fileno())
+      except OSError as error:
+          reject(f"cannot inspect {label} {path}: {error}")
+      if len(data) > limit:
+          reject(f"{label} exceeds the {limit}-byte limit: {path}")
+      stable = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns")
+      if any(getattr(opened, field) != getattr(final, field) for field in stable):
+          reject(f"{label} changed while it was read: {path}")
+      return {
+          "path": path,
+          "dev": final.st_dev,
+          "ino": final.st_ino,
+          "mode": stat.S_IMODE(final.st_mode),
+          "mtime_ns": final.st_mtime_ns,
+          "data": data,
+      }
+
+
+  def inspect_directory(path, label):
+      safe_path_text(path, label)
+      try:
+          initial = os.lstat(path)
+          if stat.S_ISLNK(initial.st_mode) or not stat.S_ISDIR(initial.st_mode):
+              reject(f"{label} is not a real directory: {path}")
+          flags = os.O_RDONLY
+          if hasattr(os, "O_CLOEXEC"):
+              flags |= os.O_CLOEXEC
+          if hasattr(os, "O_DIRECTORY"):
+              flags |= os.O_DIRECTORY
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          descriptor = os.open(path, flags)
+          opened = os.fstat(descriptor)
+          if (
+              not stat.S_ISDIR(opened.st_mode)
+              or (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino)
+          ):
+              os.close(descriptor)
+              reject(f"{label} changed while it was opened: {path}")
+          os.close(descriptor)
+      except OSError as error:
+          reject(f"cannot inspect {label} {path}: {error}")
+      return {
+          "path": path,
+          "dev": opened.st_dev,
+          "ino": opened.st_ino,
+          "mode": stat.S_IMODE(opened.st_mode),
+      }
+
+
+  def retained_relative(project_root, path):
+      return os.path.relpath(path, project_root).replace(os.sep, "/")
+
+
+  def scan_workspace(project_root):
+      files = {}
+      directories = {}
+      total = 0
+
+      def walk_error(error):
+          reject(f"cannot walk retained workspace: {error}")
+
+      for directory, child_directories, names in os.walk(
+          project_root, followlinks=False, onerror=walk_error
+      ):
+          relative_directory = retained_relative(project_root, directory)
+          if len(directories) >= MAX_WORKSPACE_DIRECTORIES:
+              reject(
+                  f"retained workspace contains more than {MAX_WORKSPACE_DIRECTORIES} directories"
+              )
+          directories[relative_directory] = inspect_directory(
+              directory, "retained workspace directory"
+          )
+          retained_children = []
+          for name in child_directories:
+              path = os.path.join(directory, name)
+              safe_path_text(path, "retained workspace path")
+              if name in SKIPPED_DIRECTORIES:
+                  continue
+              if os.path.islink(path):
+                  reject(f"retained workspace contains a symlink directory: {path}")
+              retained_children.append(name)
+          child_directories[:] = retained_children
+          for name in names:
+              path = os.path.join(directory, name)
+              safe_path_text(path, "retained workspace path")
+              relative = retained_relative(project_root, path)
+              snapshot = inspect_file(path, "retained workspace file", INPUT_LIMIT)
+              total += len(snapshot["data"])
+              if len(files) >= MAX_WORKSPACE_FILES:
+                  reject(f"retained workspace contains more than {MAX_WORKSPACE_FILES} files")
+              if total > WORKSPACE_LIMIT:
+                  reject(
+                      f"retained workspace files exceed the {WORKSPACE_LIMIT}-byte aggregate limit"
+                  )
+              files[relative] = snapshot
+      return files, directories
+
+
+  def workspace_diff(before, before_directories, after, after_directories):
+      before_paths = set(before)
+      after_paths = set(after)
+      added = sorted(after_paths - before_paths)
+      removed = sorted(before_paths - after_paths)
+      changed = sorted(
+          relative
+          for relative in before_paths.intersection(after_paths)
+          if before[relative]["data"] != after[relative]["data"]
+      )
+      touched = sorted(
+          relative
+          for relative in before_paths.intersection(after_paths)
+          if relative not in changed and before[relative] != after[relative]
+      )
+      before_directory_paths = set(before_directories)
+      after_directory_paths = set(after_directories)
+      added_directories = sorted(after_directory_paths - before_directory_paths)
+      removed_directories = sorted(before_directory_paths - after_directory_paths)
+      touched_directories = sorted(
+          relative
+          for relative in before_directory_paths.intersection(after_directory_paths)
+          if before_directories[relative]["mode"] != after_directories[relative]["mode"]
+      )
+      return (
+          added,
+          removed,
+          changed,
+          touched,
+          added_directories,
+          removed_directories,
+          touched_directories,
+      )
+
+
+  def workspace_change_summary(diff):
+      labels = (
+          "added files",
+          "removed files",
+          "changed files",
+          "metadata-only files",
+          "added directories",
+          "removed directories",
+          "mode-changed directories",
+      )
+      parts = []
+      for label, paths in zip(labels, diff):
+          if paths:
+              parts.append(f"{label}: {', '.join(paths[:8])}")
+      return "; ".join(parts) if parts else "no retained workspace changes"
+
+
+  def workspace_path(project_root, relative):
+      if relative == ".":
+          return project_root
+      return os.path.join(project_root, relative.replace("/", os.sep))
+
+
+  def atomic_write(path, data, mode):
+      descriptor, temporary_path = tempfile.mkstemp(
+          prefix=".velvet-glove-dclint-", dir=os.path.dirname(path)
+      )
+      try:
+          os.fchmod(descriptor, mode)
+          with os.fdopen(descriptor, "wb", closefd=True) as destination:
+              descriptor = -1
+              destination.write(data)
+              destination.flush()
+              os.fsync(destination.fileno())
+          os.replace(temporary_path, path)
+      except BaseException:
+          if descriptor >= 0:
+              os.close(descriptor)
+          try:
+              os.unlink(temporary_path)
+          except OSError:
+              pass
+          raise
+
+
+  def make_directory_traversable(path):
+      initial = os.lstat(path)
+      if stat.S_ISLNK(initial.st_mode) or not stat.S_ISDIR(initial.st_mode):
+          raise ValueError(f"path is not a real directory: {path}")
+      current_mode = stat.S_IMODE(initial.st_mode)
+      temporary_mode = current_mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+      if temporary_mode != current_mode:
+          os.chmod(path, temporary_mode, follow_symlinks=False)
+          restored = os.lstat(path)
+          if (
+              stat.S_ISLNK(restored.st_mode)
+              or not stat.S_ISDIR(restored.st_mode)
+              or (restored.st_dev, restored.st_ino) != (initial.st_dev, initial.st_ino)
+              or stat.S_IMODE(restored.st_mode) != temporary_mode
+          ):
+              raise ValueError(f"directory changed while making it traversable: {path}")
+
+
+  def set_directory_mode(path, mode):
+      flags = os.O_RDONLY
+      if hasattr(os, "O_CLOEXEC"):
+          flags |= os.O_CLOEXEC
+      if hasattr(os, "O_DIRECTORY"):
+          flags |= os.O_DIRECTORY
+      if hasattr(os, "O_NOFOLLOW"):
+          flags |= os.O_NOFOLLOW
+      descriptor = os.open(path, flags)
+      try:
+          opened = os.fstat(descriptor)
+          if not stat.S_ISDIR(opened.st_mode):
+              raise ValueError(f"path is not a real directory: {path}")
+          os.fchmod(descriptor, mode)
+          restored = os.fstat(descriptor)
+          if (
+              (restored.st_dev, restored.st_ino) != (opened.st_dev, opened.st_ino)
+              or stat.S_IMODE(restored.st_mode) != mode
+          ):
+              raise ValueError(f"directory changed while restoring its mode: {path}")
+      finally:
+          os.close(descriptor)
+
+
+  def rollback_inventory(project_root, errors):
+      entries = {}
+      directories = set()
+
+      def walk_error(error):
+          errors.append(f"walk retained workspace for rollback: {error}")
+
+      for directory, child_directories, names in os.walk(
+          project_root, followlinks=False, onerror=walk_error
+      ):
+          relative_directory = retained_relative(project_root, directory)
+          directories.add(relative_directory)
+          retained_children = []
+          for name in child_directories:
+              path = os.path.join(directory, name)
+              if name in SKIPPED_DIRECTORIES:
+                  continue
+              relative = retained_relative(project_root, path)
+              try:
+                  info = os.lstat(path)
+                  if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+                      make_directory_traversable(path)
+                      retained_children.append(name)
+                  else:
+                      entries[relative] = path
+              except (OSError, ValueError) as error:
+                  errors.append(f"inspect rollback entry {relative!r}: {error}")
+          child_directories[:] = retained_children
+          for name in names:
+              path = os.path.join(directory, name)
+              entries[retained_relative(project_root, path)] = path
+      return entries, directories
+
+
+  def restore_workspace(project_root, before, before_directories):
+      errors = []
+      try:
+          if not os.path.lexists(project_root):
+              os.mkdir(project_root, mode=0o700)
+          make_directory_traversable(project_root)
+      except (OSError, ValueError) as error:
+          errors.append(f"restore project root: {error}")
+          return "; ".join(errors)
+
+      entries, current_directories = rollback_inventory(project_root, errors)
+      for relative, path in sorted(entries.items(), reverse=True):
+          keep = False
+          if relative in before:
+              try:
+                  info = os.lstat(path)
+                  keep = stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode) and info.st_nlink == 1
+              except OSError:
+                  pass
+          if keep:
+              continue
+          try:
+              os.unlink(path)
+          except OSError as error:
+              errors.append(f"remove rollback entry {relative!r}: {error}")
+
+      for relative in sorted(
+          current_directories - set(before_directories),
+          key=lambda item: (item.count("/"), item),
+          reverse=True,
+      ):
+          path = workspace_path(project_root, relative)
+          try:
+              os.rmdir(path)
+          except OSError as error:
+              errors.append(f"remove rollback directory {relative!r}: {error}")
+
+      for relative in sorted(
+          set(before_directories) - current_directories,
+          key=lambda item: (item.count("/"), item),
+      ):
+          path = workspace_path(project_root, relative)
+          try:
+              os.mkdir(path, mode=0o700)
+          except OSError as error:
+              errors.append(f"recreate rollback directory {relative!r}: {error}")
+
+      for relative, snapshot in sorted(before.items()):
+          path = workspace_path(project_root, relative)
+          try:
+              current = None
+              if os.path.lexists(path):
+                  try:
+                      current = inspect_file(path, "rollback file", INPUT_LIMIT)
+                  except ContractError:
+                      os.unlink(path)
+              if (
+                  current is None
+                  or current["data"] != snapshot["data"]
+                  or current["mode"] != snapshot["mode"]
+              ):
+                  atomic_write(path, snapshot["data"], snapshot["mode"])
+                  current = inspect_file(path, "restored file", INPUT_LIMIT)
+              if current["mtime_ns"] != snapshot["mtime_ns"]:
+                  flags = os.O_RDONLY
+                  if hasattr(os, "O_CLOEXEC"):
+                      flags |= os.O_CLOEXEC
+                  if hasattr(os, "O_NOFOLLOW"):
+                      flags |= os.O_NOFOLLOW
+                  descriptor = os.open(path, flags)
+                  try:
+                      opened = os.fstat(descriptor)
+                      if (
+                          not stat.S_ISREG(opened.st_mode)
+                          or opened.st_nlink != 1
+                          or (opened.st_dev, opened.st_ino) != (current["dev"], current["ino"])
+                      ):
+                          raise ValueError(f"file changed before restoring its mtime: {path}")
+                      os.utime(
+                          descriptor,
+                          ns=(opened.st_atime_ns, snapshot["mtime_ns"]),
+                      )
+                      restored = os.fstat(descriptor)
+                      if restored.st_mtime_ns != snapshot["mtime_ns"]:
+                          raise ValueError(f"file changed while restoring its mtime: {path}")
+                  finally:
+                      os.close(descriptor)
+          except (OSError, ValueError, ContractError) as error:
+              errors.append(f"restore file {relative!r}: {error}")
+
+      for relative in sorted(
+          before_directories,
+          key=lambda item: (item.count("/"), item),
+          reverse=True,
+      ):
+          path = workspace_path(project_root, relative)
+          try:
+              current = inspect_directory(path, "rollback directory")
+              if current["mode"] != before_directories[relative]["mode"]:
+                  set_directory_mode(path, before_directories[relative]["mode"])
+          except (OSError, ValueError, ContractError) as error:
+              errors.append(f"restore directory {relative!r}: {error}")
+
+      try:
+          restored, restored_directories = scan_workspace(project_root)
+          if set(restored) != set(before):
+              errors.append("restored retained workspace paths differ from the baseline")
+          else:
+              for relative, snapshot in before.items():
+                  current = restored[relative]
+                  for key in ("data", "mode", "mtime_ns"):
+                      if current[key] != snapshot[key]:
+                          errors.append(
+                              f"restored file {relative!r} {key} differs from the baseline"
+                          )
+          if set(restored_directories) != set(before_directories):
+              errors.append(
+                  "restored retained workspace directory topology differs from the baseline"
+              )
+          else:
+              for relative, snapshot in before_directories.items():
+                  if restored_directories[relative]["mode"] != snapshot["mode"]:
+                      errors.append(
+                          f"restored directory {relative!r} mode differs from the baseline"
+                      )
+      except (OSError, ValueError, ContractError) as error:
+          errors.append(f"verify restored retained workspace: {error}")
+      return "; ".join(errors) if errors else None
+
+
+  def snapshot_files(paths):
+      snapshots = []
+      total = 0
+      for path in paths:
+          snapshot = inspect_file(path, "selected file", INPUT_LIMIT)
+          total += len(snapshot["data"])
+          if total > INPUT_LIMIT:
+              reject(f"selected files exceed the {INPUT_LIMIT}-byte aggregate limit")
+          snapshots.append(snapshot)
+      return snapshots
+
+
+  def validate_project_root(requested):
+      safe_path_text(requested, "project root")
+      if not os.path.isabs(requested) or os.path.normpath(requested) != requested:
+          reject(f"project root is not normalized and absolute: {requested}")
+      if os.path.realpath(requested) != requested:
+          reject(f"project root traverses a symlink: {requested}")
+      try:
+          info = os.lstat(requested)
+          if not stat.S_ISDIR(info.st_mode):
+              reject(f"project root is not a real directory: {requested}")
+          with os.scandir(requested):
+              pass
+      except OSError as error:
+          reject(f"cannot inspect project root {requested}: {error}")
+      return requested
+
+
+  def validate_selected_files(project_root, requested_files):
+      if not requested_files:
+          reject("empty file selection")
+      if len(requested_files) > MAX_FILES:
+          reject(f"selected file count exceeds the {MAX_FILES}-file limit")
+      if requested_files != sorted(requested_files):
+          reject("selected files are not in stable lexical order")
+      seen_paths = set()
+      seen_identities = set()
+      normalized = []
+      for requested in requested_files:
+          safe_path_text(requested, "selected path")
+          if not os.path.isabs(requested) or os.path.normpath(requested) != requested:
+              reject(f"selected path is not normalized and absolute: {requested}")
+          try:
+              inside = os.path.commonpath((project_root, requested)) == project_root
+          except ValueError:
+              inside = False
+          if not inside:
+              reject(f"selected path escapes the project root: {requested}")
+          snapshot = inspect_file(requested, "selected file", INPUT_LIMIT)
+          identity = (snapshot["dev"], snapshot["ino"])
+          if requested in seen_paths or identity in seen_identities:
+              reject(f"selected path is repeated or aliases another file: {requested}")
+          seen_paths.add(requested)
+          seen_identities.add(identity)
+          normalized.append(requested)
+      snapshot_files(normalized)
+      return normalized
+
+
+  def validate_private_config(path, expected_data):
+      snapshot = inspect_file(path, "generated config", CONFIG_LIMIT)
+      if snapshot["mode"] != 0o600:
+          reject(f"generated config is not mode 0600: {path}")
+      if snapshot["data"] != expected_data:
+          reject("generated config does not match its validated source bytes")
+      if normalized_config_bytes(snapshot["data"], "generated config") != snapshot["data"]:
+          reject("generated config is not in its normalized safe form")
+      return snapshot
+
+
+  def create_private_config(contents, project_root):
+      temporary = os.environ.get("TMPDIR")
+      if not temporary:
+          reject("TMPDIR must name an existing absolute directory")
+      safe_path_text(temporary, "TMPDIR")
+      if not os.path.isabs(temporary):
+          reject("TMPDIR must name an existing absolute directory")
+      try:
+          temporary = os.path.realpath(temporary)
+          safe_path_text(temporary, "resolved TMPDIR")
+          if not os.path.isabs(temporary) or os.path.normpath(temporary) != temporary:
+              reject("resolved TMPDIR is not normalized and absolute")
+          info = os.lstat(temporary)
+          if not stat.S_ISDIR(info.st_mode):
+              reject(f"TMPDIR is not a real directory: {temporary}")
+          with os.scandir(temporary):
+              pass
+      except ContractError:
+          raise
+      except (OSError, ValueError):
+          reject("TMPDIR must resolve to an existing accessible directory")
+      try:
+          inside_project = os.path.commonpath((project_root, temporary)) == project_root
+      except ValueError:
+          inside_project = False
+      if inside_project:
+          reject("TMPDIR must be outside the retained project root")
+      directory = None
+      try:
+          directory = tempfile.mkdtemp(prefix="velvet-glove-dclint-", dir=temporary)
+          os.chmod(directory, 0o700)
+          path = os.path.join(directory, "config.json")
+          flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+          if hasattr(os, "O_CLOEXEC"):
+              flags |= os.O_CLOEXEC
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          descriptor = os.open(path, flags, 0o600)
+          os.fchmod(descriptor, 0o600)
+          with os.fdopen(descriptor, "wb") as destination:
+              destination.write(contents)
+              destination.flush()
+              os.fsync(destination.fileno())
+      except BaseException as error:
+          cleanup_error = None
+          if directory is not None:
+              try:
+                  shutil.rmtree(directory)
+              except OSError as caught:
+                  cleanup_error = caught
+          message = sanitize_private_error(error, directory)
+          if cleanup_error is not None:
+              message += "; cannot remove private dclint config directory: " + sanitize_private_error(
+                  cleanup_error, directory
+              )
+          reject(message)
+      validate_private_config(path, contents)
+      return path, directory
+
+
+  def resolve_config(project_root, extra_args):
+      if not extra_args:
+          contents = normalized_config_bytes(b"{}\n", "default dclint config")
+          path, directory = create_private_config(contents, project_root)
+          return path, directory, validate_private_config(path, contents), None, None
+      if len(extra_args) != 1:
+          reject("only one explicit --config=<relative.json> argument is supported")
+      argument = safe_path_text(extra_args[0], "extra argument")
+      prefix = "--config="
+      if not argument.startswith(prefix):
+          reject(f"unsupported argument {argument!r}; only --config=<relative.json> is allowed")
+      relative = argument[len(prefix) :]
+      safe_path_text(relative, "config path")
+      if (
+          "\\" in relative
+          or os.path.isabs(relative)
+          or os.path.normpath(relative) != relative
+          or relative in (".", "..")
+          or relative.startswith("../")
+          or not relative.endswith(".json")
+      ):
+          reject(f"config path is not a normalized in-project JSON path: {relative}")
+      path = os.path.abspath(os.path.join(project_root, relative))
+      try:
+          inside = os.path.commonpath((project_root, path)) == project_root
+      except ValueError:
+          inside = False
+      if not inside:
+          reject(f"config path escapes the project root: {relative}")
+      if any(component in SKIPPED_DIRECTORIES for component in relative.split("/")):
+          reject("config path is beneath a retained-workspace skipped directory")
+      snapshot = inspect_file(path, "config", CONFIG_LIMIT)
+      contents = normalized_config_bytes(snapshot["data"], "dclint config")
+      private_path, directory = create_private_config(contents, project_root)
+      return (
+          private_path,
+          directory,
+          validate_private_config(private_path, contents),
+          path,
+          snapshot,
+      )
+
+
+  def resolve_executable(requested, label):
+      safe_path_text(requested, f"requested {label} executable")
+      candidate = shutil.which(requested)
+      if candidate is None:
+          reject(f"cannot resolve {label} executable {requested!r}")
+      candidate = os.path.abspath(candidate)
+      resolved = os.path.realpath(candidate)
+      try:
+          info = os.stat(resolved)
+      except OSError as error:
+          reject(f"cannot inspect resolved {label} executable {resolved}: {error}")
+      if not stat.S_ISREG(info.st_mode) or not os.access(resolved, os.X_OK):
+          reject(f"resolved {label} executable is not an executable regular file: {resolved}")
+      return candidate, resolved
+
+
+  process = None
+  pending_signal = None
+  reported_signal = None
+  cleaning = True
+  output_total = 0
+
+
+  def signal_group(signum):
+      if process is None:
+          return
+      try:
+          os.killpg(process.pid, signum)
+      except (OSError, ValueError):
+          pass
+
+
+  def process_group_exists():
+      if process is None:
+          return False
+      try:
+          os.killpg(process.pid, 0)
+          return True
+      except ProcessLookupError:
+          return False
+      except PermissionError:
+          return True
+
+
+  def sweep_process_group():
+      if not process_group_exists():
+          return False
+      signal_group(signal.SIGKILL)
+      deadline = time.monotonic() + 1
+      while process_group_exists() and time.monotonic() < deadline:
+          time.sleep(0.01)
+      if process_group_exists():
+          reject("cannot reap same-group descendants after child exit")
+      return True
+
+
+  def stop_child(initial_signal=None):
+      global process
+      global cleaning
+      child = process
+      if child is None:
+          return None
+      failures = []
+      prior_cleaning = cleaning
+      cleaning = True
+      try:
+          try:
+              running = child.poll() is None
+          except (OSError, ValueError) as error:
+              failures.append(f"cannot poll native child: {error}")
+              running = True
+          if running:
+              signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)
+              try:
+                  child.wait(timeout=1)
+              except subprocess.TimeoutExpired:
+                  pass
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot stop native child gracefully: {error}")
+          signal_group(signal.SIGKILL)
+          try:
+              child.wait(timeout=1)
+          except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+              failures.append(f"cannot reap native child: {error}")
+          try:
+              deadline = time.monotonic() + 1
+              while process_group_exists() and time.monotonic() < deadline:
+                  time.sleep(0.01)
+              if process_group_exists():
+                  failures.append("native child process group survived SIGKILL")
+          except (OSError, ValueError) as error:
+              failures.append(f"cannot verify native child process-group cleanup: {error}")
+      finally:
+          process = None
+          cleaning = prior_cleaning
+      return "; ".join(failures) if failures else None
+
+
+  def forward_signal(signum, _frame):
+      global pending_signal
+      pending_signal = signum
+      if process is not None and not cleaning:
+          signal_group(signum)
+          raise AdapterSignal(signum)
+
+
+  def append_adapter_error(primary, secondary):
+      if primary is None:
+          return secondary
+      return ContractError(f"{primary}; {secondary}")
+
+
+  def apply_pending_signal(primary):
+      global reported_signal
+      if pending_signal is None or pending_signal == reported_signal:
+          return primary
+      reported_signal = pending_signal
+      return append_adapter_error(primary, ContractError(f"received signal {pending_signal}"))
+
+
+  def drain_blocked_signals(primary):
+      global pending_signal
+      drained = False
+      while True:
+          queued = sorted(set(signal.sigpending()).intersection(HANDLED_SIGNALS), key=int)
+          if not queued:
+              return primary, drained
+          pending_signal = int(signal.sigwait({queued[0]}))
+          primary = apply_pending_signal(primary)
+          drained = True
+
+
+  def sanitize_private_error(error, owned_directory):
+      message = str(error)
+      if owned_directory is not None:
+          return message.replace(owned_directory, "<dclint-private>")
+      if isinstance(error, OSError) and error.filename is not None:
+          filename = os.fsdecode(error.filename)
+          candidate = os.path.abspath(filename)
+          parent = os.path.dirname(candidate)
+          if os.path.basename(candidate).startswith("velvet-glove-dclint-"):
+              message = message.replace(filename, "<dclint-private>")
+          elif os.path.basename(parent).startswith("velvet-glove-dclint-"):
+              message = message.replace(parent, "<dclint-private>")
+      return message
+
+
+  def run_child(arguments, environment):
+      global process
+      global cleaning
+      global output_total
+      global pending_signal
+      global reported_signal
+      stdout_chunks = []
+      stderr_chunks = []
+      try:
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          if not hasattr(signal, "pthread_sigmask"):
+              reject("Python does not support atomic signal masking around child spawn")
+          previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
+          try:
+              queued = sorted(
+                  set(signal.sigpending()).intersection(HANDLED_SIGNALS), key=int
+              )
+              if queued:
+                  pending_signal = int(signal.sigwait({queued[0]}))
+                  raise AdapterSignal(pending_signal)
+              process = subprocess.Popen(
+                  arguments,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  env=environment,
+                  start_new_session=True,
+              )
+          finally:
+              signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          left_descendants = False
+          leader_status = None
+          with selectors.DefaultSelector() as selector:
+              for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
+                  if stream is None:
+                      reject("failed to capture dclint output")
+                  os.set_blocking(stream.fileno(), False)
+                  selector.register(stream, selectors.EVENT_READ, target)
+              while selector.get_map():
+                  if pending_signal is not None:
+                      raise AdapterSignal(pending_signal)
+                  ready = selector.select(timeout=0.1)
+                  for key, _ in ready:
+                      chunk = os.read(key.fileobj.fileno(), 65536)
+                      if chunk:
+                          output_total += len(chunk)
+                          if output_total > OUTPUT_LIMIT:
+                              reject(f"combined dclint output exceeded {OUTPUT_LIMIT} bytes")
+                          key.data.append(chunk)
+                      else:
+                          selector.unregister(key.fileobj)
+                          key.fileobj.close()
+                  if leader_status is None:
+                      leader_status = process.poll()
+                      if leader_status is not None:
+                          cleaning = True
+                          try:
+                              left_descendants = sweep_process_group()
+                          finally:
+                              cleaning = False
+          status = process.wait() if leader_status is None else leader_status
+          if leader_status is None:
+              cleaning = True
+              try:
+                  left_descendants = sweep_process_group()
+              finally:
+                  cleaning = False
+          if left_descendants:
+              reject("native dclint left same-group descendants after child exit")
+          process = None
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          return status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+      except AdapterSignal as error:
+          reported_signal = error.signum
+          cleanup_error = stop_child(error.signum)
+          if cleanup_error is not None:
+              reject(f"{error}; child cleanup failed: {cleanup_error}")
+          raise
+      except BaseException as error:
+          cleanup_error = stop_child()
+          if cleanup_error is not None:
+              reject(f"{error}; child cleanup failed: {cleanup_error}")
+          raise
+
+
+  def stable_first_line(raw, redactions):
+      try:
+          line = raw.decode("utf-8", "replace").splitlines()[0]
+      except IndexError:
+          return "no native diagnostic"
+      for value, replacement in redactions:
+          if value:
+              line = line.replace(value, replacement)
+      line = "".join(character if character.isprintable() else "?" for character in line)
+      return line[:512] if line else "no native diagnostic"
+
+
+  def positive_integer(value, label, allow_zero=False):
+      if type(value) is not int or value < (0 if allow_zero else 1):
+          reject(f"{label} is not a valid integer")
+      return value
+
+
+  def validate_message(message, label):
+      if not isinstance(message, dict):
+          reject(f"{label} is not an object")
+      required = {
+          "rule",
+          "type",
+          "category",
+          "severity",
+          "message",
+          "line",
+          "column",
+          "fixable",
+          "data",
+      }
+      allowed = required | {"endLine", "endColumn", "meta"}
+      if set(message) < required or set(message) - allowed:
+          reject(f"{label} has missing or unknown fields")
+      rule = safe_text(message["rule"], f"{label}.rule")
+      if rule not in RULE_FIXABILITY:
+          reject(f"{label} reports unknown rule {rule!r}")
+      if message["type"] not in ("error", "warning"):
+          reject(f"{label}.type is unsupported")
+      safe_text(message["category"], f"{label}.category")
+      safe_text(message["severity"], f"{label}.severity")
+      safe_text(message["message"], f"{label}.message")
+      positive_integer(message["line"], f"{label}.line")
+      positive_integer(message["column"], f"{label}.column")
+      for name in ("endLine", "endColumn"):
+          if name in message:
+              positive_integer(message[name], f"{label}.{name}")
+      if type(message["fixable"]) is not bool:
+          reject(f"{label}.fixable is not boolean")
+      if message["fixable"] != RULE_FIXABILITY[rule]:
+          reject(f"{label} fixability disagrees with pinned dclint 3.1.0 rule semantics")
+      validate_json_tree(message["data"], f"{label}.data")
+      if "meta" in message:
+          meta = message["meta"]
+          if not isinstance(meta, dict) or set(meta) != {"description", "url"}:
+              reject(f"{label}.meta does not have the pinned shape")
+          safe_text(meta["description"], f"{label}.meta.description")
+          safe_text(meta["url"], f"{label}.meta.url")
+      if rule in VALIDATION_RULES and (
+          message["type"] != "error" or message["fixable"] is not False
+      ):
+          reject(f"{label} validation diagnostic has ambiguous semantics")
+      return rule
+
+
+  def validate_report(label, status, stdout_bytes, stderr_bytes, expected_files, redactions):
+      if stderr_bytes:
+          reject(
+              f"native {label} emitted stderr instead of a controlled JSON report "
+              f"(status {status}): {stable_first_line(stderr_bytes, redactions)}"
+          )
+      if status not in (0, 1):
+          reject(f"native {label} returned unsupported status {status}")
+      report = parse_json(stdout_bytes, f"native {label} report")
+      if not isinstance(report, list) or len(report) != len(expected_files):
+          reject(f"native {label} report does not cover the exact selected file count")
+      fixable_files = []
+      has_validation = False
+      total_messages = 0
+      for index, (record, expected_file) in enumerate(zip(report, expected_files)):
+          record_label = f"native {label} report[{index}]"
+          if not isinstance(record, dict) or set(record) != {
+              "filePath",
+              "messages",
+              "errorCount",
+              "warningCount",
+              "fixableErrorCount",
+              "fixableWarningCount",
+          }:
+              reject(f"{record_label} does not have the pinned dclint 3.1.0 shape")
+          if record["filePath"] != expected_file:
+              reject(f"{record_label} path does not match the requested file")
+          messages = record["messages"]
+          if not isinstance(messages, list):
+              reject(f"{record_label}.messages is not an array")
+          rules = [
+              validate_message(message, f"{record_label}.messages[{message_index}]")
+              for message_index, message in enumerate(messages)
+          ]
+          error_count = sum(message["type"] == "error" for message in messages)
+          warning_count = sum(message["type"] == "warning" for message in messages)
+          fixable_error_count = sum(
+              message["type"] == "error" and message["fixable"] for message in messages
+          )
+          fixable_warning_count = sum(
+              message["type"] == "warning" and message["fixable"] for message in messages
+          )
+          expected_counts = (
+              error_count,
+              warning_count,
+              fixable_error_count,
+              fixable_warning_count,
+          )
+          observed_counts = tuple(
+              positive_integer(record[name], f"{record_label}.{name}", allow_zero=True)
+              for name in (
+                  "errorCount",
+                  "warningCount",
+                  "fixableErrorCount",
+                  "fixableWarningCount",
+              )
+          )
+          if observed_counts != expected_counts:
+              reject(f"{record_label} counters disagree with its messages")
+          if fixable_error_count + fixable_warning_count > 0:
+              fixable_files.append(expected_file)
+          if any(rule in VALIDATION_RULES for rule in rules):
+              has_validation = True
+          total_messages += len(messages)
+      expected_status = 1 if total_messages else 0
+      if status != expected_status:
+          reject(
+              f"native {label} status {status} disagrees with its complete report; "
+              f"expected {expected_status}"
+          )
+      return report, fixable_files, has_validation
+
+
+  def native_arguments(tool, config_path, files, fix):
+      arguments = [
+          tool,
+          "--formatter=json",
+          "--color=false",
+          "--max-warnings=0",
+          f"--config={config_path}",
+      ]
+      if fix:
+          arguments.append("--fix")
+      arguments.extend(files)
+      return arguments
+
+
+  def assert_config_unchanged(config_path, expected, label):
+      if inspect_file(config_path, label, CONFIG_LIMIT) != expected:
+          reject(f"{label} changed during native execution")
+
+
+  def assert_workspace_unchanged(
+      label, project_root, expected_files, expected_directories
+  ):
+      observed_files, observed_directories = scan_workspace(project_root)
+      diff = workspace_diff(
+          expected_files,
+          expected_directories,
+          observed_files,
+          observed_directories,
+      )
+      if any(diff):
+          reject(f"{label} changed the retained workspace: {workspace_change_summary(diff)}")
+      return observed_files, observed_directories
+
+
+  def execute():
+      global output_total
+      global cleaning
+      global reported_signal
+      if len(sys.argv) < 6 or sys.argv[4:].count(MARKER) != 1:
+          reject("invalid adapter arguments")
+      requested_tool = sys.argv[1]
+      mode = sys.argv[2]
+      project_root = validate_project_root(sys.argv[3])
+      payload = sys.argv[4:]
+      marker_index = payload.index(MARKER)
+      extra_args = payload[:marker_index]
+      files = validate_selected_files(project_root, payload[marker_index + 1 :])
+      if mode not in ("verify", "fix"):
+          reject("invalid adapter mode")
+      if not all(
+          hasattr(signal, name) for name in ("pthread_sigmask", "sigpending", "sigwait")
+      ):
+          reject("Python does not support the required atomic signal cleanup primitives")
+
+      tool, resolved_tool = resolve_executable(requested_tool, "dclint")
+      _, resolved_node = resolve_executable("node", "Node")
+      environment = os.environ.copy()
+      for name in tuple(environment):
+          if (
+              name.startswith("NODE_")
+              or name.startswith("DYLD_")
+              or name.startswith("LD_")
+              or name in {"DEBUG", "DCLINT_CONFIG", "FORCE_COLOR"}
+          ):
+              environment.pop(name, None)
+      environment.update(
+          {
+              "PATH": os.path.dirname(resolved_node) + os.pathsep + "/usr/bin:/bin",
+              "LANG": "C",
+              "LC_ALL": "C",
+              "TZ": "UTC",
+              "TERM": "dumb",
+              "CI": "1",
+              "NO_COLOR": "1",
+              "CLICOLOR": "0",
+              "FORCE_COLOR": "0",
+              "NODE_NO_WARNINGS": "1",
+          }
+      )
+
+      previous_handlers = {}
+      config_path = None
+      private_config_dir = None
+      config_snapshot = None
+      source_config_path = None
+      source_config_snapshot = None
+      baseline = None
+      baseline_directories = None
+      result = None
+      error = None
+      output_total = 0
+      reported_signal = None
+      try:
+          for signum in HANDLED_SIGNALS:
+              previous_handlers[signum] = signal.signal(signum, forward_signal)
+          cleaning = False
+          (
+              config_path,
+              private_config_dir,
+              config_snapshot,
+              source_config_path,
+              source_config_snapshot,
+          ) = resolve_config(project_root, extra_args)
+          environment["TMPDIR"] = os.path.dirname(private_config_dir)
+          if source_config_path is not None:
+              assert_config_unchanged(
+                  source_config_path, source_config_snapshot, "source config"
+              )
+          baseline, baseline_directories = scan_workspace(project_root)
+          selected_relatives = {
+              path: retained_relative(project_root, path) for path in files
+          }
+          missing_selected = sorted(
+              relative
+              for relative in selected_relatives.values()
+              if relative not in baseline
+          )
+          if missing_selected:
+              reject(
+                  "selected files are outside the retained workspace: "
+                  + ", ".join(missing_selected)
+              )
+          assert_config_unchanged(
+              config_path, config_snapshot, "controlled private config"
+          )
+          if source_config_path is not None:
+              assert_config_unchanged(
+                  source_config_path, source_config_snapshot, "source config"
+              )
+          redactions = [
+              (config_path, "<config>"),
+              (resolved_tool, "<dclint>"),
+              (resolved_node, "<node>"),
+          ]
+          preflight_status, preflight_stdout, preflight_stderr = run_child(
+              native_arguments(tool, config_path, files, False), environment
+          )
+          assert_config_unchanged(
+              config_path, config_snapshot, "controlled private config"
+          )
+          if source_config_path is not None:
+              assert_config_unchanged(
+                  source_config_path, source_config_snapshot, "source config"
+              )
+          assert_workspace_unchanged(
+              "dclint preflight", project_root, baseline, baseline_directories
+          )
+          preflight_report, fixable_files, has_validation = validate_report(
+              "preflight",
+              preflight_status,
+              preflight_stdout,
+              preflight_stderr,
+              files,
+              redactions,
+          )
+
+          if mode == "verify" or has_validation or not fixable_files:
+              result = (preflight_status, preflight_report)
+          else:
+              before_write, before_write_directories = assert_workspace_unchanged(
+                  "dclint pre-write validation",
+                  project_root,
+                  baseline,
+                  baseline_directories,
+              )
+              write_status, write_stdout, write_stderr = run_child(
+                  native_arguments(tool, config_path, fixable_files, True), environment
+              )
+              assert_config_unchanged(
+                  config_path, config_snapshot, "controlled private config"
+              )
+              if source_config_path is not None:
+                  assert_config_unchanged(
+                      source_config_path, source_config_snapshot, "source config"
+                  )
+              after_write, after_write_directories = scan_workspace(project_root)
+              write_diff = workspace_diff(
+                  before_write,
+                  before_write_directories,
+                  after_write,
+                  after_write_directories,
+              )
+              (
+                  added,
+                  removed,
+                  changed,
+                  touched,
+                  added_directories,
+                  removed_directories,
+                  touched_directories,
+              ) = write_diff
+              if (
+                  added
+                  or removed
+                  or touched
+                  or added_directories
+                  or removed_directories
+                  or touched_directories
+              ):
+                  reject(
+                      "native fix changed retained workspace topology or metadata outside byte edits: "
+                      + workspace_change_summary(write_diff)
+                  )
+              allowed_relatives = {
+                  selected_relatives[path] for path in fixable_files
+              }
+              unauthorized = sorted(set(changed) - allowed_relatives)
+              if unauthorized:
+                  reject(
+                      "native fix changed files outside the proven fixable subset: "
+                      + ", ".join(unauthorized)
+                  )
+              for relative in changed:
+                  before = before_write[relative]
+                  after = after_write[relative]
+                  if (before["dev"], before["ino"], before["mode"]) != (
+                      after["dev"],
+                      after["ino"],
+                      after["mode"],
+                  ):
+                      reject(
+                          f"native fix changed file identity or mode while editing bytes: {relative}"
+                      )
+              if not changed:
+                  reject("native fix was a no-op for every file with proven fixable diagnostics")
+
+              write_report, remaining_fixable, write_validation = validate_report(
+                  "fix",
+                  write_status,
+                  write_stdout,
+                  write_stderr,
+                  fixable_files,
+                  redactions,
+              )
+              if remaining_fixable or write_validation:
+                  reject("native fix did not converge to an unambiguous non-fixable result")
+
+              assert_workspace_unchanged(
+                  "dclint pre-verification validation",
+                  project_root,
+                  after_write,
+                  after_write_directories,
+              )
+
+              verify_status, verify_stdout, verify_stderr = run_child(
+                  native_arguments(tool, config_path, files, False), environment
+              )
+              assert_config_unchanged(
+                  config_path, config_snapshot, "controlled private config"
+              )
+              if source_config_path is not None:
+                  assert_config_unchanged(
+                      source_config_path, source_config_snapshot, "source config"
+                  )
+              assert_workspace_unchanged(
+                  "post-fix verification",
+                  project_root,
+                  after_write,
+                  after_write_directories,
+              )
+              verify_report, verify_fixable, verify_validation = validate_report(
+                  "post-fix verification",
+                  verify_status,
+                  verify_stdout,
+                  verify_stderr,
+                  files,
+                  redactions,
+              )
+              if verify_fixable or verify_validation:
+                  reject("authoritative post-fix verification is not converged")
+              write_by_path = {item["filePath"]: item for item in write_report}
+              verify_by_path = {item["filePath"]: item for item in verify_report}
+              if any(write_by_path[path] != verify_by_path[path] for path in fixable_files):
+                  reject("write-child and authoritative verification reports disagree")
+              result = (verify_status, verify_report)
+      except AdapterSignal as caught:
+          error = ContractError(f"received signal {caught.signum}")
+          reported_signal = caught.signum
+      except ContractError as caught:
+          error = caught
+      except BaseException as caught:
+          error = caught
+      finally:
+          cleaning = True
+          try:
+              child_cleanup_error = stop_child()
+              if child_cleanup_error is not None:
+                  error = append_adapter_error(
+                      error, ContractError(f"child cleanup failed: {child_cleanup_error}")
+                  )
+          except BaseException as cleanup_error:
+              error = append_adapter_error(
+                  error, ContractError(f"cannot stop native dclint: {cleanup_error}")
+              )
+          blocked_mask = None
+          rollback_attempted = False
+          try:
+              if private_config_dir is not None:
+                  try:
+                      shutil.rmtree(private_config_dir)
+                  except OSError as cleanup_error:
+                      error = append_adapter_error(
+                          error,
+                          ContractError(
+                              f"cannot remove private dclint config directory: {cleanup_error}"
+                          ),
+                      )
+              try:
+                  blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
+              except (OSError, ValueError) as mask_error:
+                  error = append_adapter_error(
+                      error, ContractError(f"cannot block cleanup signals: {mask_error}")
+                  )
+
+              while True:
+                  error = apply_pending_signal(error)
+                  drained = False
+                  if blocked_mask is not None:
+                      error, drained = drain_blocked_signals(error)
+                  if (
+                      error is not None
+                      and baseline is not None
+                      and baseline_directories is not None
+                      and not rollback_attempted
+                  ):
+                      rollback_attempted = True
+                      rollback_error = restore_workspace(
+                          project_root, baseline, baseline_directories
+                      )
+                      if rollback_error is not None:
+                          error = append_adapter_error(
+                              error, ContractError(f"rollback failed: {rollback_error}")
+                          )
+                      continue
+                  if not drained:
+                      break
+
+              for signum, handler in previous_handlers.items():
+                  try:
+                      signal.signal(signum, handler)
+                  except (OSError, ValueError) as handler_error:
+                      error = append_adapter_error(
+                          error,
+                          ContractError(f"cannot restore signal handler: {handler_error}"),
+                      )
+
+              while True:
+                  error = apply_pending_signal(error)
+                  drained = False
+                  if blocked_mask is not None:
+                      error, drained = drain_blocked_signals(error)
+                  if (
+                      error is not None
+                      and baseline is not None
+                      and baseline_directories is not None
+                      and not rollback_attempted
+                  ):
+                      rollback_attempted = True
+                      rollback_error = restore_workspace(
+                          project_root, baseline, baseline_directories
+                      )
+                      if rollback_error is not None:
+                          error = append_adapter_error(
+                              error, ContractError(f"rollback failed: {rollback_error}")
+                          )
+                      continue
+                  if not drained:
+                      break
+          finally:
+              # This is a one-shot process. Keep handled signals blocked through
+              # diagnostics and exit so cleanup has a deterministic cutoff.
+              cleaning = False
+
+      if error is not None:
+          raise ContractError(sanitize_private_error(error, private_config_dir))
+      if result is None:
+          reject("adapter completed without a result")
+      status, report = result
+      if any(record["messages"] for record in report):
+          stable = json.dumps(
+              report,
+              ensure_ascii=True,
+              sort_keys=True,
+              separators=(",", ":"),
+          )
+          sys.stdout.buffer.write((stable + "\n").encode("ascii"))
+      return status
+
+
+  try:
+      raise SystemExit(execute())
+  except ContractError as error:
+      print(f"velvet-glove-dclint: {error}", file=sys.stderr)
+      raise SystemExit(2)
+  """#
+
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "dclint"
   displayName = "dclint"
   executable = "dclint"
-  installHint = "install dclint with `npm install -g dclint`"
+  installHint = "install exact dclint 3.1.0, its pinned Node 24.19.0 runtime, and a Python 3 interpreter with isolated-mode support"
 
   files = new Config.FileSelection {
     include = new Listing<String> {
@@ -19,29 +1698,94 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
 
+  workflows = new Mapping<String, Config.Workflow> {
+    ["fix"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        program = "python"
+        argv = new Listing<String | Config.ArgToken> {
+          "-I"
+          "-c"
+          dclintAdapter
+          new Config.ToolExecutable {}
+          "verify"
+          new Config.ProjectRoot {}
+          new Config.ExtraArgs {}
+          "__VELVET_GLOVE_DCLINT_FILES__"
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+        }
+        issuesOnStdout = true
+      }
+      remedy = new Config.WorkflowCommand {
+        program = "python"
+        argv = new Listing<String | Config.ArgToken> {
+          "-I"
+          "-c"
+          dclintAdapter
+          new Config.ToolExecutable {}
+          "fix"
+          new Config.ProjectRoot {}
+          new Config.ExtraArgs {}
+          "__VELVET_GLOVE_DCLINT_FILES__"
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+        }
+        writes = "target-files"
+      }
+      checkScope = "target-files"
+      invocation = "batch"
+    }
+  }
+  workflowOrder = new Listing<String> { "fix" }
+
   phases = new Mapping<String, Config.Phase> {
     ["fix"] = new Config.Phase {
       mode = "fix"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
-        "--fix"
+        "-I"
+        "-c"
+        dclintAdapter
+        new Config.ToolExecutable {}
+        "fix"
+        new Config.ProjectRoot {}
         new Config.ExtraArgs {}
+        "__VELVET_GLOVE_DCLINT_FILES__"
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
       }
       writes = "target-files"
     }
     ["verify"] = new Config.Phase {
       mode = "verify"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
+        "-I"
+        "-c"
+        dclintAdapter
+        new Config.ToolExecutable {}
+        "verify"
+        new Config.ProjectRoot {}
         new Config.ExtraArgs {}
+        "__VELVET_GLOVE_DCLINT_FILES__"
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
       }
     }
   }

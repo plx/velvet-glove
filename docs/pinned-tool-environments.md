@@ -10,12 +10,13 @@ just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case prettier multi-file
 just tool-case contextlint multi-file-project
+just tool-case dclint autofix-multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all sixteen behavior-rich representative contracts across twelve environments
+Run all seventeen behavior-rich representative contracts across thirteen environments
 with:
 
 ```sh
@@ -77,6 +78,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
 | Prettier | Node 24.19.0; npm 11.17.0; Prettier 3.9.6; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `prettier/multi-file` |
 | Contextlint | Node 24.19.0; npm 11.17.0; @contextlint/cli and core 1.1.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `contextlint/multi-file-project` |
+| dclint | Node 24.19.0; npm 11.17.0; dclint 3.1.0; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `dclint/autofix-multi-file` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -858,6 +860,151 @@ Node APIs but is not an OS sandbox, and the pinned CLI still parses untrusted
 Markdown and rule data; the active macOS deny-network wrapper remains
 authoritative for network isolation.
 
+### dclint validation contract
+
+The dedicated dclint environment reuses the official Node.js
+[`node-v24.19.0-darwin-arm64.tar.gz`](https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz)
+archive at SHA-256
+`8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d`,
+but installs it into a distinct case-only root. That archive supplies Node
+`v24.19.0` and npm `11.17.0`. npm installs exactly one runtime dependency with
+scripts, audit, and funding calls disabled:
+[`dclint` 3.1.0](https://www.npmjs.com/package/dclint/v/3.1.0), whose registry
+integrity is
+`sha512-afTGdzRFUXK4yCpIiEW/LOR+9TOMEDhNldDp56VCWzn7JDmD451PcUi640GGlMHgbHKJ10rDBm4PtpcBbjqlXw==`.
+The package identifies the upstream
+[`v3.1.0` release](https://github.com/zavoloklom/docker-compose-linter/releases/tag/v3.1.0).
+The committed package and lock digests, Node/npm identities, exact executable
+symlink target, and native dependency closure are checked before every selected
+case. The product probe must return exactly `3.1.0`.
+
+The immediate phases and explicit deferred workflow run the same evaluated
+adapter through pinned Python 3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> dclint fix <project-root> {extra-args} __VELVET_GLOVE_DCLINT_FILES__ {files}
+python -I -c <adapter> dclint verify <project-root> {extra-args} __VELVET_GLOVE_DCLINT_FILES__ {files}
+```
+
+Every native read-only child receives:
+
+```text
+dclint --formatter=json --color=false --max-warnings=0 --config=<private-json> {files}
+```
+
+Only the proven-fixable subset may receive the write form:
+
+```text
+dclint --formatter=json --color=false --max-warnings=0 --config=<same-private-json> --fix {proven-fixable-files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Extra arguments are either empty or exactly one normalized project-relative
+`--config=<path.json>` outside fixed skipped directories. The adapter opens a
+unique regular config without following links, bounds it to 1 MiB, rejects
+duplicate keys and non-finite or deeply nested JSON, and accepts only the
+reviewed data fields and built-in rule options. Executable-loading keys,
+nonempty excludes, diagnostic suppression, unknown rules or options, and
+absolute, parent, skipped-subtree, non-JSON, symlink, or hard-link config paths
+fail before native execution. The coherent source snapshot is normalized into
+a mode-0600, fsynced private copy; only that copy is passed to dclint, and both
+source and private identities are rechecked around every child.
+
+dclint 3.1.0's top-level-order fixer reconstructs the document from only its
+configured order. Its native default omits the Compose-supported `models` map,
+and an incomplete custom order can therefore delete omitted keys while still
+converging cleanly. The adapter replaces every default or numeric-enabled form
+with the complete order `x-properties`, `version`, `name`, `include`,
+`services`, `models`, `networks`, `volumes`, `secrets`, `configs`.
+`x-properties` is dclint's sentinel for all actual `x-*` extension keys. An
+explicit user order and severity are retained only when the order is an exact
+complete permutation; incomplete or duplicate orders fail before a child.
+Service-key ordering appends otherwise unlisted keys, but dclint throws when a
+key belongs to two effective groups, so duplicate membership after merging
+custom groups with native defaults is likewise rejected before spawn.
+
+The native `no-version-field` fixer has a separate data-loss defect: during any
+write it removes the first line whose trimmed text starts with `version:`, even
+when that line is nested extension data and a `disable-line` directive hid the
+diagnostic. The adapter marks that rule nonfixable, injects
+`no-version-field: 0` into every normalized config, and rejects every explicit
+numeric or array-form enable before native execution. An unexpected native
+report that nevertheless marks this rule fixable also contradicts the pinned
+fixability table and fails operationally. This global disable is intentional;
+the adapter does not attempt to parse or rewrite untrusted YAML itself.
+
+The project root and selected files must be normalized absolute physical paths.
+Selections are stable-sorted, unique regular files with one link, remain below
+the project, contain at most 4,096 files and 64 MiB in aggregate, and cannot
+alias by inode. Before native execution the adapter snapshots every retained
+file and directory below the project except fixed `.git`, `.velvet-glove`,
+`node_modules`, and `target` subtrees. The retained snapshot is bounded to
+8,192 files, 8,192 directories, and 128 MiB. Encountered retained links,
+nonregular files, unreadable objects, and unstable identities fail closed.
+
+Native status zero or one is accepted only with empty stderr and an exact JSON
+record for every requested file in order. Each record's path, fields, message
+shape, known rule name, locations, counters, severity class, validation-rule
+semantics, and fixed dclint 3.1.0 rule fixability must agree. An empty complete
+report maps to clean; any messages map to source status one. Unsupported status,
+stderr, malformed or incomplete JSON, non-finite values, counter/status
+contradictions, unknown rules, ambiguous fixability, and excess output map to
+operational status two.
+
+Fix mode always runs that read-only batch first. Validation diagnostics and
+reports without a proven fixable message stop without a write. Otherwise only
+the files carrying validated fixable messages are passed to `--fix`. The write
+must change bytes, preserve the identities and modes of changed files, and
+leave every other retained byte, path, mode, and directory unchanged. A second
+full read-only batch over all selected files is authoritative; it must be
+converged, and its per-file result must exactly match the write child's result
+for each fixed file. Operational failure after the baseline exists attempts to
+restore retained file bytes, modes, and mtimes plus directory topology and
+modes. Rollback failure composes with the primary failure instead of replacing
+it.
+
+`TMPDIR` must name an existing absolute directory outside the retained project.
+The adapter canonicalizes accepted symlink and trailing-slash spellings before
+the outside-project check and private `mkdtemp`, revalidates the resolved path,
+and exports only that canonical root to native children. The private directory
+is mode 0700 and removed on every exit path; raw random paths are normalized in
+failures. Node, dynamic-loader, debug, dclint-config, and color injection
+variables are scrubbed, while the child `PATH`, locale, timezone, terminal, CI,
+color, and warning settings are fixed. Combined child output is capped at
+32 MiB.
+
+HUP, INT, and TERM are atomically blocked around spawn, forwarded to the owned
+process group, and drained across child and private-config cleanup to a
+deterministic process-exit cutoff. Native leaders are reaped with bounded TERM
+and KILL escalation; a normally exiting leader that leaves a same-group
+descendant is swept and rejected. Cleanup and cancellation failures compose
+with the primary error.
+
+The five cases are `clean`, persistent nonfixable `source-issue`, invalid-YAML
+`validation-issue`, `autofix-multi-file`, and pre-spawn config
+`operational-failure`. The representative selects one dirty and one clean file,
+preserves an unselected sentinel, retains a Compose `models` map and two
+extension maps, and proves a nested `x-meta.version` protected by a line-level
+disable survives an unrelated service-order repair. All five execute through
+Claude and Codex immediate hooks and the explicit deferred workflow from
+independent pristine baselines. Retained evidence binds the exact adapter,
+private config bytes, nested argv/status sequence, managed Node/CLI graph,
+controlled environment, complete workspace diffs, authoritative recheck, and
+clean or persistent-issue idempotence.
+
+Physical fixed skipped subtrees are outside the retained snapshot, including
+objects reached only below them. Concurrent project, config, selected-file, or
+executable replacement cannot be eliminated between bounded checks and native
+path access. Rollback restores the asserted byte/mode/mtime and topology
+contract but not original file inode identity or directory mtimes, and rollback
+itself can fail. A descendant that deliberately creates a new session or
+process group is outside adapter containment. dclint and its YAML parser still
+process untrusted project bytes and are not a code sandbox; the active macOS
+deny-network wrapper remains authoritative for network isolation.
+
 ### Cargo Clippy validation contract
 
 The dedicated Cargo Clippy environment installs selected components from the
@@ -1165,8 +1312,8 @@ The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
 recipe registry. Shared Node, dedicated Prettier, dedicated Contextlint,
-Python, and Ruby package closures live beside it under `node/`, `prettier/`,
-`contextlint/`, `python/`, and `ruby/`; the
+dedicated dclint, Python, and Ruby package closures live beside it under
+`node/`, `prettier/`, `contextlint/`, `dclint/`, `python/`, and `ruby/`; the
 Betterleaks dependency closure and patch live under `betterleaks/`. Runtime
 components, auxiliary programs, bootstrap
 commands, platform, architecture, minimum OS, and case-network policy are
@@ -1193,13 +1340,14 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These sixteen smoke contracts establish the reproducible environment substrate;
-they do not by themselves promote a tool's full pinned-real-tool coverage tier.
+These seventeen smoke contracts establish the reproducible environment
+substrate; they do not by themselves promote a tool's full pinned-real-tool
+coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
-Asciidoctor, Biome, Prettier, Contextlint, gofmt, Cargo Clippy, and Cargo Fmt
-are covered only after each complete case matrix passes. Linux, Intel, and
-full-catalog scheduling remain separate follow-up work.
+Asciidoctor, Biome, Prettier, Contextlint, dclint, gofmt, Cargo Clippy, and
+Cargo Fmt are covered only after each complete case matrix passes. Linux,
+Intel, and full-catalog scheduling remain separate follow-up work.
 
 ## Updating a pin
 

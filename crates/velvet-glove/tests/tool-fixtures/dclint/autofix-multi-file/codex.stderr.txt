@@ -1,0 +1,2 @@
+dclint: changed docker-compose.yml
+hookkit: redirected user notices and diagnostics to protocol stderr

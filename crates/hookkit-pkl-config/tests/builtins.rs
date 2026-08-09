@@ -1277,6 +1277,123 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
 }
 
 #[test]
+fn dclint_builtin_uses_a_fail_closed_fix_subset_adapter() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let dclint = spec(&specs, "dclint");
+    let workflow = dclint.workflows.get("fix").expect("dclint fix workflow");
+    let check = workflow.check.as_ref().expect("dclint check");
+    let remedy = workflow.remedy.as_ref().expect("dclint remedy");
+
+    assert_eq!(check.program.as_deref(), Some("python"));
+    assert_eq!(remedy.program.as_deref(), Some("python"));
+    assert!(check.issues_on_stdout);
+    assert!(!remedy.issues_on_stdout);
+    assert_eq!(check.writes, WriteBehavior::None);
+    assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
+    assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+    assert_workflow_argv(
+        check,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            check.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("verify"),
+            token(ArgToken::ProjectRoot),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_DCLINT_FILES__"),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_workflow_argv(
+        remedy,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            check.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("fix"),
+            token(ArgToken::ProjectRoot),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_DCLINT_FILES__"),
+            token(ArgToken::Files),
+        ],
+    );
+
+    let adapter = match &check.argv[2] {
+        ArgvElement::Literal(script) => script,
+        other => panic!("dclint adapter script was not literal: {other:?}"),
+    };
+    for required in [
+        "\"invalid-yaml\": False",
+        "\"invalid-schema\": False",
+        "\"unknown-error\": False",
+        "\"no-version-field\": False",
+        "UNSAFE_WRITE_RULES = {\"no-version-field\"}",
+        "fixable_files.append(expected_file)",
+        "native_arguments(tool, config_path, fixable_files, True)",
+        "native_arguments(tool, config_path, files, False)",
+        "write_by_path[path] != verify_by_path[path]",
+        "scan_workspace(project_root)",
+        "workspace_diff(",
+        "restore_workspace(",
+        "SKIPPED_DIRECTORIES = {\".git\", \".velvet-glove\", \"node\" + \"_modules\", \"target\"}",
+        "MAX_WORKSPACE_FILES = 8192",
+        "MAX_WORKSPACE_DIRECTORIES = 8192",
+        "allowed_relatives = {",
+        "outside the proven fixable subset",
+        "\"x-properties\"",
+        "\"models\"",
+        "set(order) != TOP_LEVEL_KEYS",
+        "rules[rule] = [1, safe_options]",
+        "rules.setdefault(\"no-version-field\", 0)",
+        "3.1.0 fixer can delete nested extension data",
+        "is assigned to multiple groups",
+        "temporary = os.path.realpath(temporary)",
+        "safe_path_text(temporary, \"resolved TMPDIR\")",
+        "environment[\"TMPDIR\"] = os.path.dirname(private_config_dir)",
+        "TMPDIR must be outside the retained project root",
+        "info.st_nlink != 1",
+        "os.path.commonpath((project_root, requested)) == project_root",
+        "flags |= os.O_NOFOLLOW",
+        "snapshot[\"mode\"] != 0o600",
+        "name.startswith(\"NODE_\")",
+        "name.startswith(\"DYLD_\")",
+        "name.startswith(\"LD_\")",
+        "combined dclint output exceeded",
+        "start_new_session=True",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)",
+        "set(signal.sigpending()).intersection(HANDLED_SIGNALS)",
+        "signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "missing adapter guard: {required}"
+        );
+    }
+    assert!(adapter.contains(
+        "if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        if not hasattr(signal, \"pthread_sigmask\")"
+    ));
+    assert!(adapter.contains(
+        "                start_new_session=True,\n            )\n        finally:\n            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)"
+    ));
+
+    let fix = dclint.phases.get("fix").expect("dclint immediate fix");
+    let verify = dclint
+        .phases
+        .get("verify")
+        .expect("dclint immediate verification");
+    assert_eq!(fix.program.as_deref(), Some("python"));
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(fix.argv, remedy.argv);
+    assert_eq!(verify.argv, check.argv);
+    assert_eq!(fix.writes, WriteBehavior::TargetFiles);
+    assert_eq!(verify.writes, WriteBehavior::None);
+}
+
+#[test]
 fn builtin_catalog_audit_is_current() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");

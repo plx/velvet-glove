@@ -1,4 +1,4 @@
-version: '3'
+name: fixture-source-issue
 services:
   web:
     image: nginx

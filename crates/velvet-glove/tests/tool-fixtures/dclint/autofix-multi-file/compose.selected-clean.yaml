@@ -1,0 +1,4 @@
+name: fixture-selected-clean
+services:
+  alpha:
+    image: alpine:3.20
