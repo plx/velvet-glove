@@ -116,7 +116,7 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run the sixteen pinned representative contracts across twelve controlled
+Run the seventeen pinned representative contracts across thirteen controlled
 environments with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -151,8 +151,8 @@ status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
 alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, Prettier,
-Contextlint, Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract cases are
-retained too.
+Contextlint, dclint, Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract
+cases are retained too.
 Their evidence includes
 exact pass-through program/argv/cwd/environment traces (including
 Asciidoctor's nested FATAL preflight and WARNING validation, Astro's single
@@ -163,7 +163,7 @@ failure with the adapter's production-canonicalized `<time> FTL` diagnostic,
 plus Biome's isolated mode-and-files adapter, locked JSON-report suffix, and
 fully scrubbed child control/log environment),
 complete workspace snapshots and diffs for repeated immediate runs,
-and two independent compatibility-deferred
+and two independent deferred
 summaries plus their semantic idempotence comparison. Biome mutating cases
 retain independent pristine baselines for the immediate `fix` → `verify`
 pipeline and compatibility-deferred `initial-check` → `remedy` →
@@ -216,6 +216,37 @@ workspace topology, referenced-target, Markdown, config, or executable
 replacement cannot be eliminated, and a descendant that deliberately escapes
 the owned session/process group is outside containment. Node permissions are
 not the OS network sandbox, so pinned evidence also requires active deny-net.
+
+dclint traces bind a dedicated Node 24.19.0 executable and the exact dclint
+3.1.0 CLI from a case-only, integrity-locked npm root. Every native child gets
+the validated private mode-0600 JSON config, fixed JSON/color/warning options,
+a canonical temporary root, and a scrubbed Node, loader, debug, locale, and
+color environment. Fix mode first traces a read-only batch over every selected
+file, sends only files with proven fixable diagnostics to `--fix`, then repeats
+the authoritative read-only batch. The five cases distinguish clean
+completion, a persistent nonfixable source rule, invalid YAML, exact two-file
+selection with one-file mutation and an untouched unselected sentinel, and an
+unsafe executable-loading config rejected before native spawn. Immediate and
+explicit deferred runs use independent pristine baselines and prove exact
+changed bytes, complete candidate attribution, authoritative post-remedy
+verification, and clean or persistent-issue idempotence.
+
+The evaluated lifecycle probe additionally covers selected and config
+symlinks/hard links, out-of-project and control-character paths, source-config
+replacement, topology/metadata/out-of-subset mutation rollback, rollback and
+private-cleanup failure composition, guarded spawn, active and cleanup-window
+signals, inherited-pipe descendants, bounded output, unwritable temporary
+roots, and symlink/trailing-slash `TMPDIR` canonicalization. Its config cases
+prove the native default and numeric top-level-order settings are replaced by
+the complete extension/`models`-preserving order, a complete explicit user
+order and severity survive unchanged, incomplete orders and cross-group
+service-key duplication reject at zero children, and the unsafe native
+`no-version-field` rule is forced off while every explicit enable rejects at
+zero children. The destructive fake and real pinned case both prove a nested
+extension `version:` hidden by `disable-line` survives an unrelated fix. Fixed
+skipped subtrees, concurrent replacement races, an unsuccessful rollback, and
+descendants that deliberately escape the owned session/process group remain
+outside the claim.
 
 gofmt traces bind the pinned executable behind an isolated Python adapter and
 record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain

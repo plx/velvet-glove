@@ -151,14 +151,15 @@ just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case prettier multi-file
 just tool-case contextlint multi-file-project
+just tool-case dclint autofix-multi-file
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Sixteen behavior-rich contracts across twelve environments: jq data formats,
-# Buf data formats, shared Node, dedicated Prettier, dedicated Contextlint,
-# Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security, and native macOS.
+# Seventeen behavior-rich contracts across thirteen environments: jq and Buf
+# data formats, shared Node, dedicated Prettier, Contextlint, and dclint, Python,
+# Go, Rust, Cargo Clippy/Fmt, Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -238,6 +239,24 @@ permission and trace bindings, signal/descendant cleanup, and the remaining
 unwalked-subtree, workspace-topology/referenced-target replacement, and
 escaped-process limitations are in the [Contextlint
 contract](docs/pinned-tool-environments.md#contextlint-validation-contract).
+
+The dedicated dclint lane pins dclint 3.1.0 in its exact one-package npm graph
+and executes it only through checksum-pinned Node 24.19.0. Its isolated adapter
+accepts only a bounded data-only JSON config, normalizes that config into a
+private mode-0600 copy, validates dclint's complete JSON diagnostics, and
+preflights the full selected batch before narrowing writes to files with proven
+fixable findings. Every enabled top-level-order fixer receives a complete safe
+Compose order that preserves extension properties and `models`; incomplete
+custom orders and duplicate service-key group assignments fail before native
+execution. The native `no-version-field` fixer is also forced off because it
+can delete nested extension data during an unrelated write, and explicit
+enables fail before spawn. The five-case matrix proves clean, persistent source,
+invalid YAML, multi-file autofix, and pre-spawn configuration-failure behavior
+on both the immediate pipeline and explicit deferred workflow. Exact npm integrity,
+canonical temporary-root handling, rollback and lifecycle evidence, and the
+remaining skipped-subtree, replacement-race, rollback, and escaped-process
+limitations are in the [dclint
+contract](docs/pinned-tool-environments.md#dclint-validation-contract).
 
 The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
 stdout as the formatting signal while preserving native status-two failure

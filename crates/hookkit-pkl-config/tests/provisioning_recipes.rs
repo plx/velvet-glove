@@ -1490,6 +1490,21 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert_eq!(component.probe.argv, ["contextlint-node", "--version"]);
                     assert_eq!(component.probe.expected, "v24.19.0");
                 }
+                "dclint-node" => {
+                    assert_eq!(component.version, "24.19.0");
+                    assert_eq!(
+                        component.integrity.url.as_deref(),
+                        Some("https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz")
+                    );
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d")
+                    );
+                    assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
+                    assert!(component.runtime_component_ids.is_empty());
+                    assert_eq!(component.probe.argv, ["dclint-node", "--version"]);
+                    assert_eq!(component.probe.expected, "v24.19.0");
+                }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");
                     assert_eq!(
@@ -1618,6 +1633,15 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     );
                     assert_eq!(component.version, "11.17.0");
                     assert_eq!(component.probe.argv, ["contextlint-npm", "--version"]);
+                    assert_eq!(component.probe.expected, "11.17.0");
+                }
+                "dclint-npm" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("dclint-node")
+                    );
+                    assert_eq!(component.version, "11.17.0");
+                    assert_eq!(component.probe.argv, ["dclint-npm", "--version"]);
                     assert_eq!(component.probe.expected, "11.17.0");
                 }
                 other => panic!("unexpected runtime-bundled component {other}"),
