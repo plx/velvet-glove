@@ -513,6 +513,50 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "{state}/contextlint-environment-node-24.19.0-contextlint-1.1.1/package",
         ]
     );
+    let dclint_environment = environments
+        .get("macos-arm64-dclint")
+        .expect("dedicated dclint environment");
+    assert_eq!(dclint_environment.provisioning_group, "dclint");
+    assert_eq!(
+        dclint_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["dclint-node", "dclint-npm"])
+    );
+    assert_eq!(
+        dclint_environment
+            .auxiliary_programs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["dclint-node", "dclint-npm"])
+    );
+    let dclint_bootstrap = dclint_environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "dclint-npm-ci")
+        .expect("dedicated dclint npm bootstrap");
+    assert_eq!(dclint_bootstrap.network, "required");
+    assert_eq!(
+        dclint_bootstrap.lockfile.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/dclint/package-lock.json")
+    );
+    assert_eq!(
+        dclint_bootstrap.argv,
+        [
+            "{state}/dclint-environment-node-24.19.0-dclint-3.1.0/node/bin/node",
+            "{state}/dclint-environment-node-24.19.0-dclint-3.1.0/node/lib/node_modules/npm/bin/npm-cli.js",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--prefix",
+            "{state}/dclint-environment-node-24.19.0-dclint-3.1.0/package",
+        ]
+    );
+    assert_eq!(dclint_bootstrap.environment, prettier_bootstrap.environment);
     let mise_lock = std::fs::read_to_string(root.join(&registry.mise.lock)).expect("mise lock");
     for component in registry.shared_components.iter().chain(
         registry
@@ -528,6 +572,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-clippy",
             "contextlint",
             "data-formats",
+            "dclint",
             "go",
             "node",
             "prettier",
@@ -690,6 +735,32 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             assert_eq!(package["dependencies"]["@contextlint/cli"], "1.1.1");
             assert_eq!(package["dependencies"]["@contextlint/core"], "1.1.1");
         }
+        if recipe.tool_id == "dclint" {
+            validate_npm_lock_package(
+                &root,
+                &recipe.integrity,
+                "dclint",
+                &recipe.version,
+                "sha512-afTGdzRFUXK4yCpIiEW/LOR+9TOMEDhNldDp56VCWzn7JDmD451PcUi640GGlMHgbHKJ10rDBm4PtpcBbjqlXw==",
+            );
+            let lock_path = recipe.integrity.path.as_deref().expect("dclint npm lock");
+            let lock: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join(lock_path)).expect("read dclint npm lock"),
+            )
+            .expect("parse dclint npm lock");
+            assert_eq!(lock["lockfileVersion"], 3);
+            assert_eq!(lock["packages"][""]["dependencies"]["dclint"], "3.1.0");
+            let package: serde_json::Value =
+                serde_json::from_str(
+                    &std::fs::read_to_string(root.join(
+                        "crates/hookkit-pkl-config/validation/provisioning/dclint/package.json",
+                    ))
+                    .expect("read dclint package manifest"),
+                )
+                .expect("parse dclint package manifest");
+            assert_eq!(package["engines"]["node"], "24.19.0");
+            assert_eq!(package["dependencies"]["dclint"], "3.1.0");
+        }
         match &tool.provenance.upstream {
             UpstreamProvenance::Recorded {
                 version,
@@ -726,6 +797,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-clippy",
             "cargo-fmt",
             "contextlint",
+            "dclint",
             "go-fmt",
             "jq",
             "prettier",
@@ -885,6 +957,51 @@ fn contextlint_provisioning_uses_a_separate_exact_runtime_and_case_only_binding(
     );
     assert!(harness.contains("\"node\" if contextlint_toolchain.is_some()"));
     assert!(harness.contains("Contextlint trace did not pass the dedicated managed CLI"));
+}
+
+#[test]
+fn dclint_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    let harness = std::fs::read_to_string(root.join("crates/velvet-glove/tests/tool_fixtures.rs"))
+        .expect("real-tool fixture harness");
+    let shared_package = std::fs::read_to_string(
+        root.join("crates/hookkit-pkl-config/validation/provisioning/node/package.json"),
+    )
+    .expect("shared Node package manifest");
+
+    assert!(outer.contains("fetch_component_archive dclint-node"));
+    assert!(
+        outer.contains("dclint_root=\"$state_dir/dclint-environment-node-24.19.0-dclint-3.1.0\"")
+    );
+    assert!(outer.contains("\"$dclint_install_root/node/bin/node\" \\"));
+    assert!(outer.contains("\"$dclint_install_root/node/lib/node_modules/npm/bin/npm-cli.js\" \\"));
+    assert!(outer.contains("verify_macho_closure \"$dclint_root/node\" dclint-node"));
+    assert!(outer.contains("readlink \"$dclint_bin_link\") != \"../dclint/bin/dclint.cjs\""));
+    assert!(inner.contains(
+        "export VELVET_GLOVE_FIXTURE_DCLINT_ROOT=\"$state_dir/dclint-environment-node-24.19.0-dclint-3.1.0\""
+    ));
+    assert!(inner.contains("dclint_node=\"$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/bin/node\""));
+    assert!(inner.contains(
+        "dclint_cli=\"$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/.bin/dclint\""
+    ));
+    let base_path_export = inner
+        .lines()
+        .find(|line| line.starts_with("export PATH=") && !line.contains("DCLINT_ROOT"))
+        .expect("controlled base PATH export");
+    assert!(
+        !base_path_export.contains("dclint-environment"),
+        "dedicated dclint Node must not leak into unrelated case PATHs"
+    );
+    assert!(
+        harness.contains("const DCLINT_ROOT_ENV: &str = \"VELVET_GLOVE_FIXTURE_DCLINT_ROOT\";")
+    );
+    assert!(harness.contains("\"dclint\" if dclint_toolchain.is_some()"));
+    assert!(harness.contains("toolchain.package_bin.clone()"));
+    assert!(!shared_package.contains("\"dclint\""));
 }
 
 fn validate_components<'a>(

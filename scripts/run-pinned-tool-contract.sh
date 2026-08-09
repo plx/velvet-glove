@@ -72,6 +72,7 @@ rust_extract_dir=
 clippy_extract_dir=
 prettier_extract_dir=
 contextlint_extract_dir=
+dclint_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
 cleanup() {
@@ -89,6 +90,9 @@ cleanup() {
   esac
   case $contextlint_extract_dir in
     "$state_dir"/contextlint-extract.*) rm -rf -- "$contextlint_extract_dir" ;;
+  esac
+  case $dclint_extract_dir in
+    "$state_dir"/dclint-extract.*) rm -rf -- "$dclint_extract_dir" ;;
   esac
   case $ruby_extract_dir in
     "$state_dir"/ruby-extract.*) rm -rf -- "$ruby_extract_dir" ;;
@@ -724,6 +728,106 @@ if needs_group contextlint; then
     'JSON.parse(require("node:fs").readFileSync(process.argv[1])).version' \
     "$contextlint_core_manifest") != "1.1.1" ]]; then
     echo "error: controlled Contextlint CLI/core pair failed its exact version probe" >&2
+    exit 1
+  fi
+fi
+
+dclint_root="$state_dir/dclint-environment-node-24.19.0-dclint-3.1.0"
+if needs_group dclint; then
+  dclint_node_archive=$(fetch_component_archive dclint-node)
+  dclint_node_identity=$(component_integrity_json dclint-node)
+  dclint_npm_identity=$(component_integrity_json dclint-npm)
+  dclint_package_json="$provisioning_dir/dclint/package.json"
+  dclint_package_lock="$provisioning_dir/dclint/package-lock.json"
+  dclint_npm_global_config="$run_home/npm-globalconfig"
+  : >"$dclint_npm_global_config"
+  read -r dclint_package_sha256 _ < <(/usr/bin/shasum -a 256 "$dclint_package_json")
+  read -r dclint_lock_sha256 _ < <(/usr/bin/shasum -a 256 "$dclint_package_lock")
+  dclint_identity=$("$jq_bin" -cn \
+    --argjson node "$dclint_node_identity" \
+    --argjson npm "$dclint_npm_identity" \
+    --arg packageSha256 "$dclint_package_sha256" \
+    --arg packageLockSha256 "$dclint_lock_sha256" \
+    '{node: $node, npm: $npm, dclint: {version: "3.1.0", packageSha256: $packageSha256, packageLockSha256: $packageLockSha256}}')
+  if [[ -e $dclint_root && ( ! -d $dclint_root || -L $dclint_root ) ]]; then
+    echo "error: controlled dclint environment root is not a real directory: $dclint_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $dclint_root ]]; then
+    echo "==> Installing the checksum-verified Node 24.19.0 and npm integrity-locked dclint 3.1.0 closure"
+    dclint_extract_dir=$(mktemp -d "$state_dir/dclint-extract.XXXXXX")
+    dclint_install_root="$dclint_extract_dir/install"
+    mkdir -p "$dclint_install_root/package"
+    /usr/bin/tar -xf "$dclint_node_archive" -C "$dclint_extract_dir"
+    dclint_archive_root=$(printf '%s\n' "$dclint_node_identity" | \
+      "$jq_bin" -r '.integrity.archiveRoot')
+    mv "$dclint_extract_dir/$dclint_archive_root" "$dclint_install_root/node"
+    cp "$dclint_package_json" "$dclint_install_root/package/package.json"
+    cp "$dclint_package_lock" "$dclint_install_root/package/package-lock.json"
+    env -i "${provisioning_env[@]}" \
+      "NPM_CONFIG_USERCONFIG=/dev/null" \
+      "NPM_CONFIG_GLOBALCONFIG=$dclint_npm_global_config" \
+      "NPM_CONFIG_CACHE=$state_dir/npm-cache/dclint-3.1.0" \
+      "$dclint_install_root/node/bin/node" \
+      "$dclint_install_root/node/lib/node_modules/npm/bin/npm-cli.js" \
+      ci --ignore-scripts --no-audit --no-fund --prefix "$dclint_install_root/package"
+    read -r observed_dclint_package_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$dclint_install_root/package/package.json"
+    )
+    read -r observed_dclint_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$dclint_install_root/package/package-lock.json"
+    )
+    if [[ $observed_dclint_package_sha256 != "$dclint_package_sha256" || \
+      $observed_dclint_lock_sha256 != "$dclint_lock_sha256" ]]; then
+      echo "error: npm ci changed the exact dclint package manifest or lock" >&2
+      exit 1
+    fi
+    printf '%s\n' "$dclint_identity" >"$dclint_install_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$dclint_install_root/node" dclint-node
+    mv "$dclint_install_root" "$dclint_root"
+    rm -rf -- "$dclint_extract_dir"
+    dclint_extract_dir=
+  fi
+  dclint_node="$dclint_root/node/bin/node"
+  dclint_npm_cli="$dclint_root/node/lib/node_modules/npm/bin/npm-cli.js"
+  dclint_cli="$dclint_root/package/node_modules/dclint/bin/dclint.cjs"
+  dclint_bin_link="$dclint_root/package/node_modules/.bin/dclint"
+  if [[ ! -x $dclint_node || ! -f $dclint_npm_cli || ! -f $dclint_cli || \
+    ! -x $dclint_bin_link || ! -L $dclint_bin_link ]]; then
+    echo "error: controlled dclint environment is incomplete: $dclint_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $dclint_root/.velvet-glove-artifacts.json ]] || \
+    [[ $(<"$dclint_root/.velvet-glove-artifacts.json") != "$dclint_identity" ]]; then
+    echo "error: controlled dclint environment does not match the declared Node archive and npm lock: $dclint_root" >&2
+    exit 1
+  fi
+  read -r observed_dclint_package_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$dclint_root/package/package.json"
+  )
+  read -r observed_dclint_lock_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$dclint_root/package/package-lock.json"
+  )
+  if [[ $observed_dclint_package_sha256 != "$dclint_package_sha256" || \
+    $observed_dclint_lock_sha256 != "$dclint_lock_sha256" ]]; then
+    echo "error: controlled dclint environment manifest or lock digest drifted" >&2
+    exit 1
+  fi
+  if [[ $(readlink "$dclint_bin_link") != "../dclint/bin/dclint.cjs" ]]; then
+    echo "error: controlled dclint npm bin link escapes the declared package" >&2
+    exit 1
+  fi
+  verify_macho_closure "$dclint_root/node" dclint-node
+  if [[ $(env -i "${provisioning_env[@]}" "$dclint_node" --version) != "v24.19.0" ]]; then
+    echo "error: controlled dclint Node runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$dclint_node" "$dclint_npm_cli" --version) != "11.17.0" ]]; then
+    echo "error: controlled dclint npm runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$dclint_node" "$dclint_cli" --version) != "3.1.0" ]]; then
+    echo "error: controlled dclint CLI failed its exact version probe" >&2
     exit 1
   fi
 fi
