@@ -718,33 +718,80 @@ fn eslint_builtin_matches_rust_spec() {
         vec![
             "*.js".to_string(),
             "**/*.js".into(),
-            "*.jsx".into(),
-            "**/*.jsx".into(),
-            "*.ts".into(),
-            "**/*.ts".into(),
-            "*.tsx".into(),
-            "**/*.tsx".into(),
+            "*.cjs".into(),
+            "**/*.cjs".into(),
+            "*.mjs".into(),
+            "**/*.mjs".into(),
         ],
     );
 
     let fix = eslint.phases.get("fix").expect("fix");
-    assert_argv(
-        fix,
-        vec![
-            literal("--fix"),
-            token(ArgToken::ExtraArgs),
-            token(ArgToken::Files),
-        ],
-    );
-    assert_exit_codes(&fix.exit_codes, &[0], &[1], &[]);
+    assert_eq!(fix.program.as_deref(), Some("python"));
+    assert_eq!(fix.argv.len(), 9);
+    assert_eq!(fix.argv[0], literal("-I"));
+    assert_eq!(fix.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &fix.argv[2] else {
+        panic!("eslint adapter must be a literal Python program")
+    };
+    for required in [
+        "__VELVET_GLOVE_ESLINT_FILES__",
+        "extra arguments are unsupported",
+        ".velvet-glove-eslint.json",
+        "object_pairs_hook=reject_duplicate_pairs",
+        "--no-config-lookup",
+        "--no-ignore",
+        "--no-inline-config",
+        "--fix-dry-run",
+        "--suppressions-location=",
+        "--cache-location=",
+        "native ESLint write differed from dry-run output",
+        "native ESLint final diagnostics differ from fix dry-run",
+        "temporary root must be outside the project",
+        "start_new_session=True",
+        "signal.pthread_sigmask",
+        "drain_blocked_signals",
+        "global stdout_bytes",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "ESLint adapter must contain {required:?}"
+        );
+    }
+    for forbidden in [
+        "os.environ.copy",
+        "*.jsx",
+        "*.ts",
+        "plugins",
+        "parserOptions",
+    ] {
+        assert!(
+            !adapter.contains(forbidden),
+            "ESLint adapter must not contain {forbidden:?}"
+        );
+    }
+    assert_eq!(fix.argv[3], literal("node"));
+    assert_eq!(fix.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(fix.argv[5], literal("fix"));
+    assert_eq!(fix.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(fix.argv[7], literal("__VELVET_GLOVE_ESLINT_FILES__"));
+    assert_eq!(fix.argv[8], token(ArgToken::Files));
+    assert_exit_codes(&fix.exit_codes, &[0], &[1], &[2]);
     assert_eq!(fix.writes, WriteBehavior::TargetFiles);
 
     let verify = eslint.phases.get("verify").expect("verify");
-    assert_argv(
-        verify,
-        vec![token(ArgToken::ExtraArgs), token(ArgToken::Files)],
-    );
-    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[]);
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    assert_eq!(verify.argv[2], fix.argv[2]);
+    assert_eq!(verify.argv[3], literal("node"));
+    assert_eq!(verify.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[5], literal("verify"));
+    assert_eq!(verify.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(verify.argv[7], literal("__VELVET_GLOVE_ESLINT_FILES__"));
+    assert_eq!(verify.argv[8], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(eslint.phase_order, vec!["fix", "verify"]);
 }
 
 #[test]

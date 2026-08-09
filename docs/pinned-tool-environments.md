@@ -12,12 +12,13 @@ just tool-case biome multi-file
 just tool-case prettier multi-file
 just tool-case contextlint multi-file-project
 just tool-case dclint autofix-multi-file
+just tool-case eslint multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all eighteen behavior-rich representative contracts across fourteen environments
+Run all nineteen behavior-rich representative contracts across fifteen environments
 with:
 
 ```sh
@@ -81,6 +82,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Prettier | Node 24.19.0; npm 11.17.0; Prettier 3.9.6; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `prettier/multi-file` |
 | Contextlint | Node 24.19.0; npm 11.17.0; @contextlint/cli and core 1.1.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `contextlint/multi-file-project` |
 | dclint | Node 24.19.0; npm 11.17.0; dclint 3.1.0; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `dclint/autofix-multi-file` |
+| ESLint | Node 24.19.0; npm 11.17.0; ESLint 10.8.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `eslint/multi-file` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -1131,6 +1133,124 @@ process group is outside adapter containment. dclint and its YAML parser still
 process untrusted project bytes and are not a code sandbox; the active macOS
 deny-network wrapper remains authoritative for network isolation.
 
+### ESLint validation contract
+
+The dedicated ESLint environment reuses the official Node.js
+[`node-v24.19.0-darwin-arm64.tar.gz`](https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz)
+archive at SHA-256
+`8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d`,
+but installs it in a distinct case-only root. That archive supplies Node
+`v24.19.0` and npm `11.17.0`. npm `ci` installs the complete dependency closure
+from the committed lock with scripts, audit, and funding calls disabled. The
+direct package is
+[`eslint` 10.8.1](https://www.npmjs.com/package/eslint/v/10.8.1), published
+2026-08-07 with registry integrity
+`sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ==`
+and npm shasum `fb37d514c19b6dd5b2d6b70169fd26fddfa97967`. Its package
+`gitHead` and the upstream
+[`v10.8.1` release](https://github.com/eslint/eslint/releases/tag/v10.8.1)
+both bind commit `c049dc3c4294da7afe3d920a1a5fdeba388f4983`.
+Before every selected case the driver checks the committed package/lock
+digests, exact root engines and dependency, direct tarball URL and integrity,
+installed package version, npm bin target, Node Mach-O closure, and exact
+`v10.8.1` product probe.
+
+Both the immediate pipeline and compatibility-deferred workflow run the same
+evaluated adapter through pinned Python 3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> node <eslint-cli> fix {extra-args} __VELVET_GLOVE_ESLINT_FILES__ {files}
+python -I -c <adapter> node <eslint-cli> verify {extra-args} __VELVET_GLOVE_ESLINT_FILES__ {files}
+```
+
+Every native read-only child receives this fixed shape, with a distinct cache
+directory for each invocation:
+
+```text
+node eslint.js --format=json --no-color --no-config-lookup --config=<private-cjs> --no-ignore --no-warn-ignored --no-inline-config --max-warnings=0 --concurrency=off --cache --cache-strategy=content --cache-location=<private-cache> --suppressions-location=<private-json> --pass-on-unpruned-suppressions -- {files}
+```
+
+Fix dry-runs add `--fix-dry-run`; the narrowly admitted native write adds
+`--fix` and receives only files whose exact replacement bytes were predicted.
+
+<!-- markdownlint-enable MD013 -->
+
+Extra arguments are unsupported. The adapter never discovers or executes
+project ESLint configuration, plugins, parsers, processors, ignore files,
+inline configuration, or suppressions. It accepts only normalized absolute,
+unique regular `.js`, `.cjs`, and `.mjs` selections inside the project root.
+Symlinks, hard links, duplicate inode aliases, non-UTF-8 paths or source,
+files over 16 MiB, and batches over 64 MiB fail before native execution.
+TypeScript and JSX are intentionally outside the core built-in contract.
+
+The optional project-root `.velvet-glove-eslint.json` is bounded to 1 MiB and
+must be one strict UTF-8 JSON object without duplicate keys or non-finite
+values. It accepts only optional `$schema` and `rules` keys. `rules` can change
+only the severity of `eqeqeq`, `no-debugger`, `no-undef`, `no-unused-vars`,
+`no-var`, `prefer-const`, and `semi`, using `off`, `warn`, `error`, or numeric
+zero through two. Every other key, rule, option, plugin, parser, or executable
+channel rejects before a child. The normalized rule map becomes a mode-0600,
+fsynced private CJS flat config with fixed module/CommonJS language modes; an
+empty mode-0600 suppressions document and mode-0700 per-child cache directories
+live in the same unique private root. Only those private paths are passed to
+ESLint, and raw randomized paths are normalized from retained diagnostics and
+evidence.
+
+Node and the ESLint JavaScript CLI resolve to absolute files in the managed
+root. Native children receive a minimal fixed path, locale, timezone,
+terminal, CI, color, and worker environment. Project/user home, temporary and
+XDG cache roots plus ambient Node, npm, ESLint, loader, debug, and configuration
+variables are absent. Combined output across the adapter lifecycle is capped
+at 16 MiB.
+
+Native status zero or one is accepted only with empty stderr and one strict
+JSON result for every selected file. Every result path, message severity,
+fatal/error/warning count, fixable count, suppression list, and optional
+predicted output must be internally consistent. Status one must correspond to
+at least one warning or error; status zero must be diagnostic-free. The adapter
+emits stable relative-path JSON diagnostics for issues. Status two and all
+other native statuses, stderr, malformed or incomplete JSON, duplicate or
+out-of-scope results, count/status contradictions, mutation during a read-only
+check, excess output, spawn, signal, private-state, or cleanup failure map to
+operational status two.
+
+Fix mode first runs the complete native read-only batch, snapshots selected
+file identities, modes, and bytes, then runs `--fix-dry-run` over the same
+batch. Fatal diagnostics or a dry-run with no predicted changes stop without a
+write. Otherwise only predicted files reach `--fix`; the write must preserve
+their identities and modes and produce byte-for-byte the dry-run output while
+leaving every other selection unchanged. A final read-only batch over all
+selected files is authoritative and must match the dry-run diagnostics after
+removing native source/output fields. Immediate and deferred retained runs use
+independent pristine baselines, and the clean repeat proves idempotence.
+
+HUP, INT, and TERM are guarded around spawn, forwarded to the owned process
+group, retained through private cleanup, and drained at the exit cutoff. A
+normally exiting leader that leaves same-group descendants is killed and
+rejected; pipes, process waits, and cleanup are bounded, and composed failures
+preserve the primary diagnostic.
+
+The five cases are `clean`, persistent `source-issue`, exact `autofix`,
+`multi-file`, and pre-spawn `config-failure`. The representative selects one
+dirty and one clean file, leaves an unselected CommonJS sentinel untouched,
+and proves exact batch attribution and mutation. All five execute through
+Claude and Codex immediate hooks and compatibility-deferred workflows from
+independent baselines. Retained evidence binds the evaluated adapter, private
+config/suppressions/cache modes and bytes, every nested argv/status sequence,
+managed Node/CLI graph, controlled environment, workspace diffs, final
+verification, and semantic repeat.
+
+These bounded checks cannot eliminate concurrent selected-file, source-config,
+temporary-root, or executable replacement after validation. Native ESLint
+writes by path, so a late failure can leave an earlier predicted write applied;
+the adapter intentionally does not attempt an unsafe rollback. A descendant
+that deliberately creates a new session or process group is outside adapter
+containment. ESLint still parses untrusted JavaScript and is not a code
+sandbox; the active macOS deny-network wrapper remains authoritative for
+network isolation.
+
 ### Cargo Clippy validation contract
 
 The dedicated Cargo Clippy environment installs selected components from the
@@ -1438,8 +1558,8 @@ The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
 recipe registry. Shared Node, dedicated Prettier, dedicated Contextlint,
-dedicated dclint, Python, and Ruby package closures live beside it under
-`node/`, `prettier/`, `contextlint/`, `dclint/`, `python/`, and `ruby/`; the
+dedicated dclint, dedicated ESLint, Python, and Ruby package closures live beside it under
+`node/`, `prettier/`, `contextlint/`, `dclint/`, `eslint/`, `python/`, and `ruby/`; the
 Betterleaks dependency closure and patch live under `betterleaks/`. Runtime
 components, auxiliary programs, bootstrap
 commands, platform, architecture, minimum OS, and case-network policy are
@@ -1466,12 +1586,12 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These eighteen smoke contracts establish the reproducible environment
+These nineteen smoke contracts establish the reproducible environment
 substrate; they do not by themselves promote a tool's full pinned-real-tool
 coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Vacuum, Betterleaks, Astro,
-Asciidoctor, Biome, Prettier, Contextlint, dclint, gofmt, Cargo Clippy, and
+Asciidoctor, Biome, Prettier, Contextlint, dclint, ESLint, gofmt, Cargo Clippy, and
 Cargo Fmt are covered only after each complete case matrix passes. Linux,
 Intel, and full-catalog scheduling remain separate follow-up work.
 

@@ -63,6 +63,7 @@ vacuum_path_prefix=
 if [[ ,$selection, == *,vacuum/* ]]; then
   vacuum_path_prefix="$vacuum_root/bin:"
 fi
+export VELVET_GLOVE_FIXTURE_ESLINT_ROOT="$state_dir/eslint-environment-node-24.19.0-eslint-10.8.1"
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -120,6 +121,10 @@ vacuum_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("vacuum") != null' >/dev/null; then
   vacuum_selected=true
 fi
+eslint_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("eslint") != null' >/dev/null; then
+  eslint_selected=true
+fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
   any(.recipes[];
@@ -137,6 +142,9 @@ contextlint_cli_manifest="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_mo
 dclint_node="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/bin/node"
 dclint_npm_cli="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
 dclint_cli="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/.bin/dclint"
+eslint_node="$VELVET_GLOVE_FIXTURE_ESLINT_ROOT/node/bin/node"
+eslint_npm_cli="$VELVET_GLOVE_FIXTURE_ESLINT_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
+eslint_cli="$VELVET_GLOVE_FIXTURE_ESLINT_ROOT/package/node_modules/eslint/bin/eslint.js"
 
 while IFS= read -r program; do
   resolved=
@@ -204,6 +212,25 @@ while IFS= read -r program; do
   if [[ -z $resolved && $vacuum_selected == true && $program == vacuum ]]; then
     resolved="$vacuum_bin"
   fi
+  if [[ -z $resolved && $eslint_selected == true ]]; then
+    case $program in
+      eslint-node)
+        resolved="$eslint_node"
+        ;;
+      eslint-npm)
+        resolved="$eslint_npm_cli"
+        ;;
+      eslint)
+        resolved="$eslint_cli"
+        ;;
+      node)
+        if [[ $shared_node_selected == false && $prettier_selected == false && \
+          $contextlint_selected == false && $dclint_selected == false ]]; then
+          resolved="$eslint_node"
+        fi
+        ;;
+    esac
+  fi
   if [[ -z $resolved ]]; then
     resolved=$(type -P "$program" || true)
   fi
@@ -265,6 +292,7 @@ while IFS= read -r probe; do
   prettier_probe=false
   contextlint_probe=false
   dclint_probe=false
+  eslint_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
   done < <(printf '%s\n' "$probe" | jq -r '.probe.argv[]')
@@ -348,10 +376,27 @@ while IFS= read -r probe; do
   if [[ $vacuum_selected == true && $owner == vacuum ]]; then
     probe_argv=("$vacuum_bin" "${probe_argv[@]:1}")
   fi
+  if [[ $eslint_selected == true ]]; then
+    case $owner in
+      eslint-node)
+        probe_argv=("$eslint_node" "${probe_argv[@]:1}")
+        eslint_probe=true
+        ;;
+      eslint-npm)
+        probe_argv=("$eslint_node" "$eslint_npm_cli" "${probe_argv[@]:1}")
+        eslint_probe=true
+        ;;
+      eslint)
+        probe_argv=("$eslint_node" "$eslint_cli" "${probe_argv[@]:1}")
+        eslint_probe=true
+        ;;
+    esac
+  fi
   set +e
   if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
-  elif [[ $prettier_probe == true || $contextlint_probe == true || $dclint_probe == true ]]; then
+  elif [[ $prettier_probe == true || $contextlint_probe == true || $dclint_probe == true || \
+    $eslint_probe == true ]]; then
     observed=$(env -i \
       "HOME=$HOME" \
       "USER=${USER:-runner}" \
