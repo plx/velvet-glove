@@ -153,14 +153,16 @@ just tool-case prettier multi-file
 just tool-case contextlint multi-file-project
 just tool-case dclint autofix-multi-file
 just tool-case eslint multi-file
+just tool-case ghalint-workflow multi-workflow
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Nineteen behavior-rich contracts across fifteen environments: jq, Buf, and
-# Vacuum data formats, shared Node, dedicated Prettier, Contextlint, dclint, and
-# ESLint, Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security, and native macOS.
+# Twenty behavior-rich contracts across sixteen environments: jq, Buf, and
+# Vacuum data formats; shared Node; dedicated Prettier, Contextlint, dclint,
+# ESLint, and GitHub Actions; Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security,
+# and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -273,6 +275,23 @@ compatibility-deferred surfaces. Exact release and npm provenance, private
 config/cache/suppression handling, signal and descendant cleanup, and the
 remaining replacement-race and late-partial-write limitations are in the
 [ESLint contract](docs/pinned-tool-environments.md#eslint-validation-contract).
+
+The dedicated GitHub Actions lane reproducibly builds ghalint
+`1.5.6+velvet-glove.1` from the checksum-pinned v1.5.6 source with a
+checksum-pinned `golang.org/x/text` 0.39.0 closure update and locked Go 1.26.5;
+the official release binary is excluded because it embeds stale Go 1.26.2.
+The isolated adapter inventories exactly the native top-level
+`.github/workflows/*.yml`-then-`*.yaml` set, rejects the native empty-workspace
+success, snapshots the retained project, and accepts status one only when every
+timestamped line belongs to the pinned policy, workflow-parse, or configuration
+diagnostic grammar. The six-case matrix covers clean execution, ordinary
+policy findings, the complete native policy-field grammar, two structured YAML
+parse shapes, invalid configuration, and multi-workflow scope on both the
+immediate pipeline and explicit deferred workflow. Exact source and build
+provenance, command and lifecycle evidence, closed-log grammar, and remaining
+skipped-subtree, replacement-race, and escaped-process limitations are in the
+[ghalint workflow
+contract](docs/pinned-tool-environments.md#ghalint-workflow-validation-contract).
 
 The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
 stdout as the formatting signal while preserving native status-two failure

@@ -1,13 +1,13 @@
 {
-  "draftFormatVersion": 1,
-  "status": "isolated-draft",
-  "integrationNote": "This record is intentionally tool-local. It is not wired into recipes.json, the validation manifest, generated documentation, or the shared tool registry until serialized integration.",
+  "schemaVersion": 1,
+  "status": "integrated",
+  "integrationNote": "This exact source-build provenance is bound by recipes.json, the validation manifest, generated documentation, and the shared pinned runner.",
   "component": {
     "id": "ghalint-workflow",
     "executable": "ghalint",
     "upstreamVersion": "1.5.6",
     "productVersion": "1.5.6+velvet-glove.1",
-    "installationSource": "ghalint v1.5.6 source at peeled tag commit 050e825989101021ece297e4d2f726f519ba89ee, plus the checksum-pinned x/text closure patch, reproducibly built with locked Go 1.26.5",
+    "installationSource": "ghalint v1.5.6 source at peeled tag commit 050e825989101021ece297e4d2f726f519ba89ee plus a checksum-pinned x/text v0.39.0 closure patch, reproducibly built with locked Go 1.26.5; the official binary is excluded because it embeds stale Go 1.26.2",
     "probe": {
       "argv": ["ghalint", "--version"],
       "match": "exact",
@@ -109,7 +109,8 @@
           "-C",
           "{state}/ghalint-build-1.5.6-vg1/source",
           "mod",
-          "download"
+          "download",
+          "all"
         ],
         "environment": {
           "GOTOOLCHAIN": "local",
