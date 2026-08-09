@@ -148,8 +148,9 @@ just check
 just tool-case jq multi-file-fragments
 just tool-case astro multi-file-project
 just tool-case betterleaks multi-file
+just tool-case biome multi-file
 
-# Ten behavior-rich contracts across eight environments: data formats, Node,
+# Eleven behavior-rich contracts across eight environments: data formats, Node,
 # Python, Go, Rust, Ruby, security, and native macOS.
 just tool-representatives
 
@@ -182,6 +183,16 @@ selected files and an unselected failing third file. Exact provenance,
 integrities, repeat and no-mutation evidence, and the conservative attribution
 and side-effect limitations are in the
 [Astro contract](docs/pinned-tool-environments.md#astro-validation-contract).
+
+The same Node lane pins Biome 2.5.7 and its macOS arm64 native package. An
+isolated Python adapter locks Biome's JSON reporter and safe-fix controls,
+requires a complete report for every selected file, distinguishes source
+diagnostics from configuration failures, and runs an authoritative check after
+each mutation. The representative proves one batched repair with exact changed
+files, conservative candidate attribution, an untouched unselected sentinel,
+and clean idempotent repeats. Provenance, integrity, command, mutation, and
+security limitations are recorded in the
+[Biome contract](docs/pinned-tool-environments.md#biome-validation-contract).
 
 The security lane reproducibly builds Betterleaks
 `1.7.3+velvet-glove.1` from the checksum-pinned upstream v1.7.3 source and a

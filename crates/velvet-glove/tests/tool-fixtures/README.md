@@ -67,6 +67,12 @@ Any files inside `expected/<rel-path>` are compared against the post-run
 content of `<rel-path>` in the temp workspace. Use this when the tool rewrites
 a file (autofix, formatting) and you want to assert the result.
 
+For retained mutating contracts, the mirror is also the exact changed-file
+allowlist: every mirrored path must change, no unmirrored source path may
+change, and the second immediate/deferred run must produce an empty diff. This
+lets a multi-file fixture retain clean or intentionally dirty unselected
+sentinels without weakening the complete-workspace-diff assertion.
+
 ## Normalization placeholders
 
 When comparing outputs, the harness substitutes the test's temp workspace
@@ -103,8 +109,8 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run all ten pinned representative contracts across eight environments with
-`just tool-representatives`. See the
+Run the pinned representative contracts across their controlled environments
+with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
 denial, and evidence output.
@@ -137,16 +143,23 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Asciidoctor, Astro, and Betterleaks contract cases
-are retained too. Their evidence includes exact pass-through
+alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, and Biome contract
+cases are retained too. Their evidence includes exact pass-through
 program/argv/cwd/environment traces (including Asciidoctor's nested FATAL
 preflight and WARNING validation, Astro's single nested project check, and
 Betterleaks' marker-delimited batch adapter with locked redaction and finding
 status plus inherited-config scrubbing, and its distinct status-1 missing-config
-failure with the adapter's production-canonicalized `<time> FTL` diagnostic),
+failure with the adapter's production-canonicalized `<time> FTL` diagnostic,
+plus Biome's isolated mode-and-files adapter, locked JSON-report suffix, and
+fully scrubbed child control/log environment),
 complete workspace snapshots and diffs for repeated immediate runs,
 and two independent compatibility-deferred
-summaries plus their semantic idempotence comparison. Astro traces additionally
+summaries plus their semantic idempotence comparison. Biome mutating cases
+retain independent pristine baselines for the immediate `fix` → `verify`
+pipeline and compatibility-deferred `initial-check` → `remedy` →
+`final-check` lifecycle. They bind exact post-remedy bytes and changed paths,
+then prove either a verify-only clean fixed-state rerun or an unchanged full
+rerun for persistent source issues. Astro traces additionally
 bind `NODE_PATH` to the same controlled `node_modules` graph as the pinned
 Astro executable, verify all three required package manifests, and record
 disabled telemetry, non-interactive CI mode, and a cleared debug channel. Other

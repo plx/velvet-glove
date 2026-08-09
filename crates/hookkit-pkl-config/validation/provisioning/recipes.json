@@ -787,6 +787,25 @@
       "representativeCase": "multi-file"
     },
     {
+      "id": "biome-macos-arm64",
+      "toolId": "biome",
+      "environmentId": "macos-arm64-node",
+      "version": "2.5.7",
+      "installationSource": "@biomejs/biome 2.5.7 wrapper and @biomejs/cli-darwin-arm64 2.5.7 native binary in the exact npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+      "integrity": {
+        "kind": "npm-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/node/package-lock.json"
+      },
+      "probe": {
+        "argv": ["biome", "--version"],
+        "match": "exact",
+        "expected": "Version: 2.5.7"
+      },
+      "caseExecutables": ["biome", "node", "python"],
+      "cases": ["clean", "autofix", "source-issue", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
+    },
+    {
       "id": "sort-package-json-macos-arm64",
       "toolId": "sort-package-json",
       "environmentId": "macos-arm64-node",
