@@ -118,6 +118,17 @@ if [ "$logical_program" = gofmt ]; then
   printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
   printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
 fi
+if [ "$logical_program" = dclint ]; then
+  printf '%s\n' "${PATH-}" >"$record/env-PATH"
+  printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
+  printf '%s\n' "${NODE_NO_WARNINGS-}" >"$record/env-NODE_NO_WARNINGS"
+  printf '%s\n' "${NODE_VELVET_GLOVE_POISON-}" >"$record/env-NODE_VELVET_GLOVE_POISON"
+  printf '%s\n' "${DCLINT_CONFIG-}" >"$record/env-DCLINT_CONFIG"
+  printf '%s\n' "${DYLD_INSERT_LIBRARIES-}" >"$record/env-DYLD_INSERT_LIBRARIES"
+  printf '%s\n' "${DYLD_PRINT_LIBRARIES-}" >"$record/env-DYLD_PRINT_LIBRARIES"
+  printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
+  printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
+fi
 if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ] || [ "$logical_program" = cargo-fmt ] || [ "$logical_program" = rustfmt ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
@@ -226,10 +237,52 @@ printf '%s\n' "${RUST_LIB_BACKTRACE-}" >"$record/env-RUST_LIB_BACKTRACE"
 printf '%s\n' "$VELVET_GLOVE_TOOL_TRACE_SENTINEL" >"$record/env-VELVET_GLOVE_TOOL_TRACE_SENTINEL"
 
 argument_index=0
+dclint_config=
 for argument in "$@"; do
   printf '%s\n' "$argument" >"$record/argv-$argument_index"
+  if [ "$logical_program" = dclint ]; then
+    case $argument in
+      --config=*)
+        if [ -n "$dclint_config" ]; then
+          printf '%s\n' multiple >"$record/dclint-config-kind"
+          exit 2
+        fi
+        dclint_config=${argument#--config=}
+        ;;
+    esac
+  fi
   argument_index=$((argument_index + 1))
 done
+
+if [ "$logical_program" = dclint ]; then
+  printf '%s\n' "$dclint_config" >"$record/dclint-config-path"
+  if [ -z "$dclint_config" ]; then
+    printf '%s\n' missing >"$record/dclint-config-kind"
+  elif [ -L "$dclint_config" ]; then
+    printf '%s\n' symlink >"$record/dclint-config-kind"
+  elif [ -f "$dclint_config" ]; then
+    printf '%s\n' file >"$record/dclint-config-kind"
+    /usr/bin/stat -f '%Lp' "$dclint_config" >"$record/dclint-config-mode"
+    /usr/bin/stat -f '%l' "$dclint_config" >"$record/dclint-config-links"
+    /usr/bin/wc -c <"$dclint_config" | /usr/bin/tr -d ' ' >"$record/dclint-config-bytes"
+    /usr/bin/shasum -a 256 "$dclint_config" >"$record/dclint-config-shasum"
+    IFS=' ' read -r dclint_config_sha256 _ <"$record/dclint-config-shasum"
+    printf '%s\n' "$dclint_config_sha256" >"$record/dclint-config-sha256"
+    /bin/rm "$record/dclint-config-shasum"
+  else
+    printf '%s\n' other >"$record/dclint-config-kind"
+  fi
+  dclint_config_parent=${dclint_config%/*}
+  printf '%s\n' "$dclint_config_parent" >"$record/dclint-config-parent"
+  if [ -L "$dclint_config_parent" ]; then
+    printf '%s\n' symlink >"$record/dclint-config-parent-kind"
+  elif [ -d "$dclint_config_parent" ]; then
+    printf '%s\n' directory >"$record/dclint-config-parent-kind"
+    /usr/bin/stat -f '%Lp' "$dclint_config_parent" >"$record/dclint-config-parent-mode"
+  else
+    printf '%s\n' missing >"$record/dclint-config-parent-kind"
+  fi
+fi
 
 set +e
 "$real_program" "$@"

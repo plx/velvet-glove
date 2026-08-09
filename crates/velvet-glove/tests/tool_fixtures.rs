@@ -58,6 +58,7 @@ const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this
 const PRETTIER_POISON_ENV_VALUE: &str = "velvet-glove-prettier-adapter-must-clear-this";
 const PRETTIER_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_PRETTIER_ROOT";
 const CONTEXTLINT_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT";
+const DCLINT_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_DCLINT_ROOT";
 const PRETTIER_CHILD_PATH: &str = "/usr/bin:/bin";
 const PRETTIER_SCRUBBED_ENV: &[&str] = &[
     DEBUG_ENV,
@@ -255,10 +256,6 @@ const CONTEXTLINT_SCRUBBED_ENV: &[&str] = &[
     "npm_config_userconfig",
     "NODE_EXTRA_CA_CERTS",
     "SSL_CERT_FILE",
-    "DYLD_INSERT_LIBRARIES",
-    "DYLD_PRINT_LIBRARIES",
-    "LD_LIBRARY_PATH",
-    "LD_PRELOAD",
     DEBUG_ENV,
     "CONTEXTLINT_VELVET_GLOVE_POISON",
 ];
@@ -272,6 +269,30 @@ const CONTEXTLINT_POISONED_ENV: &[&str] = &[
     DEBUG_ENV,
     "CONTEXTLINT_VELVET_GLOVE_POISON",
 ];
+const DCLINT_FILES_MARKER: &str = "__VELVET_GLOVE_DCLINT_FILES__";
+const DCLINT_PRIVATE_CONFIG_ARGUMENT: &str = "--config=<private-config>";
+const DCLINT_PRIVATE_CONFIG_SHA256: &str =
+    "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356";
+const DCLINT_POISON_ENV_VALUE: &str = "velvet-glove-dclint-adapter-must-clear-this";
+const DCLINT_SCRUBBED_ENV: &[&str] = &[
+    "DCLINT_CONFIG",
+    "DEBUG",
+    "NODE_OPTIONS",
+    NODE_PATH_ENV,
+    "NODE_VELVET_GLOVE_POISON",
+];
+const DCLINT_LOADER_SCRUBBED_ENV: &[&str] = &[
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+];
+const DCLINT_TRACE_PLAN: TracePlan = TracePlan::DclintFixSubsetFilesMarker {
+    fixable_targets: &[],
+};
+const DCLINT_AUTOFIX_TRACE_PLAN: TracePlan = TracePlan::DclintFixSubsetFilesMarker {
+    fixable_targets: &["docker-compose.yml"],
+};
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,6 +347,9 @@ enum TracePlan {
         adapter_prefix: &'static [&'static str],
         marker: &'static str,
         mode_arguments: &'static [(&'static str, &'static [&'static [&'static str]])],
+    },
+    DclintFixSubsetFilesMarker {
+        fixable_targets: &'static [&'static str],
     },
     PairedNodeModeFilesMarker {
         node_program_index: usize,
@@ -1249,6 +1273,80 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["\"status\":\"issues\""],
             trace_plan: CARGO_CLIPPY_TRACE_PLAN,
         },
+        ("dclint", "clean") => RealToolContractCase {
+            phase_id: "fix",
+            invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: DCLINT_TRACE_PLAN,
+        },
+        ("dclint", "source-issue") => RealToolContractCase {
+            phase_id: "fix",
+            invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"fixable\":false",
+                "\"rule\":\"service-image-require-explicit-tag\"",
+            ],
+            diagnostic_excludes: &["<PRIVATE_CONFIG>"],
+            trace_plan: DCLINT_TRACE_PLAN,
+        },
+        ("dclint", "validation-issue") => RealToolContractCase {
+            phase_id: "fix",
+            invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["\"fixable\":false", "\"rule\":\"invalid-yaml\""],
+            diagnostic_excludes: &["<PRIVATE_CONFIG>"],
+            trace_plan: DCLINT_TRACE_PLAN,
+        },
+        ("dclint", "autofix-multi-file") => RealToolContractCase {
+            phase_id: "fix",
+            invocations: &[ExpectedInvocation {
+                targets: &["compose.selected-clean.yaml", "docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"fixable\":true",
+                "\"rule\":\"services-alphabetical-order\"",
+                "docker-compose.yml",
+            ],
+            diagnostic_excludes: &["compose.unselected-sentinel.yml"],
+            trace_plan: DCLINT_AUTOFIX_TRACE_PLAN,
+        },
+        ("dclint", "operational-failure") => RealToolContractCase {
+            phase_id: "fix",
+            invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 2,
+                trace_exit_codes: &[],
+            }],
+            extra_args: &["--config=config/unsafe.json"],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "velvet-glove-dclint: dclint config has unknown or executable-loading keys: ['extends']",
+            ],
+            diagnostic_excludes: &["Traceback", "node_modules"],
+            trace_plan: DCLINT_TRACE_PLAN,
+        },
         ("go-fmt", "clean") => RealToolContractCase {
             phase_id: "format",
             invocations: &[ExpectedInvocation {
@@ -1303,7 +1401,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
         },
         (
             "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
-            | "cargo-clippy" | "go-fmt" | "prettier",
+            | "cargo-clippy" | "dclint" | "go-fmt" | "prettier",
             other,
         ) => {
             return Err(format!(
@@ -1712,6 +1810,96 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
+        ("dclint", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("dclint", "source-issue") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            immediate_outcome: ExpectedOutcome::Issues,
+            changed_targets: &[],
+        },
+        ("dclint", "validation-issue") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            immediate_outcome: ExpectedOutcome::Issues,
+            changed_targets: &[],
+        },
+        ("dclint", "autofix-multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["compose.selected-clean.yaml", "docker-compose.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[1, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["compose.selected-clean.yaml", "docker-compose.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["compose.selected-clean.yaml", "docker-compose.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["docker-compose.yml"],
+        },
+        ("dclint", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["docker-compose.yml"],
+                exit_code: 2,
+                trace_exit_codes: &[],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
         ("go-fmt", "clean") => MutatingToolContractCase {
             remedy_phase_id: "format",
             remedy_mode: PhaseMode::Format,
@@ -1780,7 +1968,11 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
-        ("biome" | "prettier" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "go-fmt", other) => {
+        (
+            "biome" | "prettier" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "dclint"
+            | "go-fmt",
+            other,
+        ) => {
             return Err(format!(
                 "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
@@ -2928,6 +3120,103 @@ fn cargo_fmt_trace_plan_binds_coverage_and_real_workspace_children() {
 }
 
 #[test]
+fn dclint_trace_plan_binds_fixable_subset_and_full_authoritative_recheck() {
+    let outer_arguments = [
+        "-I",
+        "-c",
+        "adapter",
+        "dclint",
+        "fix",
+        "/workspace",
+        DCLINT_FILES_MARKER,
+        "/workspace/compose.selected-clean.yaml",
+        "/workspace/docker-compose.yml",
+    ]
+    .map(str::to_owned);
+    let targets = [
+        PathBuf::from("/workspace/compose.selected-clean.yaml"),
+        PathBuf::from("/workspace/docker-compose.yml"),
+    ];
+
+    let (program, invocations) = resolve_trace_invocations(
+        DCLINT_AUTOFIX_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[1, 0, 0],
+    )
+    .expect("resolve dclint fix trace");
+
+    assert_eq!(program, "dclint");
+    assert_eq!(invocations.len(), 3);
+    assert_eq!(invocations[0].targets, targets);
+    assert_eq!(
+        invocations[1].targets,
+        [PathBuf::from("/workspace/docker-compose.yml")]
+    );
+    assert_eq!(invocations[2].targets, targets);
+    assert_eq!(
+        invocations[1].arguments,
+        [
+            "--formatter=json",
+            "--color=false",
+            "--max-warnings=0",
+            DCLINT_PRIVATE_CONFIG_ARGUMENT,
+            "--fix",
+            "/workspace/docker-compose.yml",
+        ]
+    );
+    assert!(
+        !invocations[0]
+            .arguments
+            .iter()
+            .any(|argument| argument == "--fix")
+    );
+    assert!(
+        !invocations[2]
+            .arguments
+            .iter()
+            .any(|argument| argument == "--fix")
+    );
+
+    let (_, fixed) = resolve_trace_invocations(
+        DCLINT_AUTOFIX_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[0],
+    )
+    .expect("resolve fixed-state dclint trace");
+    assert_eq!(fixed.len(), 1);
+}
+
+#[test]
+fn dclint_trace_plan_allows_fail_closed_rejection_before_native_spawn() {
+    let outer_arguments = [
+        "-I",
+        "-c",
+        "adapter",
+        "dclint",
+        "verify",
+        "/workspace",
+        "--config=config/unsafe.json",
+        DCLINT_FILES_MARKER,
+        "/workspace/docker-compose.yml",
+    ]
+    .map(str::to_owned);
+    let (program, invocations) = resolve_trace_invocations(
+        DCLINT_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &[PathBuf::from("/workspace/docker-compose.yml")],
+        &[],
+    )
+    .expect("resolve dclint pre-spawn rejection trace");
+    assert_eq!(program, "dclint");
+    assert!(invocations.is_empty());
+}
+
+#[test]
 fn workspace_indicator_trace_plan_binds_preflight_and_read_only_remedy_probes() {
     let root = unique_temp_dir("velvet-glove-workspace-indicator-trace-test");
     let indicator = root.join("Cargo.toml");
@@ -3201,6 +3490,7 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
         prettier_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
+        dclint_toolchain: None,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -3264,6 +3554,7 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
         prettier_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
+        dclint_toolchain: None,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -3346,6 +3637,7 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         prettier_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
+        dclint_toolchain: None,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -3413,6 +3705,7 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         prettier_toolchain: None,
         contextlint_toolchain: None,
         contextlint: false,
+        dclint_toolchain: None,
     };
 
     let environment = verify_gofmt_trace_environment(&record, &harness)
@@ -3729,6 +4022,18 @@ fn prettier_evaluated_adapter_adversarial_contract() {
 }
 
 #[test]
+#[ignore = "evaluated dclint adapter lifecycle; requires controlled Python and Node"]
+fn dclint_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("dclint")
+        .unwrap_or_else(|| panic!("builtin catalog has no dclint spec"));
+    verify_dclint_adapter_lifecycle(spec, timeout).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     let options = HarnessOptions::from_environment().unwrap_or_else(|error| panic!("{error}"));
@@ -3776,6 +4081,11 @@ fn run_all_tool_fixtures() {
         verify_prettier_adapter_adversarial_contract(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("prettier adapter adversarial contract probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "dclint") {
+        verify_dclint_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("dclint adapter lifecycle probe: pass");
     }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -4407,11 +4717,14 @@ fn run_fixture_case_inner(
     let tool_trace = resolved_contract
         .as_ref()
         .map(|contract| {
-            let programs = contract
+            let mut programs = contract
                 .trace_invocations
                 .iter()
                 .map(|invocation| invocation.program.clone())
                 .collect::<BTreeSet<_>>();
+            if programs.is_empty() {
+                programs.insert(contract.trace_program.clone());
+            }
             ToolTraceHarness::prepare(case, workspace, &programs)
         })
         .transpose()?;
@@ -4615,10 +4928,9 @@ fn run_mutating_fixture_case_inner(
 ) -> Result<(), String> {
     validate_mutation_expected_tree(case, mutation)?;
     let phase_trace = |immediate: &ResolvedContract| {
-        let final_check = (!resolved_mutation.explicit_workflow)
-            .then_some(&resolved_mutation.final_check)
-            .into_iter()
-            .flat_map(|phase| phase.iter())
+        let final_check = resolved_mutation
+            .final_check
+            .iter()
             .flat_map(|phase| phase.trace_invocations.iter());
         immediate
             .trace_invocations
@@ -4955,7 +5267,6 @@ struct ResolvedMutatingContract {
     repeat_immediate: Option<ResolvedContract>,
     remedy: ResolvedContract,
     final_check: Option<ResolvedContract>,
-    explicit_workflow: bool,
 }
 
 fn resolve_real_tool_contract(
@@ -5322,7 +5633,7 @@ fn resolve_mutating_tool_contract(
                 check,
                 workflow.invocation,
                 mutation.final_invocations,
-                ExpectedOutcome::Clean,
+                mutation.immediate_outcome,
                 contract.trace_plan,
                 project,
                 "explicit final checker",
@@ -5403,7 +5714,6 @@ fn resolve_mutating_tool_contract(
         repeat_immediate,
         remedy,
         final_check,
-        explicit_workflow,
     })
 }
 
@@ -6769,6 +7079,15 @@ fn resolve_trace_invocations(
             }
             Ok((cargo, traces))
         }
+        TracePlan::DclintFixSubsetFilesMarker { fixable_targets } => {
+            resolve_dclint_trace_invocations(
+                outer_program,
+                outer_arguments,
+                targets,
+                expected_exit_codes,
+                fixable_targets,
+            )
+        }
         TracePlan::TrailingOptionsAdapter {
             preflight,
             validation,
@@ -6808,6 +7127,159 @@ fn resolve_trace_invocations(
             Ok((trace_program, traces))
         }
     }
+}
+
+fn resolve_dclint_trace_invocations(
+    outer_program: &str,
+    outer_arguments: &[String],
+    targets: &[PathBuf],
+    expected_exit_codes: &[i32],
+    fixable_targets: &[&str],
+) -> Result<(String, Vec<ResolvedTraceInvocation>), String> {
+    const NESTED_PROGRAM_INDEX: usize = 3;
+    const ADAPTER_PREFIX: &[&str] = &["-I", "-c"];
+    if !matches!(expected_exit_codes.len(), 0 | 1 | 3) {
+        return Err(format!(
+            "dclint adapter trace must declare zero, one, or three native statuses, got {expected_exit_codes:?}"
+        ));
+    }
+    let rendered_prefix = outer_arguments
+        .get(..ADAPTER_PREFIX.len())
+        .unwrap_or(outer_arguments);
+    if rendered_prefix != ADAPTER_PREFIX {
+        return Err(format!(
+            "dclint adapter {outer_program} prefix mismatch: {outer_arguments:?}"
+        ));
+    }
+    outer_arguments
+        .get(ADAPTER_PREFIX.len())
+        .filter(|script| !script.is_empty())
+        .ok_or_else(|| format!("dclint adapter {outer_program} has no evaluated script"))?;
+    let trace_program = outer_arguments
+        .get(NESTED_PROGRAM_INDEX)
+        .filter(|program| !program.is_empty())
+        .cloned()
+        .ok_or_else(|| format!("dclint adapter {outer_program} has no nested tool"))?;
+    let mode = outer_arguments
+        .get(NESTED_PROGRAM_INDEX + 1)
+        .map(String::as_str)
+        .ok_or_else(|| format!("dclint adapter {outer_program} has no mode"))?;
+    if !matches!(mode, "verify" | "fix") {
+        return Err(format!(
+            "dclint adapter {outer_program} has unsupported mode {mode:?}"
+        ));
+    }
+    let project = outer_arguments
+        .get(NESTED_PROGRAM_INDEX + 2)
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("dclint adapter {outer_program} has no project root"))?;
+    if !project.is_absolute() {
+        return Err(format!(
+            "dclint adapter {outer_program} rendered a non-absolute project root {project:?}"
+        ));
+    }
+    let marker_indices = outer_arguments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| (argument == DCLINT_FILES_MARKER).then_some(index))
+        .collect::<Vec<_>>();
+    let [marker_index] = marker_indices.as_slice() else {
+        return Err(format!(
+            "dclint adapter {outer_program} requires exactly one {DCLINT_FILES_MARKER:?} marker, found {marker_indices:?}"
+        ));
+    };
+    if *marker_index < NESTED_PROGRAM_INDEX + 3 {
+        return Err(format!(
+            "dclint adapter {outer_program} places its files marker before the project root"
+        ));
+    }
+    let expected_files = targets
+        .iter()
+        .map(|target| target.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if outer_arguments[(*marker_index + 1)..] != expected_files {
+        return Err(format!(
+            "dclint adapter {outer_program} file suffix mismatch: expected {expected_files:?}, got {:?}",
+            &outer_arguments[(*marker_index + 1)..]
+        ));
+    }
+    if targets.iter().any(|target| !target.starts_with(&project)) {
+        return Err(format!(
+            "dclint adapter {outer_program} has selected files outside {project:?}: {targets:?}"
+        ));
+    }
+    let extra_arguments = &outer_arguments[(NESTED_PROGRAM_INDEX + 3)..*marker_index];
+    let config_argument = match extra_arguments {
+        [] => DCLINT_PRIVATE_CONFIG_ARGUMENT.to_owned(),
+        [argument] if argument.starts_with("--config=") => {
+            let relative = &argument["--config=".len()..];
+            let path = project.join(relative);
+            format!("--config={}", path.to_string_lossy())
+        }
+        _ => {
+            if expected_exit_codes.is_empty() {
+                return Ok((trace_program, Vec::new()));
+            }
+            return Err(format!(
+                "dclint adapter {outer_program} trace cannot render extra arguments {extra_arguments:?}"
+            ));
+        }
+    };
+    if expected_exit_codes.is_empty() {
+        return Ok((trace_program, Vec::new()));
+    }
+    let native_prefix = [
+        "--formatter=json".to_owned(),
+        "--color=false".to_owned(),
+        "--max-warnings=0".to_owned(),
+        config_argument,
+    ];
+    let render = |files: &[String], fix: bool| {
+        native_prefix
+            .iter()
+            .cloned()
+            .chain(fix.then_some("--fix".to_owned()))
+            .chain(files.iter().cloned())
+            .collect::<Vec<_>>()
+    };
+    let mut traces = vec![ResolvedTraceInvocation {
+        program: trace_program.clone(),
+        targets: targets.to_vec(),
+        arguments: render(&expected_files, false),
+        exit_code: expected_exit_codes[0],
+    }];
+    if expected_exit_codes.len() == 3 {
+        if mode != "fix" || fixable_targets.is_empty() {
+            return Err(format!(
+                "dclint three-child trace requires fix mode and a nonempty proven-fixable subset"
+            ));
+        }
+        let mut fixable_files = Vec::new();
+        let mut fixable_paths = Vec::new();
+        for relative in fixable_targets {
+            let candidate = project.join(relative);
+            if !targets.contains(&candidate) {
+                return Err(format!(
+                    "dclint proven-fixable trace target is not selected: {relative:?}"
+                ));
+            }
+            fixable_files.push(candidate.to_string_lossy().into_owned());
+            fixable_paths.push(candidate);
+        }
+        traces.push(ResolvedTraceInvocation {
+            program: trace_program.clone(),
+            targets: fixable_paths,
+            arguments: render(&fixable_files, true),
+            exit_code: expected_exit_codes[1],
+        });
+        traces.push(ResolvedTraceInvocation {
+            program: trace_program.clone(),
+            targets: targets.to_vec(),
+            arguments: render(&expected_files, false),
+            exit_code: expected_exit_codes[2],
+        });
+    }
+    Ok((trace_program, traces))
 }
 
 fn nested_trace_command(
@@ -7322,6 +7794,137 @@ impl ContextlintToolchain {
     }
 }
 
+#[derive(Clone)]
+struct DclintToolchain {
+    root: PathBuf,
+    node_bin: PathBuf,
+    package_bin: PathBuf,
+    node: PathBuf,
+    cli: PathBuf,
+}
+
+impl DclintToolchain {
+    fn resolve_if_configured() -> Result<Option<Self>, String> {
+        let Some(requested_root) = std::env::var_os(DCLINT_ROOT_ENV) else {
+            return Ok(None);
+        };
+        Self::resolve(PathBuf::from(requested_root)).map(Some)
+    }
+
+    fn resolve(requested_root: PathBuf) -> Result<Self, String> {
+        if !requested_root.is_absolute() {
+            return Err(format!(
+                "{DCLINT_ROOT_ENV} must be an absolute directory, got {requested_root:?}"
+            ));
+        }
+        let requested_metadata = std::fs::symlink_metadata(&requested_root).map_err(|error| {
+            format!("inspect {DCLINT_ROOT_ENV} root {requested_root:?}: {error}")
+        })?;
+        if !requested_metadata.is_dir() || requested_metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{DCLINT_ROOT_ENV} must name a real directory, got {requested_root:?}"
+            ));
+        }
+        let root = requested_root.canonicalize().map_err(|error| {
+            format!("canonicalize {DCLINT_ROOT_ENV} root {requested_root:?}: {error}")
+        })?;
+        let node_bin = root.join("node/bin");
+        let package_bin = root.join("package/node_modules/.bin");
+        let node = require_executable(&node_bin.join("node"), "dclint Node runtime")?;
+        let requested_cli = package_bin.join("dclint");
+        let cli_metadata = std::fs::symlink_metadata(&requested_cli)
+            .map_err(|error| format!("inspect managed dclint bin link: {error}"))?;
+        if !cli_metadata.file_type().is_symlink()
+            || std::fs::read_link(&requested_cli)
+                .map_err(|error| format!("read managed dclint bin link: {error}"))?
+                != Path::new("../dclint/bin/dclint.cjs")
+        {
+            return Err(format!(
+                "managed dclint bin link does not bind the declared CLI: {requested_cli:?}"
+            ));
+        }
+        let cli = require_executable(&requested_cli, "dclint JavaScript CLI")?;
+        for (label, path) in [("Node runtime", &node), ("dclint CLI", &cli)] {
+            if !path.starts_with(&root) {
+                return Err(format!(
+                    "managed dclint {label} escapes {DCLINT_ROOT_ENV} {root:?}: {path:?}"
+                ));
+            }
+        }
+
+        let package_path = root.join("package/package.json");
+        let lock_path = root.join("package/package-lock.json");
+        let package_bytes = std::fs::read(&package_path)
+            .map_err(|error| format!("read managed dclint package manifest: {error}"))?;
+        let lock_bytes = std::fs::read(&lock_path)
+            .map_err(|error| format!("read managed dclint npm lock: {error}"))?;
+        let checked_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hookkit-pkl-config/validation/provisioning/dclint");
+        if package_bytes
+            != std::fs::read(checked_root.join("package.json"))
+                .map_err(|error| format!("read checked dclint package manifest: {error}"))?
+            || lock_bytes
+                != std::fs::read(checked_root.join("package-lock.json"))
+                    .map_err(|error| format!("read checked dclint npm lock: {error}"))?
+        {
+            return Err(
+                "managed dclint package manifest or lock differs from checked bytes".to_owned(),
+            );
+        }
+        let package: JsonValue = serde_json::from_slice(&package_bytes)
+            .map_err(|error| format!("parse managed dclint package manifest: {error}"))?;
+        if package["engines"]["node"] != "24.19.0" || package["dependencies"]["dclint"] != "3.1.0" {
+            return Err(format!(
+                "managed dclint package manifest does not pin Node 24.19.0 and dclint 3.1.0: {package_path:?}"
+            ));
+        }
+        let lock: JsonValue = serde_json::from_slice(&lock_bytes)
+            .map_err(|error| format!("parse managed dclint npm lock: {error}"))?;
+        let locked = &lock["packages"]["node_modules/dclint"];
+        if lock["lockfileVersion"] != 3
+            || lock["packages"][""]["dependencies"]["dclint"] != "3.1.0"
+            || locked["version"] != "3.1.0"
+            || locked["resolved"] != "https://registry.npmjs.org/dclint/-/dclint-3.1.0.tgz"
+            || locked["integrity"]
+                != "sha512-afTGdzRFUXK4yCpIiEW/LOR+9TOMEDhNldDp56VCWzn7JDmD451PcUi640GGlMHgbHKJ10rDBm4PtpcBbjqlXw=="
+        {
+            return Err(format!(
+                "managed dclint npm lock does not contain the exact 3.1.0 registry artifact: {lock_path:?}"
+            ));
+        }
+
+        let identity_path = root.join(".velvet-glove-artifacts.json");
+        let identity: JsonValue = serde_json::from_slice(
+            &std::fs::read(&identity_path)
+                .map_err(|error| format!("read managed dclint identity: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed dclint identity: {error}"))?;
+        if identity["node"]["id"] != "dclint-node"
+            || identity["node"]["version"] != "24.19.0"
+            || identity["node"]["integrity"]["sha256"]
+                != "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+            || identity["npm"]["id"] != "dclint-npm"
+            || identity["npm"]["version"] != "11.17.0"
+            || identity["dclint"]["version"] != "3.1.0"
+            || identity["dclint"]["packageSha256"]
+                != "8d1f39c4caea61e2593b426ce230008a1374c42d10130306d026c14cd904c1a9"
+            || identity["dclint"]["packageLockSha256"]
+                != "58dba76cffb45147c65cfdd791543e443097a88c4e69ed8911c2ee159f79f9a8"
+        {
+            return Err(format!(
+                "managed dclint identity does not bind the declared Node/npm/dclint closure: {identity_path:?}"
+            ));
+        }
+        Ok(Self {
+            root,
+            node_bin,
+            package_bin,
+            node,
+            cli,
+        })
+    }
+}
+
 fn require_readable_file(path: &Path, description: &str) -> Result<PathBuf, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| format!("inspect {description} {path:?}: {error}"))?;
@@ -7568,6 +8171,7 @@ struct ToolTraceHarness {
     prettier_toolchain: Option<PrettierToolchain>,
     contextlint_toolchain: Option<ContextlintToolchain>,
     contextlint: bool,
+    dclint_toolchain: Option<DclintToolchain>,
 }
 
 impl ToolTraceHarness {
@@ -7598,6 +8202,11 @@ impl ToolTraceHarness {
         };
         let contextlint_toolchain = if case.tool == "contextlint" {
             ContextlintToolchain::resolve_if_configured()?
+        } else {
+            None
+        };
+        let dclint_toolchain = if case.tool == "dclint" {
+            DclintToolchain::resolve_if_configured()?
         } else {
             None
         };
@@ -7638,6 +8247,11 @@ impl ToolTraceHarness {
                     .as_ref()
                     .expect("checked Contextlint toolchain")
                     .node
+                    .clone(),
+                "dclint" if dclint_toolchain.is_some() => dclint_toolchain
+                    .as_ref()
+                    .expect("checked dclint toolchain")
+                    .cli
                     .clone(),
                 _ => resolve_program(logical_program).ok_or_else(|| {
                     format!("contract could not resolve pinned {logical_program} before tracing")
@@ -7690,6 +8304,12 @@ impl ToolTraceHarness {
                 })?;
             }
         }
+        if logical_programs.contains("dclint") {
+            let temporary = workspace.root.join("tmp");
+            std::fs::create_dir_all(&temporary).map_err(|error| {
+                format!("create controlled dclint temporary directory {temporary:?}: {error}")
+            })?;
+        }
         for (logical_program, real_program) in &programs {
             let shim = shim_dir.join(logical_program);
             std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
@@ -7719,6 +8339,7 @@ impl ToolTraceHarness {
             prettier_toolchain,
             contextlint_toolchain,
             contextlint,
+            dclint_toolchain,
         })
     }
 
@@ -7730,6 +8351,10 @@ impl ToolTraceHarness {
         }
         if let Some(toolchain) = &self.cargo_fmt_toolchain {
             path_entries.push(toolchain.bin.clone());
+        }
+        if let Some(toolchain) = &self.dclint_toolchain {
+            path_entries.push(toolchain.package_bin.clone());
+            path_entries.push(toolchain.node_bin.clone());
         }
         path_entries.extend(std::env::split_paths(&inherited));
         let path = std::env::join_paths(path_entries)
@@ -7835,6 +8460,24 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
+        if self.programs.contains_key("dclint") {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "dclint trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            let temporary = root.join("tmp").canonicalize().map_err(|error| {
+                format!("canonicalize controlled dclint temporary directory: {error}")
+            })?;
+            command.env(TMPDIR_ENV, temporary);
+            for name in DCLINT_SCRUBBED_ENV {
+                command.env(name, DCLINT_POISON_ENV_VALUE);
+            }
+            for name in DCLINT_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         if let Some(toolchain) = &self.cargo_clippy_toolchain {
             command
                 .env(DYLD_LIBRARY_PATH_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
@@ -7908,10 +8551,14 @@ fn verify_tool_trace_invocations(
     evidence_path: &Path,
 ) -> Result<(), String> {
     let trace_dir = harness.trace_root.join(label).join("invocations");
-    let invocations = sorted_entries(&trace_dir)?
-        .into_iter()
-        .filter(|entry| entry.path().is_dir())
-        .collect::<Vec<_>>();
+    let invocations = if trace_dir.is_dir() {
+        sorted_entries(&trace_dir)?
+            .into_iter()
+            .filter(|entry| entry.path().is_dir())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     if invocations.len() != expected_invocations.len() {
         return Err(format!(
             "{label} expected {} tool invocation(s), observed {} at {trace_dir:?}",
@@ -7924,6 +8571,7 @@ fn verify_tool_trace_invocations(
     let mut records = Vec::new();
     let mut cargo_target_dir = None;
     let mut clippy_conf_dir = None;
+    let mut dclint_private_configs = Vec::new();
     for (invocation, expected) in invocations.iter().zip(expected_invocations) {
         let trace_program = expected.program.as_str();
         let record = invocation.path();
@@ -7989,14 +8637,26 @@ fn verify_tool_trace_invocations(
             ));
         }
         assert_record(&record, "argc", &expected.arguments.len().to_string())?;
+        let mut recorded_arguments = Vec::with_capacity(expected.arguments.len());
+        let mut observed_dclint_config = None;
         for (index, argument) in expected.arguments.iter().enumerate() {
             let argument = resolve_dynamic_trace_argument(
                 argument,
                 &recorded_cwd,
                 contextlint_private_root.as_deref(),
             )?;
-            assert_record(&record, &format!("argv-{index}"), &argument)?;
+            if trace_program == "dclint" && argument == DCLINT_PRIVATE_CONFIG_ARGUMENT {
+                let actual = read_record(&record, &format!("argv-{index}"))?;
+                observed_dclint_config = Some(verify_dclint_private_config_argument(
+                    &record, &actual, project,
+                )?);
+                recorded_arguments.push(DCLINT_PRIVATE_CONFIG_ARGUMENT.to_owned());
+            } else {
+                assert_record(&record, &format!("argv-{index}"), &argument)?;
+                recorded_arguments.push(argument);
+            }
         }
+        dclint_private_configs.push(observed_dclint_config);
         assert_record(&record, "status", &expected.exit_code.to_string())?;
         assert_record(&record, "execution", "pass-through")?;
         let program = read_record(&record, "program")?;
@@ -8078,6 +8738,15 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if trace_program == "dclint" {
+            let controlled = verify_dclint_trace_environment(&record, harness)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
         {
@@ -8136,6 +8805,8 @@ fn verify_tool_trace_invocations(
             cargo_fmt_trace_prerequisites(harness)?
         } else if trace_program == "node" {
             prettier_trace_prerequisites(harness, expected)?
+        } else if trace_program == "dclint" {
+            dclint_trace_prerequisites(harness)?
         } else if matches!(trace_program, "cargo" | "cargo-clippy") {
             cargo_clippy_trace_prerequisites(harness)?
         } else {
@@ -8152,18 +8823,56 @@ fn verify_tool_trace_invocations(
         } else {
             recorded_cwd.clone()
         };
+        let evidence_arguments = if trace_program == "node" && harness.contextlint {
+            expected.arguments.clone()
+        } else {
+            recorded_arguments
+        };
         records.push(serde_json::json!({
             "logicalProgram": trace_program,
             "shimProgram": program,
             "realProgram": real_program,
             "cwd": evidence_cwd,
-            "argv": expected.arguments,
+            "argv": evidence_arguments,
             "candidateFiles": expected.targets,
             "environment": environment,
             "prerequisites": prerequisites,
             "execution": "pass-through",
             "exitCode": expected.exit_code,
         }));
+    }
+    for (index, expected) in expected_invocations.iter().enumerate() {
+        if expected.program != "dclint"
+            || !expected
+                .arguments
+                .iter()
+                .any(|argument| argument == "--fix")
+        {
+            continue;
+        }
+        let Some(previous) = index.checked_sub(1) else {
+            return Err("dclint write child has no preflight trace".to_owned());
+        };
+        let Some(next) = index
+            .checked_add(1)
+            .filter(|next| *next < expected_invocations.len())
+        else {
+            return Err("dclint write child has no authoritative verification trace".to_owned());
+        };
+        let expected_config = dclint_private_configs
+            .get(index)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| "dclint write child has no observed private config".to_owned())?;
+        if dclint_private_configs
+            .get(previous)
+            .and_then(Option::as_ref)
+            != Some(expected_config)
+            || dclint_private_configs.get(next).and_then(Option::as_ref) != Some(expected_config)
+        {
+            return Err(format!(
+                "dclint preflight, write child, and authoritative verification did not share one private config around trace {index}"
+            ));
+        }
     }
     write_json(
         evidence_path,
@@ -8725,6 +9434,152 @@ fn verify_gofmt_trace_environment(
         ));
     }
     Ok(environment)
+}
+
+fn verify_dclint_private_config_argument(
+    record: &Path,
+    argument: &str,
+    project: &Path,
+) -> Result<PathBuf, String> {
+    let value = argument.strip_prefix("--config=").ok_or_else(|| {
+        format!("dclint trace expected a private --config argument, got {argument:?}")
+    })?;
+    let path = PathBuf::from(value);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        || path.starts_with(project)
+        || path.file_name() != Some(OsStr::new("config.json"))
+    {
+        return Err(format!(
+            "dclint trace private config is not a normalized out-of-project config.json: {path:?}"
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("dclint trace config has no parent: {path:?}"))?;
+    if !parent
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with("velvet-glove-dclint-"))
+    {
+        return Err(format!(
+            "dclint trace config is not in its dedicated private directory: {path:?}"
+        ));
+    }
+    let temporary = PathBuf::from(read_record(record, &format!("env-{TMPDIR_ENV}"))?);
+    if parent.parent() != Some(temporary.as_path()) {
+        return Err(format!(
+            "dclint trace config directory is not a direct child of controlled TMPDIR {temporary:?}: {parent:?}"
+        ));
+    }
+    assert_record(record, "dclint-config-path", value)?;
+    assert_record(record, "dclint-config-kind", "file")?;
+    assert_record(record, "dclint-config-mode", "600")?;
+    assert_record(record, "dclint-config-links", "1")?;
+    assert_record(record, "dclint-config-bytes", "3")?;
+    assert_record(record, "dclint-config-sha256", DCLINT_PRIVATE_CONFIG_SHA256)?;
+    assert_record(
+        record,
+        "dclint-config-parent",
+        parent.to_string_lossy().as_ref(),
+    )?;
+    assert_record(record, "dclint-config-parent-kind", "directory")?;
+    assert_record(record, "dclint-config-parent-mode", "700")?;
+    Ok(path)
+}
+
+fn verify_dclint_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    let node = if let Some(toolchain) = &harness.dclint_toolchain {
+        toolchain.node.clone()
+    } else {
+        resolve_program("node")
+            .ok_or_else(|| "dclint trace cannot resolve its controlled Node runtime".to_owned())?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize dclint trace Node runtime: {error}"))?
+    };
+    let node_bin = node
+        .parent()
+        .ok_or_else(|| format!("dclint trace Node runtime has no bin directory: {node:?}"))?;
+    let expected_path = std::env::join_paths([node_bin, Path::new("/usr/bin"), Path::new("/bin")])
+        .map_err(|error| format!("construct dclint child PATH: {error}"))?;
+    let temporary = harness
+        .trace_root
+        .parent()
+        .ok_or_else(|| "dclint trace root has no parent".to_owned())?
+        .join("tmp")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize controlled dclint TMPDIR: {error}"))?;
+    for (name, expected) in [
+        (PATH_ENV, expected_path.to_string_lossy().into_owned()),
+        (TMPDIR_ENV, temporary.to_string_lossy().into_owned()),
+        ("TERM", "dumb".to_owned()),
+        (CI_ENV, "1".to_owned()),
+        ("NODE_NO_WARNINGS", "1".to_owned()),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "dclint trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in DCLINT_SCRUBBED_ENV.iter().chain(DCLINT_LOADER_SCRUBBED_ENV) {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "dclint trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    let program = PathBuf::from(read_record(record, "program")?);
+    if !program.is_absolute() {
+        return Err(format!(
+            "dclint adapter must execute an absolute managed tool path, got {program:?}"
+        ));
+    }
+    let observed_program = program
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced dclint program {program:?}: {error}"))?;
+    let expected_program = harness
+        .shim_dir
+        .join("dclint")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize managed dclint trace shim: {error}"))?;
+    if observed_program != expected_program {
+        return Err(format!(
+            "dclint adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
+        ));
+    }
+    Ok(environment)
+}
+
+fn dclint_trace_prerequisites(harness: &ToolTraceHarness) -> Result<JsonValue, String> {
+    let Some(toolchain) = &harness.dclint_toolchain else {
+        return Ok(serde_json::json!({}));
+    };
+    let real_cli = harness
+        .programs
+        .get("dclint")
+        .ok_or_else(|| "dclint trace has no managed CLI binding".to_owned())?;
+    if real_cli != &toolchain.cli {
+        return Err(format!(
+            "dclint trace bound CLI {:?}, expected dedicated CLI {:?}",
+            real_cli, toolchain.cli
+        ));
+    }
+    Ok(serde_json::json!({
+        "root": toolchain.root,
+        "node": toolchain.node,
+        "dclintCli": toolchain.cli,
+    }))
 }
 
 fn verify_cargo_clippy_trace_environment(
@@ -10872,6 +11727,20 @@ fn write_pkl_config(
                 phase_id = contract.phase_id,
             )
         };
+        let workflow_extra_args = if tool == "dclint" {
+            format!(
+                r#"
+    workflows {{
+      ["{phase_id}"] {{
+        check {{ extraArgs = new Listing<String> {{ {extra_args} }} }}
+        remedy {{ extraArgs = new Listing<String> {{ {extra_args} }} }}
+      }}
+    }}"#,
+                phase_id = contract.phase_id,
+            )
+        } else {
+            String::new()
+        };
         let executable_override = if matches!(tool, "prettier" | "contextlint") {
             let executable = if tool == "prettier" {
                 resolve_prettier_fixture_cli()?
@@ -10890,7 +11759,7 @@ fn write_pkl_config(
 {executable_override}
     phases {{
 {phase_overrides}
-    }}
+    }}{workflow_extra_args}
   }}"#,
         )
     } else {
@@ -11082,6 +11951,20 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
         let mut missing = Vec::new();
         if !matches!(ContextlintToolchain::resolve_if_configured(), Ok(Some(_))) {
             missing.push(CONTEXTLINT_ROOT_ENV.to_owned());
+        }
+        if resolve_program("python").is_none() {
+            missing.push("python".to_owned());
+        }
+        return if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(missing)
+        };
+    }
+    if spec.id == "dclint" && std::env::var_os(DCLINT_ROOT_ENV).is_some() {
+        let mut missing = Vec::new();
+        if !matches!(DclintToolchain::resolve_if_configured(), Ok(Some(_))) {
+            missing.push(DCLINT_ROOT_ENV.to_owned());
         }
         if resolve_program("python").is_none() {
             missing.push("python".to_owned());
@@ -12349,6 +13232,998 @@ fn assert_cargo_fmt_private_roots_removed(root: &Path, label: &str) -> Result<()
         Err(format!(
             "Cargo Fmt {label} lifecycle retained private roots: {retained:?}"
         ))
+    }
+}
+
+fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        const MODE_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_MODE";
+        const INVOKED_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_INVOKED";
+        const SELECTED_CLEAN_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_SELECTED_CLEAN";
+        const CHILD_PID_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_CHILD_PID";
+        const DESCENDANT_PID_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_DESCENDANT_PID";
+        const READY_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_READY";
+        const SOURCE_CONFIG_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_SOURCE_CONFIG";
+        const ORPHAN_PID_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_ORPHAN_PID";
+        const ORPHAN_LATE_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_ORPHAN_LATE";
+        const UNSELECTED_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_UNSELECTED";
+        const DIRECTORY_ENV: &str = "VELVET_GLOVE_DCLINT_LIFECYCLE_DIRECTORY";
+        const CUTOFF_READY_ENV: &str = "VELVET_GLOVE_DCLINT_CUTOFF_READY";
+        const CUTOFF_RELEASE_ENV: &str = "VELVET_GLOVE_DCLINT_CUTOFF_RELEASE";
+
+        let phase = spec
+            .phases
+            .get("fix")
+            .ok_or_else(|| "dclint lifecycle probe lacks a fix phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(adapter_mode),
+            ArgvElement::Token(ArgToken::ProjectRoot),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "dclint lifecycle probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I"
+            || command != "-c"
+            || adapter_mode != "fix"
+            || marker != DCLINT_FILES_MARKER
+        {
+            return Err(format!(
+                "dclint lifecycle expected exact isolated fix shape, got {isolated:?} {command:?} mode={adapter_mode:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "dclint lifecycle probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("dclint lifecycle cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize dclint lifecycle Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-dclint-lifecycle");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize dclint lifecycle root: {error}"))?;
+        let result = (|| {
+            let project = root.join("project");
+            let private_tmp = root.join("tmp");
+            let evidence = root.join("evidence");
+            for directory in [&project, &private_tmp, &evidence] {
+                std::fs::create_dir_all(directory).map_err(|error| {
+                    format!("create dclint lifecycle directory {directory:?}: {error}")
+                })?;
+            }
+            let fake_tool = root.join("dclint-fake");
+            let fake_source = format!(
+                "#!{}\n{}",
+                python.display(),
+                include_str!("support/dclint-lifecycle.py")
+            );
+            write_executable_fixture(&fake_tool, &fake_source, "dclint lifecycle fake")?;
+            let invoked = root.join("invoked.jsonl");
+            let dirty = project.join("a-dirty.yml");
+            let selected_clean = project.join("b-selected-clean.yml");
+            let source_config_probe = project.join("source-config-probe.json");
+            let orphan_pid_path = root.join("normal-exit-orphan.pid");
+            let orphan_late_path = root.join("normal-exit-orphan.late");
+            let unselected = project.join("unselected.yml");
+            let retained_directory = project.join("retained-directory");
+            std::fs::write(&dirty, b"dirty\n")
+                .map_err(|error| format!("write dclint lifecycle dirty target: {error}"))?;
+            std::fs::write(&selected_clean, b"clean\n")
+                .map_err(|error| format!("write dclint lifecycle clean target: {error}"))?;
+            std::fs::write(&unselected, b"unselected sentinel\n")
+                .map_err(|error| format!("write dclint lifecycle unselected target: {error}"))?;
+            std::fs::create_dir(&retained_directory)
+                .map_err(|error| format!("create dclint lifecycle retained directory: {error}"))?;
+            let mut retained_permissions = std::fs::metadata(&retained_directory)
+                .map_err(|error| format!("inspect dclint retained directory: {error}"))?
+                .permissions();
+            retained_permissions.set_mode(0o751);
+            std::fs::set_permissions(&retained_directory, retained_permissions)
+                .map_err(|error| format!("chmod dclint retained directory: {error}"))?;
+
+            let run = |label: &str,
+                       lifecycle_mode: &str,
+                       extra_arguments: &[String],
+                       targets: &[&Path]|
+             -> Result<BoundedOutput, String> {
+                std::fs::write(&invoked, b"")
+                    .map_err(|error| format!("clear dclint lifecycle invocation log: {error}"))?;
+                let capture = evidence.join(label);
+                std::fs::create_dir_all(&capture).map_err(|error| {
+                    format!("create dclint lifecycle capture {capture:?}: {error}")
+                })?;
+                let mut process = Command::new(&python);
+                process
+                    .args(["-I", "-c", adapter])
+                    .arg(&fake_tool)
+                    .arg("fix")
+                    .arg(&project)
+                    .args(extra_arguments)
+                    .arg(DCLINT_FILES_MARKER)
+                    .args(targets)
+                    .current_dir(&project)
+                    .env(TMPDIR_ENV, &private_tmp)
+                    .env(MODE_ENV, lifecycle_mode)
+                    .env(INVOKED_ENV, &invoked)
+                    .env(SELECTED_CLEAN_ENV, &selected_clean)
+                    .env(SOURCE_CONFIG_ENV, &source_config_probe)
+                    .env(ORPHAN_PID_ENV, &orphan_pid_path)
+                    .env(ORPHAN_LATE_ENV, &orphan_late_path)
+                    .env(UNSELECTED_ENV, &unselected)
+                    .env(DIRECTORY_ENV, &retained_directory);
+                run_with_timeout(
+                    &mut process,
+                    b"",
+                    timeout.min(Duration::from_secs(8)),
+                    &capture,
+                )
+                .map_err(|error| format!("run dclint lifecycle {label}: {error}"))
+            };
+            let assert_outcome = |label: &str,
+                                  output: &BoundedOutput,
+                                  status: i32,
+                                  diagnostic: &str|
+             -> Result<(), String> {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(status)
+                    || (status == 2 && !stdout.is_empty())
+                    || !stderr.contains(diagnostic)
+                    || stderr.contains("Traceback")
+                {
+                    return Err(format!(
+                        "dclint lifecycle {label} mismatch: status={:?}; stdout={stdout:?}; stderr={stderr:?}",
+                        output.status.code()
+                    ));
+                }
+                Ok(())
+            };
+            let read_invocations = || -> Result<Vec<Vec<String>>, String> {
+                let contents = std::fs::read_to_string(&invoked)
+                    .map_err(|error| format!("read dclint lifecycle invocations: {error}"))?;
+                contents
+                    .lines()
+                    .map(|line| {
+                        serde_json::from_str::<Vec<String>>(line).map_err(|error| {
+                            format!("parse dclint lifecycle invocation {line:?}: {error}")
+                        })
+                    })
+                    .collect()
+            };
+            let fingerprint = |path: &Path| -> Result<(Vec<u8>, u32, SystemTime), String> {
+                let metadata = std::fs::metadata(path).map_err(|error| {
+                    format!("inspect dclint lifecycle target {path:?}: {error}")
+                })?;
+                Ok((
+                    std::fs::read(path).map_err(|error| {
+                        format!("read dclint lifecycle target {path:?}: {error}")
+                    })?,
+                    metadata.permissions().mode(),
+                    metadata.modified().map_err(|error| {
+                        format!("read dclint lifecycle target mtime {path:?}: {error}")
+                    })?,
+                ))
+            };
+
+            for lifecycle_mode in [
+                "unfixable",
+                "invalid-yaml",
+                "invalid-schema",
+                "unknown-error",
+            ] {
+                let output = run(lifecycle_mode, lifecycle_mode, &[], &[&dirty])?;
+                assert_outcome(lifecycle_mode, &output, 1, "")?;
+                let calls = read_invocations()?;
+                if calls.len() != 1 || calls[0].iter().any(|argument| argument == "--fix") {
+                    return Err(format!(
+                        "dclint lifecycle {lifecycle_mode} did not stop after one read-only preflight: {calls:?}"
+                    ));
+                }
+            }
+            for (lifecycle_mode, diagnostic) in [
+                (
+                    "ambiguous-fixability",
+                    "fixability disagrees with pinned dclint 3.1.0 rule semantics",
+                ),
+                ("unknown-rule", "reports unknown rule 'future-fixable-rule'"),
+                ("malformed-json", "is not strict UTF-8 JSON"),
+                ("non-finite-json", "contains a non-finite number"),
+                (
+                    "native-stderr",
+                    "emitted stderr instead of a controlled JSON report",
+                ),
+            ] {
+                let output = run(lifecycle_mode, lifecycle_mode, &[], &[&dirty])?;
+                assert_outcome(lifecycle_mode, &output, 2, diagnostic)?;
+                if read_invocations()?.len() != 1 {
+                    return Err(format!(
+                        "dclint lifecycle {lifecycle_mode} did not fail closed after one child"
+                    ));
+                }
+            }
+
+            std::fs::write(&dirty, b"dirty\n")
+                .map_err(|error| format!("reset dclint lifecycle dirty target: {error}"))?;
+            std::fs::write(&selected_clean, b"clean\n")
+                .map_err(|error| format!("reset dclint lifecycle clean target: {error}"))?;
+            let clean_fingerprint = fingerprint(&selected_clean)?;
+            let output = run("fixable", "fixable", &[], &[&dirty, &selected_clean])?;
+            assert_outcome("fixable", &output, 0, "")?;
+            if !output.stdout.is_empty()
+                || std::fs::read(&dirty).ok().as_deref() != Some(b"fixed\n")
+                || fingerprint(&selected_clean)? != clean_fingerprint
+            {
+                return Err("dclint lifecycle fixable run changed the wrong post-state".to_owned());
+            }
+            let calls = read_invocations()?;
+            if calls.len() != 3
+                || calls[0].iter().any(|argument| argument == "--fix")
+                || !calls[1].iter().any(|argument| argument == "--fix")
+                || !calls[1]
+                    .iter()
+                    .any(|argument| argument == dirty.to_string_lossy().as_ref())
+                || calls[1]
+                    .iter()
+                    .any(|argument| argument == selected_clean.to_string_lossy().as_ref())
+                || calls[2].iter().any(|argument| argument == "--fix")
+            {
+                return Err(format!(
+                    "dclint lifecycle did not narrow its write child and restore full verification: {calls:?}"
+                ));
+            }
+            let fixed_fingerprint = fingerprint(&dirty)?;
+            let output = run(
+                "fixable-idempotent",
+                "fixable",
+                &[],
+                &[&dirty, &selected_clean],
+            )?;
+            assert_outcome("fixable-idempotent", &output, 0, "")?;
+            if read_invocations()?.len() != 1
+                || fingerprint(&dirty)? != fixed_fingerprint
+                || fingerprint(&selected_clean)? != clean_fingerprint
+            {
+                return Err("dclint lifecycle fixed-state repeat was not an exact no-op".to_owned());
+            }
+
+            for (lifecycle_mode, diagnostic) in [
+                ("noop-fix", "native fix was a no-op"),
+                (
+                    "touch-only",
+                    "changed retained workspace topology or metadata outside byte edits",
+                ),
+                ("mutate-clean", "outside the proven fixable subset"),
+                (
+                    "partial-failure",
+                    "emitted stderr instead of a controlled JSON report",
+                ),
+            ] {
+                std::fs::write(&dirty, b"dirty\n").map_err(|error| {
+                    format!("reset dclint {lifecycle_mode} dirty target: {error}")
+                })?;
+                std::fs::write(&selected_clean, b"clean\n").map_err(|error| {
+                    format!("reset dclint {lifecycle_mode} clean target: {error}")
+                })?;
+                let dirty_before = fingerprint(&dirty)?;
+                let clean_before = fingerprint(&selected_clean)?;
+                let targets: &[&Path] = if lifecycle_mode == "mutate-clean" {
+                    &[&dirty, &selected_clean]
+                } else {
+                    &[&dirty]
+                };
+                let output = run(lifecycle_mode, lifecycle_mode, &[], targets)?;
+                assert_outcome(lifecycle_mode, &output, 2, diagnostic)?;
+                if fingerprint(&dirty)? != dirty_before
+                    || fingerprint(&selected_clean)? != clean_before
+                {
+                    return Err(format!(
+                        "dclint lifecycle {lifecycle_mode} did not restore the exact selected-file baseline"
+                    ));
+                }
+            }
+
+            for (lifecycle_mode, diagnostic) in [
+                ("unselected-change", "outside the proven fixable subset"),
+                (
+                    "unselected-create",
+                    "changed retained workspace topology or metadata",
+                ),
+                (
+                    "unselected-delete",
+                    "changed retained workspace topology or metadata",
+                ),
+                (
+                    "directory-add",
+                    "changed retained workspace topology or metadata",
+                ),
+                (
+                    "directory-remove",
+                    "changed retained workspace topology or metadata",
+                ),
+                ("directory-chmod", "retained workspace"),
+            ] {
+                std::fs::write(&dirty, b"dirty\n").map_err(|error| {
+                    format!("reset dclint {lifecycle_mode} selected target: {error}")
+                })?;
+                let dirty_before = fingerprint(&dirty)?;
+                let unselected_before = fingerprint(&unselected)?;
+                let retained_mode_before = std::fs::metadata(&retained_directory)
+                    .map_err(|error| {
+                        format!("inspect dclint {lifecycle_mode} retained directory: {error}")
+                    })?
+                    .permissions()
+                    .mode();
+                let output = run(lifecycle_mode, lifecycle_mode, &[], &[&dirty])?;
+                assert_outcome(lifecycle_mode, &output, 2, diagnostic)?;
+                let retained_mode_after = std::fs::metadata(&retained_directory)
+                    .map_err(|error| {
+                        format!(
+                            "inspect restored dclint {lifecycle_mode} retained directory: {error}"
+                        )
+                    })?
+                    .permissions()
+                    .mode();
+                if fingerprint(&dirty)? != dirty_before
+                    || fingerprint(&unselected)? != unselected_before
+                    || retained_mode_after != retained_mode_before
+                    || unselected.with_extension("yml.created").exists()
+                    || retained_directory.with_extension("created").exists()
+                {
+                    return Err(format!(
+                        "dclint lifecycle {lifecycle_mode} did not restore retained file bytes/mode/mtime and directory topology/mode"
+                    ));
+                }
+            }
+
+            let regular = project.join("regular.yml");
+            let symlink = project.join("symlink.yml");
+            let hardlink = project.join("hardlink.yml");
+            let outside = root.join("outside.yml");
+            std::fs::write(&regular, b"clean\n")
+                .map_err(|error| format!("write dclint lifecycle regular file: {error}"))?;
+            std::fs::write(&outside, b"clean\n")
+                .map_err(|error| format!("write dclint lifecycle outside file: {error}"))?;
+            std::os::unix::fs::symlink(&selected_clean, &symlink)
+                .map_err(|error| format!("create dclint lifecycle symlink: {error}"))?;
+            std::fs::hard_link(&regular, &hardlink)
+                .map_err(|error| format!("create dclint lifecycle hardlink: {error}"))?;
+            for (label, target, diagnostic) in [
+                ("symlink", symlink.as_path(), "traverses a symlink"),
+                ("hardlink", hardlink.as_path(), "not a unique regular file"),
+                ("outside", outside.as_path(), "escapes the project root"),
+            ] {
+                let output = run(label, "clean", &[], &[target])?;
+                assert_outcome(label, &output, 2, diagnostic)?;
+                if !read_invocations()?.is_empty() {
+                    return Err(format!(
+                        "dclint lifecycle {label} rejection invoked the native tool"
+                    ));
+                }
+            }
+            std::fs::remove_file(&symlink)
+                .map_err(|error| format!("remove dclint lifecycle symlink: {error}"))?;
+            std::fs::remove_file(&hardlink)
+                .map_err(|error| format!("remove dclint lifecycle hardlink: {error}"))?;
+
+            let configs = project.join("configs");
+            std::fs::create_dir(&configs)
+                .map_err(|error| format!("create dclint lifecycle configs: {error}"))?;
+            for (label, contents, diagnostic) in [
+                (
+                    "extends",
+                    r#"{"extends":"attacker.json"}"#,
+                    "executable-loading keys",
+                ),
+                (
+                    "plugin",
+                    r#"{"plugin":"attacker"}"#,
+                    "executable-loading keys",
+                ),
+                (
+                    "exclude",
+                    r#"{"exclude":["**/*"]}"#,
+                    "exclude must be empty",
+                ),
+                ("debug", r#"{"debug":true}"#, "debug must be false"),
+                (
+                    "duplicate",
+                    r#"{"rules":{},"rules":{}}"#,
+                    "duplicate JSON key",
+                ),
+            ] {
+                let config = configs.join(format!("{label}.json"));
+                std::fs::write(&config, format!("{contents}\n"))
+                    .map_err(|error| format!("write dclint lifecycle {label} config: {error}"))?;
+                let extra = vec![format!("--config=configs/{label}.json")];
+                let output = run(
+                    &format!("config-{label}"),
+                    "clean",
+                    &extra,
+                    &[&selected_clean],
+                )?;
+                assert_outcome(&format!("config-{label}"), &output, 2, diagnostic)?;
+                if !read_invocations()?.is_empty() {
+                    return Err(format!(
+                        "dclint lifecycle unsafe {label} config reached the native tool"
+                    ));
+                }
+            }
+            let config_regular = configs.join("regular.json");
+            let config_hardlink = configs.join("hardlink.json");
+            let config_symlink = configs.join("symlink.json");
+            std::fs::write(&config_regular, b"{}\n")
+                .map_err(|error| format!("write dclint lifecycle regular config: {error}"))?;
+            std::fs::hard_link(&config_regular, &config_hardlink)
+                .map_err(|error| format!("hardlink dclint lifecycle config: {error}"))?;
+            std::os::unix::fs::symlink(&selected_clean, &config_symlink)
+                .map_err(|error| format!("symlink dclint lifecycle config: {error}"))?;
+            for (label, diagnostic) in [
+                ("hardlink", "not a unique regular file"),
+                ("symlink", "traverses a symlink"),
+            ] {
+                let extra = vec![format!("--config=configs/{label}.json")];
+                let output = run(
+                    &format!("config-path-{label}"),
+                    "clean",
+                    &extra,
+                    &[&selected_clean],
+                )?;
+                assert_outcome(&format!("config-path-{label}"), &output, 2, diagnostic)?;
+                if !read_invocations()?.is_empty() {
+                    return Err(format!(
+                        "dclint lifecycle {label} config path reached the native tool"
+                    ));
+                }
+            }
+            std::fs::remove_file(&config_symlink)
+                .map_err(|error| format!("remove dclint lifecycle config symlink: {error}"))?;
+            std::fs::remove_file(&config_hardlink)
+                .map_err(|error| format!("remove dclint lifecycle config hardlink: {error}"))?;
+
+            std::fs::write(&source_config_probe, b"{}\n")
+                .map_err(|error| format!("write dclint config-swap source: {error}"))?;
+            let config_swap_target_before = fingerprint(&selected_clean)?;
+            let config_swap_extra = vec!["--config=source-config-probe.json".to_owned()];
+            let output = run(
+                "config-swap",
+                "config-swap",
+                &config_swap_extra,
+                &[&selected_clean],
+            )?;
+            assert_outcome("config-swap", &output, 2, "source config changed")?;
+            let calls = read_invocations()?;
+            let source_argument = format!("--config={}", source_config_probe.display());
+            if calls.len() != 1
+                || calls[0].iter().any(|argument| argument == &source_argument)
+                || !calls[0].iter().any(|argument| {
+                    argument.starts_with("--config=") && argument.contains("velvet-glove-dclint-")
+                })
+                || fingerprint(&selected_clean)? != config_swap_target_before
+            {
+                return Err(format!(
+                    "dclint lifecycle config swap influenced the child or selected target: {calls:?}"
+                ));
+            }
+            std::fs::remove_file(&source_config_probe)
+                .map_err(|error| format!("remove dclint config-swap source: {error}"))?;
+
+            let output = run(
+                "private-config-destroy",
+                "private-config-destroy",
+                &[],
+                &[&selected_clean],
+            )?;
+            assert_outcome(
+                "private-config-destroy",
+                &output,
+                2,
+                "controlled private config",
+            )?;
+            let private_destroy_stderr = String::from_utf8_lossy(&output.stderr);
+            if !private_destroy_stderr.contains("cannot remove private dclint config directory")
+                || !private_destroy_stderr.contains("<dclint-private>")
+                || private_destroy_stderr.contains("velvet-glove-dclint-")
+            {
+                return Err(format!(
+                    "dclint lifecycle did not compose and normalize private cleanup failure: {private_destroy_stderr:?}"
+                ));
+            }
+            for entry in sorted_entries(&private_tmp)? {
+                let path = entry.path();
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("velvet-glove-dclint-"))
+                {
+                    std::fs::remove_file(&path).map_err(|error| {
+                        format!("remove dclint destroyed private-config sentinel {path:?}: {error}")
+                    })?;
+                }
+            }
+
+            std::fs::write(&dirty, b"dirty\n")
+                .map_err(|error| format!("reset dclint rollback-failure target: {error}"))?;
+            let rollback_anchor = "def restore_workspace(project_root, before, before_directories):\n    errors = []\n";
+            if adapter.matches(rollback_anchor).count() != 1 {
+                return Err(
+                    "dclint rollback-failure probe requires one exact restore anchor".to_owned(),
+                );
+            }
+            let rollback_adapter = adapter.replacen(
+                rollback_anchor,
+                "def restore_workspace(project_root, before, before_directories):\n    return \"injected deterministic rollback failure\"\n    errors = []\n",
+                1,
+            );
+            std::fs::write(&invoked, b"")
+                .map_err(|error| format!("clear dclint rollback-failure log: {error}"))?;
+            let mut rollback_command = Command::new(&python);
+            rollback_command
+                .args(["-I", "-c", &rollback_adapter])
+                .arg(&fake_tool)
+                .arg("fix")
+                .arg(&project)
+                .arg(DCLINT_FILES_MARKER)
+                .arg(&dirty)
+                .current_dir(&project)
+                .env(TMPDIR_ENV, &private_tmp)
+                .env(MODE_ENV, "partial-failure")
+                .env(INVOKED_ENV, &invoked);
+            let output = run_with_timeout(
+                &mut rollback_command,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &evidence.join("rollback-failure"),
+            )
+            .map_err(|error| format!("run dclint rollback-failure probe: {error}"))?;
+            assert_outcome(
+                "rollback-failure",
+                &output,
+                2,
+                "emitted stderr instead of a controlled JSON report",
+            )?;
+            let rollback_failure_stderr = String::from_utf8_lossy(&output.stderr);
+            if !rollback_failure_stderr
+                .contains("rollback failed: injected deterministic rollback failure")
+                || std::fs::read(&dirty).ok().as_deref() != Some(b"partial\n")
+            {
+                return Err(format!(
+                    "dclint lifecycle did not preserve primary plus rollback failure: {rollback_failure_stderr:?}"
+                ));
+            }
+            std::fs::write(&dirty, b"dirty\n")
+                .map_err(|error| format!("repair dclint rollback-failure target: {error}"))?;
+
+            for (label, control) in [("control-tab", '\t'), ("control-del", '\u{7f}')] {
+                let target = project.join(format!("control-{control}.yml"));
+                std::fs::write(&target, b"clean\n")
+                    .map_err(|error| format!("write dclint control-path target: {error}"))?;
+                let output = run(label, "clean", &[], &[&target])?;
+                assert_outcome(label, &output, 2, "contains a control character")?;
+                if !read_invocations()?.is_empty() {
+                    return Err("dclint control-path rejection invoked the native tool".to_owned());
+                }
+                std::fs::remove_file(&target)
+                    .map_err(|error| format!("remove dclint control-path target: {error}"))?;
+            }
+
+            let output_cap_before = fingerprint(&selected_clean)?;
+            let output = run("output-cap", "output-cap", &[], &[&selected_clean])?;
+            assert_outcome(
+                "output-cap",
+                &output,
+                2,
+                "combined dclint output exceeded 33554432 bytes",
+            )?;
+            if fingerprint(&selected_clean)? != output_cap_before {
+                return Err("dclint output-cap failure changed its selected file".to_owned());
+            }
+
+            let unwritable_tmp = root.join("unwritable-tmp");
+            std::fs::create_dir(&unwritable_tmp)
+                .map_err(|error| format!("create dclint unwritable TMPDIR: {error}"))?;
+            let mut unwritable_permissions = std::fs::metadata(&unwritable_tmp)
+                .map_err(|error| format!("inspect dclint unwritable TMPDIR: {error}"))?
+                .permissions();
+            unwritable_permissions.set_mode(0o500);
+            std::fs::set_permissions(&unwritable_tmp, unwritable_permissions)
+                .map_err(|error| format!("chmod dclint unwritable TMPDIR: {error}"))?;
+            let unwritable_invoked = root.join("unwritable-tmp.invoked");
+            std::fs::write(&unwritable_invoked, b"")
+                .map_err(|error| format!("create dclint unwritable child marker: {error}"))?;
+            let mut unwritable_command = Command::new(&python);
+            unwritable_command
+                .args(["-I", "-c", adapter])
+                .arg(&fake_tool)
+                .arg("verify")
+                .arg(&project)
+                .arg(DCLINT_FILES_MARKER)
+                .arg(&selected_clean)
+                .current_dir(&project)
+                .env(TMPDIR_ENV, &unwritable_tmp)
+                .env(MODE_ENV, "clean")
+                .env(INVOKED_ENV, &unwritable_invoked);
+            let unwritable_result = run_with_timeout(
+                &mut unwritable_command,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &evidence.join("unwritable-tmp"),
+            );
+            let mut writable_permissions = std::fs::metadata(&unwritable_tmp)
+                .map_err(|error| format!("reinspect dclint unwritable TMPDIR: {error}"))?
+                .permissions();
+            writable_permissions.set_mode(0o700);
+            std::fs::set_permissions(&unwritable_tmp, writable_permissions)
+                .map_err(|error| format!("restore dclint unwritable TMPDIR mode: {error}"))?;
+            let unwritable_output = unwritable_result
+                .map_err(|error| format!("run dclint unwritable TMPDIR probe: {error}"))?;
+            let unwritable_stdout = String::from_utf8_lossy(&unwritable_output.stdout);
+            let unwritable_stderr = String::from_utf8_lossy(&unwritable_output.stderr);
+            if unwritable_output.status.code() != Some(2)
+                || !unwritable_stdout.is_empty()
+                || !unwritable_stderr.contains("<dclint-private>")
+                || unwritable_stderr.contains("velvet-glove-dclint-")
+                || !std::fs::read(&unwritable_invoked).is_ok_and(|contents| contents.is_empty())
+            {
+                return Err(format!(
+                    "dclint unwritable TMPDIR was not normalized before child launch: status={:?}; stdout={unwritable_stdout:?}; stderr={unwritable_stderr:?}",
+                    unwritable_output.status.code()
+                ));
+            }
+
+            for (label, lifecycle_mode) in [
+                ("normal-exit-orphan-closed", "normal-exit-orphan-closed"),
+                ("normal-exit-orphan-pipe", "normal-exit-orphan-pipe"),
+            ] {
+                let _ = std::fs::remove_file(&orphan_pid_path);
+                let _ = std::fs::remove_file(&orphan_late_path);
+                let target_before = fingerprint(&selected_clean)?;
+                let output = run(label, lifecycle_mode, &[], &[&selected_clean])?;
+                assert_outcome(
+                    label,
+                    &output,
+                    2,
+                    "native dclint left same-group descendants after child exit",
+                )?;
+                let orphan_pid = read_pid_file(&orphan_pid_path, label)?;
+                let orphan_alive = process_survives(orphan_pid, Duration::from_secs(1))?;
+                std::thread::sleep(Duration::from_millis(850));
+                if orphan_alive
+                    || orphan_late_path.exists()
+                    || fingerprint(&selected_clean)? != target_before
+                {
+                    let _ = signal_process(orphan_pid, "KILL");
+                    return Err(format!(
+                        "dclint lifecycle {label} leaked a same-group descendant or late mutation: pid={orphan_pid}; alive={orphan_alive}; late={} ",
+                        orphan_late_path.exists()
+                    ));
+                }
+            }
+
+            let guarded_anchor =
+                "previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)\n";
+            if adapter.matches(guarded_anchor).count() != 1 {
+                return Err(
+                    "dclint guarded-spawn probe requires one exact SIG_BLOCK anchor".to_owned(),
+                );
+            }
+            let guarded_offset = adapter
+                .find(guarded_anchor)
+                .expect("checked dclint guarded-spawn anchor");
+            let guarded_line = adapter[..guarded_offset]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            let guarded_indent = &adapter[guarded_line..guarded_offset];
+            if !guarded_indent.chars().all(|character| character == ' ') {
+                return Err(format!(
+                    "dclint guarded-spawn anchor has unexpected indentation {guarded_indent:?}"
+                ));
+            }
+            let guarded_ready = root.join("guarded-spawn.ready");
+            let guarded_release = root.join("guarded-spawn.release");
+            let guarded_hook = format!(
+                "{guarded_anchor}{guarded_indent}ready_descriptor = os.open(os.environ[{CUTOFF_READY_ENV:?}], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n{guarded_indent}os.close(ready_descriptor)\n{guarded_indent}release_descriptor = os.open(os.environ[{CUTOFF_RELEASE_ENV:?}], os.O_RDONLY)\n{guarded_indent}os.close(release_descriptor)\n"
+            );
+            let guarded_adapter = adapter.replacen(guarded_anchor, &guarded_hook, 1);
+            let mkfifo = Command::new("/usr/bin/mkfifo")
+                .arg(&guarded_release)
+                .status()
+                .map_err(|error| format!("create dclint guarded-spawn FIFO: {error}"))?;
+            if !mkfifo.success() {
+                return Err(format!(
+                    "create dclint guarded-spawn FIFO exited {mkfifo:?}"
+                ));
+            }
+            std::fs::write(&invoked, b"")
+                .map_err(|error| format!("clear dclint guarded-spawn marker: {error}"))?;
+            let guarded_before = fingerprint(&selected_clean)?;
+            let mut guarded_command = Command::new(&python);
+            guarded_command
+                .args(["-I", "-c", &guarded_adapter])
+                .arg(&fake_tool)
+                .arg("verify")
+                .arg(&project)
+                .arg(DCLINT_FILES_MARKER)
+                .arg(&selected_clean)
+                .current_dir(&project)
+                .env(TMPDIR_ENV, &private_tmp)
+                .env(MODE_ENV, "clean")
+                .env(INVOKED_ENV, &invoked)
+                .env(CUTOFF_READY_ENV, &guarded_ready)
+                .env(CUTOFF_RELEASE_ENV, &guarded_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut guarded_outer = guarded_command
+                .spawn()
+                .map_err(|error| format!("spawn dclint guarded-spawn adapter: {error}"))?;
+            let guarded_pid = guarded_outer.id();
+            let guarded_deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+            while !guarded_ready.is_file() {
+                if let Some(status) = guarded_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll dclint guarded-spawn adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "dclint guarded-spawn adapter exited {status:?} before its hook"
+                    ));
+                }
+                if std::time::Instant::now() >= guarded_deadline {
+                    let _ = signal_process(guarded_pid, "KILL");
+                    let _ = guarded_outer.wait();
+                    return Err("dclint guarded-spawn adapter did not reach its hook".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !signal_process(guarded_pid, "TERM")?.success() {
+                let _ = signal_process(guarded_pid, "KILL");
+                let _ = guarded_outer.wait();
+                return Err("send guarded-spawn SIGTERM to dclint adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&guarded_release)
+                .map_err(|error| format!("release dclint guarded-spawn hook: {error}"))?;
+            let guarded_output = guarded_outer
+                .wait_with_output()
+                .map_err(|error| format!("collect dclint guarded-spawn output: {error}"))?;
+            if guarded_output.status.code() != Some(2)
+                || !guarded_output.stdout.is_empty()
+                || guarded_output.stderr != b"velvet-glove-dclint: received signal 15\n"
+                || !read_invocations()?.is_empty()
+                || fingerprint(&selected_clean)? != guarded_before
+            {
+                return Err(format!(
+                    "dclint guarded-spawn signal launched a child or changed state: status={:?}; stdout={:?}; stderr={:?}",
+                    guarded_output.status.code(),
+                    String::from_utf8_lossy(&guarded_output.stdout),
+                    String::from_utf8_lossy(&guarded_output.stderr)
+                ));
+            }
+
+            let cutoff_anchor =
+                "blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)\n";
+            if adapter.matches(cutoff_anchor).count() != 1 {
+                return Err(
+                    "dclint cleanup-cutoff probe requires one exact SIG_BLOCK anchor".to_owned(),
+                );
+            }
+            let cutoff_offset = adapter
+                .find(cutoff_anchor)
+                .expect("checked dclint cleanup-cutoff anchor");
+            let cutoff_line = adapter[..cutoff_offset]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            let cutoff_indent = &adapter[cutoff_line..cutoff_offset];
+            if !cutoff_indent.chars().all(|character| character == ' ') {
+                return Err(format!(
+                    "dclint cleanup-cutoff anchor has unexpected indentation {cutoff_indent:?}"
+                ));
+            }
+            let cutoff_ready = root.join("cleanup-cutoff.ready");
+            let cutoff_release = root.join("cleanup-cutoff.release");
+            let cutoff_hook = format!(
+                "{cutoff_anchor}{cutoff_indent}ready_descriptor = os.open(os.environ[{CUTOFF_READY_ENV:?}], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n{cutoff_indent}os.close(ready_descriptor)\n{cutoff_indent}release_descriptor = os.open(os.environ[{CUTOFF_RELEASE_ENV:?}], os.O_RDONLY)\n{cutoff_indent}os.close(release_descriptor)\n"
+            );
+            let cutoff_adapter = adapter.replacen(cutoff_anchor, &cutoff_hook, 1);
+            let mkfifo = Command::new("/usr/bin/mkfifo")
+                .arg(&cutoff_release)
+                .status()
+                .map_err(|error| format!("create dclint cleanup-cutoff FIFO: {error}"))?;
+            if !mkfifo.success() {
+                return Err(format!(
+                    "create dclint cleanup-cutoff FIFO exited {mkfifo:?}"
+                ));
+            }
+            std::fs::write(&dirty, b"dirty\n")
+                .map_err(|error| format!("reset dclint cleanup-cutoff target: {error}"))?;
+            std::fs::write(&invoked, b"")
+                .map_err(|error| format!("clear dclint cleanup-cutoff marker: {error}"))?;
+            let cutoff_before = fingerprint(&dirty)?;
+            let mut cutoff_command = Command::new(&python);
+            cutoff_command
+                .args(["-I", "-c", &cutoff_adapter])
+                .arg(&fake_tool)
+                .arg("fix")
+                .arg(&project)
+                .arg(DCLINT_FILES_MARKER)
+                .arg(&dirty)
+                .current_dir(&project)
+                .env(TMPDIR_ENV, &private_tmp)
+                .env(MODE_ENV, "fixable")
+                .env(INVOKED_ENV, &invoked)
+                .env(CUTOFF_READY_ENV, &cutoff_ready)
+                .env(CUTOFF_RELEASE_ENV, &cutoff_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut cutoff_outer = cutoff_command
+                .spawn()
+                .map_err(|error| format!("spawn dclint cleanup-cutoff adapter: {error}"))?;
+            let cutoff_pid = cutoff_outer.id();
+            let cutoff_deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(8));
+            while !cutoff_ready.is_file() {
+                if let Some(status) = cutoff_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll dclint cleanup-cutoff adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "dclint cleanup-cutoff adapter exited {status:?} before its hook"
+                    ));
+                }
+                if std::time::Instant::now() >= cutoff_deadline {
+                    let _ = signal_process(cutoff_pid, "KILL");
+                    let _ = cutoff_outer.wait();
+                    return Err("dclint cleanup-cutoff adapter did not reach its hook".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if std::fs::read(&dirty).ok().as_deref() != Some(b"fixed\n") {
+                let _ = signal_process(cutoff_pid, "KILL");
+                let _ = cutoff_outer.wait();
+                return Err("dclint cleanup-cutoff hook ran before the real mutation".to_owned());
+            }
+            if !signal_process(cutoff_pid, "TERM")?.success() {
+                let _ = signal_process(cutoff_pid, "KILL");
+                let _ = cutoff_outer.wait();
+                return Err("send cleanup-cutoff SIGTERM to dclint adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&cutoff_release)
+                .map_err(|error| format!("release dclint cleanup-cutoff hook: {error}"))?;
+            let cutoff_output = cutoff_outer
+                .wait_with_output()
+                .map_err(|error| format!("collect dclint cleanup-cutoff output: {error}"))?;
+            if cutoff_output.status.code() != Some(2)
+                || !cutoff_output.stdout.is_empty()
+                || cutoff_output.stderr != b"velvet-glove-dclint: received signal 15\n"
+                || fingerprint(&dirty)? != cutoff_before
+            {
+                return Err(format!(
+                    "dclint cleanup-cutoff signal did not cause exact rollback: status={:?}; stdout={:?}; stderr={:?}",
+                    cutoff_output.status.code(),
+                    String::from_utf8_lossy(&cutoff_output.stdout),
+                    String::from_utf8_lossy(&cutoff_output.stderr)
+                ));
+            }
+
+            let child_pid_path = root.join("cancel-child.pid");
+            let descendant_pid_path = root.join("cancel-descendant.pid");
+            let ready_path = root.join("cancel-ready");
+            std::fs::write(&invoked, b"")
+                .map_err(|error| format!("clear dclint cancel invocation log: {error}"))?;
+            let mut cancellation = Command::new(&python);
+            cancellation
+                .args(["-I", "-c", adapter])
+                .arg(&fake_tool)
+                .arg("verify")
+                .arg(&project)
+                .arg(DCLINT_FILES_MARKER)
+                .arg(&selected_clean)
+                .current_dir(&project)
+                .env(TMPDIR_ENV, &private_tmp)
+                .env(MODE_ENV, "cancel")
+                .env(INVOKED_ENV, &invoked)
+                .env(CHILD_PID_ENV, &child_pid_path)
+                .env(DESCENDANT_PID_ENV, &descendant_pid_path)
+                .env(READY_ENV, &ready_path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut outer = cancellation
+                .spawn()
+                .map_err(|error| format!("spawn dclint cancellation lifecycle: {error}"))?;
+            let outer_pid = outer.id();
+            let startup_timeout = timeout.min(Duration::from_secs(5));
+            let startup_deadline = std::time::Instant::now() + startup_timeout;
+            while !ready_path.is_file() {
+                if let Some(status) = outer
+                    .try_wait()
+                    .map_err(|error| format!("poll dclint cancellation lifecycle: {error}"))?
+                {
+                    return Err(format!(
+                        "dclint cancellation adapter exited {status:?} before its child was ready"
+                    ));
+                }
+                if std::time::Instant::now() >= startup_deadline {
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "dclint cancellation child was not ready within {startup_timeout:?}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let child_pid = read_pid_file(&child_pid_path, "dclint cancellation child")?;
+            let descendant_pid =
+                read_pid_file(&descendant_pid_path, "dclint cancellation descendant")?;
+            if !signal_process(outer_pid, "TERM")?.success() {
+                let _ = signal_process_group(child_pid, "KILL");
+                let _ = signal_process(outer_pid, "KILL");
+                let _ = outer.wait();
+                return Err("send SIGTERM to dclint cancellation adapter".to_owned());
+            }
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = sender.send(outer.wait_with_output());
+            });
+            let completion_timeout = timeout.min(Duration::from_secs(5));
+            let cancelled = receiver.recv_timeout(completion_timeout).map_err(|error| {
+                let _ = signal_process_group(child_pid, "KILL");
+                format!(
+                    "dclint cancellation adapter retained output pipes for {completion_timeout:?}: {error}"
+                )
+            })?;
+            let cancelled = cancelled
+                .map_err(|error| format!("wait for dclint cancellation adapter: {error}"))?;
+            let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+            let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+            let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+            if child_alive || descendant_alive || group_alive {
+                let _ = signal_process_group(child_pid, "KILL");
+                return Err(format!(
+                    "dclint cancellation left child={child_alive}, descendant={descendant_alive}, group={group_alive} alive"
+                ));
+            }
+            if cancelled.status.code() != Some(2)
+                || !cancelled.stdout.is_empty()
+                || cancelled.stderr != b"velvet-glove-dclint: received signal 15\n"
+            {
+                return Err(format!(
+                    "dclint cancellation output was unstable: status={:?}; stdout={:?}; stderr={:?}",
+                    cancelled.status.code(),
+                    String::from_utf8_lossy(&cancelled.stdout),
+                    String::from_utf8_lossy(&cancelled.stderr)
+                ));
+            }
+
+            let leftovers = sorted_entries(&private_tmp)?
+                .into_iter()
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>();
+            if !leftovers.is_empty() {
+                return Err(format!(
+                    "dclint lifecycle left private configuration artifacts: {leftovers:?}"
+                ));
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
     }
 }
 
@@ -16397,7 +18272,12 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
 
 fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[String]) -> String {
     let mut output = normalize(text, project_aliases);
-    if case.tool == "go-fmt" {
+    let inline_marker = match case.tool.as_str() {
+        "go-fmt" => Some(GOFMT_FILES_MARKER),
+        "dclint" => Some(DCLINT_FILES_MARKER),
+        _ => None,
+    };
+    if let Some(inline_marker) = inline_marker {
         let adapter_scripts = case
             .spec
             .phases
@@ -16405,7 +18285,7 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
             .flat_map(|phase| phase.argv.iter())
             .filter_map(|argument| match argument {
                 ArgvElement::Literal(script)
-                    if script.contains(GOFMT_FILES_MARKER) && script.contains('\n') =>
+                    if script.contains(inline_marker) && script.contains('\n') =>
                 {
                     Some(script)
                 }
