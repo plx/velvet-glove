@@ -116,7 +116,7 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run the seventeen pinned representative contracts across thirteen controlled
+Run the nineteen pinned representative contracts across fifteen controlled
 environments with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -150,8 +150,8 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, Prettier,
-Contextlint, dclint, Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract
+alongside it. Successful jq, Vacuum, Asciidoctor, Astro, Betterleaks, Biome, Prettier,
+Contextlint, dclint, ESLint, Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract
 cases are retained too.
 Their evidence includes
 exact pass-through program/argv/cwd/environment traces (including
@@ -247,6 +247,29 @@ extension `version:` hidden by `disable-line` survives an unrelated fix. Fixed
 skipped subtrees, concurrent replacement races, an unsuccessful rollback, and
 descendants that deliberately escape the owned session/process group remain
 outside the claim.
+
+ESLint traces bind the dedicated Node 24.19.0 executable and exact ESLint
+10.8.1 JavaScript CLI from one integrity-locked npm root. Every native child
+uses a private mode-0600 built-in-rule CJS config and suppressions document, a
+distinct private content-cache path, fixed no-discovery controls, and a
+minimal environment with ambient Node, npm, ESLint, loader, home, and cache
+channels cleared. The five cases distinguish clean completion, a persistent
+source diagnostic, configuration rejected before native spawn, exact autofix,
+and a two-file mixed batch with an untouched unselected sentinel. Immediate
+and compatibility-deferred mutations start from independent pristine
+baselines and prove read-only preflight, exact `--fix-dry-run` prediction,
+changed-file bytes, authoritative final verification, and idempotence.
+
+The evaluated adversarial lifecycle additionally proves strict data-only
+configuration, link and alias rejection, bounded UTF-8 inputs/output, private
+root modes and cleanup, unique cache state per native child, fully normalized
+evidence paths, guarded spawn, active and cleanup-window signals, and
+same-group descendant sweeping. Project config, plugins, parsers, processors,
+ignores, inline directives, and suppressions never become authority. JSX and
+TypeScript are deliberately outside the supported file set. Concurrent
+selected-file or executable replacement, late partial native writes, and a
+descendant that deliberately escapes the owned session/process group remain
+outside the claim; the adapter does not attempt an unsafe rollback.
 
 gofmt traces bind the pinned executable behind an isolated Python adapter and
 record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain

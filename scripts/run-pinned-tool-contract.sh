@@ -74,6 +74,7 @@ prettier_extract_dir=
 contextlint_extract_dir=
 dclint_extract_dir=
 vacuum_extract_dir=
+eslint_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
 cleanup() {
@@ -97,6 +98,9 @@ cleanup() {
   esac
   case $vacuum_extract_dir in
     "$state_dir"/vacuum-extract.*) rm -rf -- "$vacuum_extract_dir" ;;
+  esac
+  case $eslint_extract_dir in
+    "$state_dir"/eslint-extract.*) rm -rf -- "$eslint_extract_dir" ;;
   esac
   case $ruby_extract_dir in
     "$state_dir"/ruby-extract.*) rm -rf -- "$ruby_extract_dir" ;;
@@ -971,6 +975,128 @@ if [[ $vacuum_selected == true ]]; then
   if [[ $vacuum_probe_status -ne 0 || $vacuum_observed_version != \
     "$("$jq_bin" -r '.probe.expected' "$vacuum_provenance")" ]]; then
     echo "error: controlled Vacuum binary failed its exact version probe" >&2
+    exit 1
+  fi
+fi
+
+eslint_root="$state_dir/eslint-environment-node-24.19.0-eslint-10.8.1"
+if needs_group eslint; then
+  eslint_node_archive=$(fetch_component_archive eslint-node)
+  eslint_node_identity=$(component_integrity_json eslint-node)
+  eslint_npm_identity=$(component_integrity_json eslint-npm)
+  eslint_package_json="$provisioning_dir/eslint/package.json"
+  eslint_package_lock="$provisioning_dir/eslint/package-lock.json"
+  eslint_npm_global_config="$run_home/npm-globalconfig"
+  eslint_integrity='sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ=='
+  eslint_shasum='fb37d514c19b6dd5b2d6b70169fd26fddfa97967'
+  eslint_git_head='c049dc3c4294da7afe3d920a1a5fdeba388f4983'
+  : >"$eslint_npm_global_config"
+  read -r eslint_package_sha256 _ < <(/usr/bin/shasum -a 256 "$eslint_package_json")
+  read -r eslint_lock_sha256 _ < <(/usr/bin/shasum -a 256 "$eslint_package_lock")
+  if ! "$jq_bin" -e --arg integrity "$eslint_integrity" '
+      .lockfileVersion == 3
+      and .packages[""].engines.node == "24.19.0"
+      and .packages[""].engines.npm == "11.17.0"
+      and .packages[""].dependencies == {eslint: "10.8.1"}
+      and .packages["node_modules/eslint"].version == "10.8.1"
+      and .packages["node_modules/eslint"].resolved == "https://registry.npmjs.org/eslint/-/eslint-10.8.1.tgz"
+      and .packages["node_modules/eslint"].integrity == $integrity
+    ' "$eslint_package_lock" >/dev/null; then
+    echo "error: committed ESLint npm lock does not bind the exact 10.8.1 registry graph" >&2
+    exit 1
+  fi
+  eslint_identity=$("$jq_bin" -cn \
+    --argjson node "$eslint_node_identity" \
+    --argjson npm "$eslint_npm_identity" \
+    --arg packageSha256 "$eslint_package_sha256" \
+    --arg packageLockSha256 "$eslint_lock_sha256" \
+    --arg integrity "$eslint_integrity" \
+    --arg shasum "$eslint_shasum" \
+    --arg gitHead "$eslint_git_head" \
+    '{node: $node, npm: $npm, eslint: {version: "10.8.1", published: "2026-08-07", integrity: $integrity, shasum: $shasum, gitHead: $gitHead, packageSha256: $packageSha256, packageLockSha256: $packageLockSha256}}')
+  if [[ -e $eslint_root && ( ! -d $eslint_root || -L $eslint_root ) ]]; then
+    echo "error: controlled ESLint environment root is not a real directory: $eslint_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $eslint_root ]]; then
+    echo "==> Installing the checksum-verified Node 24.19.0 and npm integrity-locked ESLint 10.8.1 closure"
+    eslint_extract_dir=$(mktemp -d "$state_dir/eslint-extract.XXXXXX")
+    eslint_install_root="$eslint_extract_dir/install"
+    mkdir -p "$eslint_install_root/package"
+    /usr/bin/tar -xf "$eslint_node_archive" -C "$eslint_extract_dir"
+    eslint_archive_root=$(printf '%s\n' "$eslint_node_identity" | \
+      "$jq_bin" -r '.integrity.archiveRoot')
+    mv "$eslint_extract_dir/$eslint_archive_root" "$eslint_install_root/node"
+    cp "$eslint_package_json" "$eslint_install_root/package/package.json"
+    cp "$eslint_package_lock" "$eslint_install_root/package/package-lock.json"
+    env -i "${provisioning_env[@]}" \
+      "NPM_CONFIG_USERCONFIG=/dev/null" \
+      "NPM_CONFIG_GLOBALCONFIG=$eslint_npm_global_config" \
+      "NPM_CONFIG_CACHE=$state_dir/npm-cache/eslint-10.8.1" \
+      "$eslint_install_root/node/bin/node" \
+      "$eslint_install_root/node/lib/node_modules/npm/bin/npm-cli.js" \
+      ci --ignore-scripts --no-audit --no-fund --prefix "$eslint_install_root/package"
+    read -r observed_eslint_package_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$eslint_install_root/package/package.json"
+    )
+    read -r observed_eslint_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$eslint_install_root/package/package-lock.json"
+    )
+    if [[ $observed_eslint_package_sha256 != "$eslint_package_sha256" || \
+      $observed_eslint_lock_sha256 != "$eslint_lock_sha256" ]]; then
+      echo "error: npm ci changed the exact ESLint package manifest or lock" >&2
+      exit 1
+    fi
+    printf '%s\n' "$eslint_identity" >"$eslint_install_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$eslint_install_root/node" eslint-node
+    mv "$eslint_install_root" "$eslint_root"
+    rm -rf -- "$eslint_extract_dir"
+    eslint_extract_dir=
+  fi
+  eslint_node="$eslint_root/node/bin/node"
+  eslint_npm_cli="$eslint_root/node/lib/node_modules/npm/bin/npm-cli.js"
+  eslint_cli="$eslint_root/package/node_modules/eslint/bin/eslint.js"
+  eslint_bin_link="$eslint_root/package/node_modules/.bin/eslint"
+  if [[ ! -x $eslint_node || ! -f $eslint_npm_cli || ! -f $eslint_cli || \
+    ! -x $eslint_bin_link || ! -L $eslint_bin_link ]]; then
+    echo "error: controlled ESLint environment is incomplete: $eslint_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $eslint_root/.velvet-glove-artifacts.json ]] || \
+    [[ $(<"$eslint_root/.velvet-glove-artifacts.json") != "$eslint_identity" ]]; then
+    echo "error: controlled ESLint environment does not match the declared Node archive and npm lock: $eslint_root" >&2
+    exit 1
+  fi
+  read -r observed_eslint_package_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$eslint_root/package/package.json"
+  )
+  read -r observed_eslint_lock_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$eslint_root/package/package-lock.json"
+  )
+  if [[ $observed_eslint_package_sha256 != "$eslint_package_sha256" || \
+    $observed_eslint_lock_sha256 != "$eslint_lock_sha256" ]]; then
+    echo "error: controlled ESLint environment manifest or lock digest drifted" >&2
+    exit 1
+  fi
+  if [[ $(readlink "$eslint_bin_link") != "../eslint/bin/eslint.js" ]]; then
+    echo "error: controlled ESLint npm bin link escapes the declared package" >&2
+    exit 1
+  fi
+  if [[ $("$jq_bin" -r '.version' "$eslint_root/package/node_modules/eslint/package.json") != "10.8.1" ]]; then
+    echo "error: controlled ESLint package manifest failed its exact version check" >&2
+    exit 1
+  fi
+  verify_macho_closure "$eslint_root/node" eslint-node
+  if [[ $(env -i "${provisioning_env[@]}" "$eslint_node" --version) != "v24.19.0" ]]; then
+    echo "error: controlled ESLint Node runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$eslint_node" "$eslint_npm_cli" --version) != "11.17.0" ]]; then
+    echo "error: controlled ESLint npm runtime failed its exact version probe" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" "$eslint_node" "$eslint_cli" --version) != "v10.8.1" ]]; then
+    echo "error: controlled ESLint CLI failed its exact version probe" >&2
     exit 1
   fi
 fi

@@ -152,14 +152,15 @@ just tool-case biome multi-file
 just tool-case prettier multi-file
 just tool-case contextlint multi-file-project
 just tool-case dclint autofix-multi-file
+just tool-case eslint multi-file
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Seventeen behavior-rich contracts across thirteen environments: jq and Buf
-# data formats, shared Node, dedicated Prettier, Contextlint, and dclint, Python,
-# Go, Rust, Cargo Clippy/Fmt, Ruby, security, and native macOS.
+# Nineteen behavior-rich contracts across fifteen environments: jq, Buf, and
+# Vacuum data formats, shared Node, dedicated Prettier, Contextlint, dclint, and
+# ESLint, Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -257,6 +258,21 @@ canonical temporary-root handling, rollback and lifecycle evidence, and the
 remaining skipped-subtree, replacement-race, rollback, and escaped-process
 limitations are in the [dclint
 contract](docs/pinned-tool-environments.md#dclint-validation-contract).
+
+The dedicated ESLint lane pins ESLint 10.8.1 and its complete npm lock graph,
+then executes the JavaScript CLI only through checksum-pinned Node 24.19.0 with
+bundled npm 11.17.0. The isolated adapter disables all project config, plugin,
+parser, processor, ignore, inline-config, and suppression discovery; an
+optional `.velvet-glove-eslint.json` can change only the severity of seven
+reviewed built-in rules and is translated into private mode-0600 state. Fixes
+are admitted only after a complete read-only check and `--fix-dry-run`; every
+written byte must match the prediction before a final authoritative batch
+check. The five-case matrix proves clean, persistent source, pre-spawn config
+failure, exact autofix, and mixed multi-file behavior on both immediate and
+compatibility-deferred surfaces. Exact release and npm provenance, private
+config/cache/suppression handling, signal and descendant cleanup, and the
+remaining replacement-race and late-partial-write limitations are in the
+[ESLint contract](docs/pinned-tool-environments.md#eslint-validation-contract).
 
 The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
 stdout as the formatting signal while preserving native status-two failure

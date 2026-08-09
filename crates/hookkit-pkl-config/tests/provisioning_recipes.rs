@@ -573,6 +573,80 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         ]
     );
     assert_eq!(dclint_bootstrap.environment, prettier_bootstrap.environment);
+    let eslint_environment = environments
+        .get("macos-arm64-eslint")
+        .expect("dedicated ESLint environment");
+    assert_eq!(eslint_environment.provisioning_group, "eslint");
+    assert_eq!(
+        eslint_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["eslint-node", "eslint-npm"])
+    );
+    assert_eq!(
+        eslint_environment
+            .auxiliary_programs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["eslint-node", "eslint-npm"])
+    );
+    let eslint_bootstrap = eslint_environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "eslint-npm-ci")
+        .expect("dedicated ESLint npm bootstrap");
+    assert_eq!(eslint_bootstrap.network, "required");
+    assert_eq!(
+        eslint_bootstrap.lockfile.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/eslint/package-lock.json")
+    );
+    assert_eq!(
+        eslint_bootstrap.argv,
+        [
+            "{state}/eslint-environment-node-24.19.0-eslint-10.8.1/node/bin/node",
+            "{state}/eslint-environment-node-24.19.0-eslint-10.8.1/node/lib/node_modules/npm/bin/npm-cli.js",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--prefix",
+            "{state}/eslint-environment-node-24.19.0-eslint-10.8.1/package",
+        ]
+    );
+    assert_eq!(eslint_bootstrap.environment, prettier_bootstrap.environment);
+    let eslint_package: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            root.join("crates/hookkit-pkl-config/validation/provisioning/eslint/package.json"),
+        )
+        .expect("ESLint package manifest"),
+    )
+    .expect("ESLint package manifest JSON");
+    assert_eq!(eslint_package["engines"]["node"], "24.19.0");
+    assert_eq!(eslint_package["engines"]["npm"], "11.17.0");
+    assert_eq!(eslint_package["dependencies"]["eslint"], "10.8.1");
+    let eslint_lock: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            root.join("crates/hookkit-pkl-config/validation/provisioning/eslint/package-lock.json"),
+        )
+        .expect("ESLint package lock"),
+    )
+    .expect("ESLint package lock JSON");
+    assert_eq!(eslint_lock["lockfileVersion"], 3);
+    assert_eq!(
+        eslint_lock["packages"]["node_modules/eslint"]["version"],
+        "10.8.1"
+    );
+    assert_eq!(
+        eslint_lock["packages"]["node_modules/eslint"]["resolved"],
+        "https://registry.npmjs.org/eslint/-/eslint-10.8.1.tgz"
+    );
+    assert_eq!(
+        eslint_lock["packages"]["node_modules/eslint"]["integrity"],
+        "sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ=="
+    );
     let mise_lock = std::fs::read_to_string(root.join(&registry.mise.lock)).expect("mise lock");
     for component in registry.shared_components.iter().chain(
         registry
@@ -589,6 +663,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "contextlint",
             "data-formats",
             "dclint",
+            "eslint",
             "go",
             "node",
             "prettier",
@@ -777,6 +852,36 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             assert_eq!(package["engines"]["node"], "24.19.0");
             assert_eq!(package["dependencies"]["dclint"], "3.1.0");
         }
+        if recipe.tool_id == "eslint" {
+            validate_npm_lock_package(
+                &root,
+                &recipe.integrity,
+                "eslint",
+                &recipe.version,
+                "sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ==",
+            );
+            let package: serde_json::Value =
+                serde_json::from_str(
+                    &std::fs::read_to_string(root.join(
+                        "crates/hookkit-pkl-config/validation/provisioning/eslint/package.json",
+                    ))
+                    .expect("read ESLint package manifest"),
+                )
+                .expect("parse ESLint package manifest");
+            assert_eq!(package["engines"]["node"], "24.19.0");
+            assert_eq!(package["engines"]["npm"], "11.17.0");
+            assert_eq!(package["dependencies"]["eslint"], "10.8.1");
+            assert!(
+                recipe
+                    .installation_source
+                    .contains("npm artifact fb37d514c19b6dd5b2d6b70169fd26fddfa97967")
+            );
+            assert!(
+                recipe
+                    .installation_source
+                    .contains("commit c049dc3c4294da7afe3d920a1a5fdeba388f4983")
+            );
+        }
         match &tool.provenance.upstream {
             UpstreamProvenance::Recorded {
                 version,
@@ -814,6 +919,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-fmt",
             "contextlint",
             "dclint",
+            "eslint",
             "go-fmt",
             "jq",
             "prettier",
@@ -1223,6 +1329,51 @@ fn dclint_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
     assert!(harness.contains("toolchain.package_bin.clone()"));
     assert!(harness.contains("path_entries.push(toolchain.node_bin.clone())"));
     assert!(!shared_package.contains("\"dclint\""));
+}
+
+#[test]
+fn eslint_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    let harness = std::fs::read_to_string(root.join("crates/velvet-glove/tests/tool_fixtures.rs"))
+        .expect("real-tool fixture harness");
+
+    assert!(outer.contains("fetch_component_archive eslint-node"));
+    assert!(
+        outer.contains("eslint_root=\"$state_dir/eslint-environment-node-24.19.0-eslint-10.8.1\"")
+    );
+    assert!(outer.contains("\"$eslint_install_root/node/bin/node\" \\"));
+    assert!(outer.contains("\"$eslint_install_root/node/lib/node_modules/npm/bin/npm-cli.js\" \\"));
+    assert!(outer.contains("verify_macho_closure \"$eslint_root/node\" eslint-node"));
+    assert!(outer.contains("readlink \"$eslint_bin_link\") != \"../eslint/bin/eslint.js\""));
+    assert!(outer.contains(
+        "eslint_integrity='sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ=='"
+    ));
+    assert!(outer.contains("eslint_shasum='fb37d514c19b6dd5b2d6b70169fd26fddfa97967'"));
+    assert!(outer.contains("eslint_git_head='c049dc3c4294da7afe3d920a1a5fdeba388f4983'"));
+    assert!(inner.contains(
+        "export VELVET_GLOVE_FIXTURE_ESLINT_ROOT=\"$state_dir/eslint-environment-node-24.19.0-eslint-10.8.1\""
+    ));
+    assert!(inner.contains("eslint_node=\"$VELVET_GLOVE_FIXTURE_ESLINT_ROOT/node/bin/node\""));
+    assert!(inner.contains(
+        "eslint_cli=\"$VELVET_GLOVE_FIXTURE_ESLINT_ROOT/package/node_modules/eslint/bin/eslint.js\""
+    ));
+    let path_export = inner
+        .lines()
+        .find(|line| line.starts_with("export PATH="))
+        .expect("controlled PATH export");
+    assert!(
+        !path_export.contains("eslint-environment"),
+        "dedicated ESLint graph must not leak into unrelated case PATHs"
+    );
+    assert!(
+        harness.contains("const ESLINT_ROOT_ENV: &str = \"VELVET_GLOVE_FIXTURE_ESLINT_ROOT\";")
+    );
+    assert!(harness.contains("\"node\" if eslint_toolchain.is_some()"));
+    assert!(harness.contains("ESLint trace did not pass the dedicated managed CLI"));
 }
 
 fn validate_components<'a>(
@@ -1744,6 +1895,21 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert_eq!(component.probe.argv, ["vacuum", "version"]);
                     assert_eq!(component.probe.expected, "0.30.0");
                 }
+                "eslint-node" => {
+                    assert_eq!(component.version, "24.19.0");
+                    assert_eq!(
+                        component.integrity.url.as_deref(),
+                        Some("https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz")
+                    );
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d")
+                    );
+                    assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
+                    assert!(component.runtime_component_ids.is_empty());
+                    assert_eq!(component.probe.argv, ["eslint-node", "--version"]);
+                    assert_eq!(component.probe.expected, "v24.19.0");
+                }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");
                     assert_eq!(
@@ -1881,6 +2047,15 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     );
                     assert_eq!(component.version, "11.17.0");
                     assert_eq!(component.probe.argv, ["dclint-npm", "--version"]);
+                    assert_eq!(component.probe.expected, "11.17.0");
+                }
+                "eslint-npm" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("eslint-node")
+                    );
+                    assert_eq!(component.version, "11.17.0");
+                    assert_eq!(component.probe.argv, ["eslint-npm", "--version"]);
                     assert_eq!(component.probe.expected, "11.17.0");
                 }
                 other => panic!("unexpected runtime-bundled component {other}"),
