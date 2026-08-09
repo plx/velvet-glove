@@ -1,0 +1,16 @@
+min_version = "2026.5.15"
+
+[settings]
+experimental = true
+lockfile = true
+locked = true
+lockfile_platforms = ["macos-arm64"]
+disable_backends = ["asdf", "vfox"]
+
+[tools]
+jq = "1.8.1"
+pkl = "0.31.1"
+node = "24.18.0"
+python = "3.14.5"
+go = "1.26.3"
+swiftlint = "0.65.0"

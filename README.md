@@ -89,7 +89,8 @@ generated example policy is
 The embedded catalog contains immediate phases and deferred workflows for a
 broad set of formatters and linters. See the generated
 [built-in workflow audit](docs/builtin-deferred-workflow-audit.md), the
-[validation coverage report](docs/builtin-validation-coverage.md), and the
+[validation coverage report](docs/builtin-validation-coverage.md), the
+[pinned environment guide](docs/pinned-tool-environments.md), and the
 [configuration reference](docs/configuration.md). The coverage report keeps
 schema, rendered-command, and pinned-real-tool evidence separate; existing
 host-dependent fixtures are inventory rather than pinned evidence.
@@ -134,12 +135,19 @@ just validate-plugins
 # Complete local pre-PR check, including the plugin checks above.
 just check
 
+# Exact selected real-tool contract (macOS 26+, Apple developer tools,
+# Apple silicon, mise 2026.5.15).
+just tool-case black unformatted
+
+# One behavior-rich contract for Node, Python, Go, Rust, Ruby, and native macOS.
+just tool-representatives
+
 cargo fmt --all -- --check
 cargo +1.85.0 check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-targets
 
-# Optional real-tool compatibility lane; requires controlled tool versions.
+# Optional host-PATH compatibility lane; missing programs are structured skips.
 cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
 

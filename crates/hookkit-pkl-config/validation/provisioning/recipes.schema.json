@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/plx/velvet-glove/blob/main/crates/hookkit-pkl-config/validation/provisioning/recipes.schema.json",
+  "title": "Velvet Glove pinned representative contract recipes",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "mise",
+    "controlledEnvironment",
+    "sharedComponents",
+    "sharedBootstrap",
+    "environments",
+    "recipes"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "const": 1 },
+    "mise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredVersion", "config", "lock", "provisioningNetwork"],
+      "properties": {
+        "requiredVersion": { "type": "string", "minLength": 1 },
+        "config": { "type": "string", "minLength": 1 },
+        "lock": { "type": "string", "minLength": 1 },
+        "provisioningNetwork": { "const": "required" }
+      }
+    },
+    "controlledEnvironment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clearInherited", "home", "seededVariables", "set"],
+      "properties": {
+        "clearInherited": { "const": true },
+        "home": { "const": "neutral-system-temporary" },
+        "seededVariables": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "set": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "sharedComponents": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/component" }
+    },
+    "sharedBootstrap": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/bootstrap" }
+    },
+    "environments": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/environment" }
+    },
+    "recipes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/recipe" }
+    }
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "match", "expected"],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "match": { "enum": ["exact", "prefix", "major-at-least"] },
+        "expected": { "type": "string", "minLength": 1 }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "mise-lock",
+            "npm-lock",
+            "pip-requirements",
+            "bundler-lock",
+            "host-program",
+            "runtime-bundled",
+            "sha256-archive"
+          ]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "componentId": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https://" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "archiveFormat": { "enum": ["tar-gz", "tar-xz"] },
+        "archiveRoot": { "type": "string", "minLength": 1 },
+        "minOsVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "allowedDylibPrefixes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "sha256-archive" } } },
+          "then": {
+            "required": [
+              "url",
+              "sha256",
+              "archiveFormat",
+              "archiveRoot",
+              "minOsVersion",
+              "allowedDylibPrefixes"
+            ]
+          },
+          "else": {
+            "if": { "properties": { "kind": { "const": "runtime-bundled" } } },
+            "then": { "required": ["componentId"] },
+            "else": { "required": ["path"] }
+          }
+        }
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "installationSource", "integrity", "probe"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "miseTool": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*@[^@\\s]+$"
+        },
+        "installationSource": { "type": "string", "minLength": 1 },
+        "runtimeComponentIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "integrity": { "$ref": "#/$defs/integrity" },
+        "probe": { "$ref": "#/$defs/probe" }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "argv", "network", "lockfile"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "workingDirectory": { "type": "string", "minLength": 1 },
+        "network": { "enum": ["denied", "required"] },
+        "lockfile": { "type": ["string", "null"] }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "provisioningGroup",
+        "platform",
+        "architecture",
+        "osVersionConstraint",
+        "sandbox",
+        "caseNetwork",
+        "components",
+        "auxiliaryPrograms",
+        "bootstrap"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "provisioningGroup": { "type": "string", "minLength": 1 },
+        "platform": { "enum": ["linux", "macos"] },
+        "architecture": { "enum": ["x86-64", "aarch64"] },
+        "osVersionConstraint": { "type": "string", "minLength": 1 },
+        "sandbox": { "enum": ["bubblewrap", "mise-deny-net"] },
+        "caseNetwork": { "const": "denied" },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/component" }
+        },
+        "auxiliaryPrograms": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "bootstrap": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/bootstrap" }
+        }
+      }
+    },
+    "recipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "toolId",
+        "environmentId",
+        "version",
+        "installationSource",
+        "integrity",
+        "probe",
+        "caseExecutables",
+        "cases",
+        "representativeCase"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "toolId": { "type": "string", "minLength": 1 },
+        "environmentId": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "installationSource": { "type": "string", "minLength": 1 },
+        "integrity": { "$ref": "#/$defs/integrity" },
+        "probe": { "$ref": "#/$defs/probe" },
+        "caseExecutables": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "representativeCase": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

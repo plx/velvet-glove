@@ -7,6 +7,14 @@ default:
 check:
     "{{ repository_root }}/scripts/release-check.sh"
 
+# Provision and run one pinned real-tool fixture contract on macOS arm64.
+tool-case TOOL CASE:
+    "{{ repository_root }}/scripts/run-pinned-tool-contract.sh" "{{ TOOL }}" "{{ CASE }}"
+
+# Run the behavior-rich representative contract for every pinned environment.
+tool-representatives:
+    "{{ repository_root }}/scripts/run-pinned-tool-contract.sh" --representatives
+
 # Validate both agent marketplaces and their shared plugin bundle.
 validate-plugins: validate-claude-plugin validate-codex-plugin test-plugin-launcher
 

@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"SwiftLint reports issues; inspect diagnostics at <workspace>/.velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool-issues.txt.","hookEventName":"PostToolUse"}}
+{"hookSpecificOutput":{"additionalContext":"SwiftLint reports issues; inspect diagnostics at <workspace>/.velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool_swiftlint-tool-issues.txt.","hookEventName":"PostToolUse"}}

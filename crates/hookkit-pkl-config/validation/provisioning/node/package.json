@@ -1,0 +1,10 @@
+{
+  "name": "velvet-glove-pinned-node-contracts",
+  "private": true,
+  "engines": {
+    "node": "24.18.0"
+  },
+  "dependencies": {
+    "sort-package-json": "3.6.1"
+  }
+}
