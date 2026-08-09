@@ -231,7 +231,15 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     }
     assert_eq!(
         groups,
-        BTreeSet::from(["go", "node", "python", "ruby", "rust", "swift"])
+        BTreeSet::from([
+            "data-formats",
+            "go",
+            "node",
+            "python",
+            "ruby",
+            "rust",
+            "swift",
+        ])
     );
 
     let mut recipe_ids = BTreeSet::new();
@@ -332,6 +340,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         BTreeSet::from([
             "black",
             "go-fmt",
+            "jq",
             "rubocop",
             "rustfmt",
             "sort-package-json",
@@ -611,6 +620,16 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                 "{}: no immutable artifact URL",
                 component.id
             );
+            if component.id == "jq" {
+                assert_eq!(component.version, "1.8.2");
+                assert!(section.contains(
+                    "checksum = \"sha256:2d75340ba57a4b4b4c8708a21c2dc8e958a48aaa8bba13b27f77f6e4c0eca07e\""
+                ));
+                assert!(section.contains(
+                    "url = \"https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-macos-arm64\""
+                ));
+                assert!(section.contains("provenance = \"github-attestations\""));
+            }
         }
         "sha256-archive" => {
             assert_eq!(component.mise_tool, None);

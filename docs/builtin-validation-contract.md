@@ -59,7 +59,7 @@ cases. Capabilities add the following cases:
 | Stdout-signaled | Empty stdout on a clean exit and nonempty stdout classified as issues on a clean exit |
 | Workspace-scoped | Workspace/root selection and workspace attribution |
 | Batch | Multi-file invocation and conservative batch attribution |
-| Per-file | One correctly rendered invocation per selected file |
+| Per-file | A multi-file selection with one correctly rendered invocation per selected file |
 | Workspace invocation | Multi-file workspace execution, workspace selection, and workspace attribution |
 
 The immediate surface requires `immediate-phase-order`: phases run in catalog

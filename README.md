@@ -137,9 +137,10 @@ just check
 
 # Exact selected real-tool contract (macOS 26+, Apple developer tools,
 # Apple silicon, mise 2026.5.15).
-just tool-case black unformatted
+just tool-case jq multi-file-fragments
 
-# One behavior-rich contract for Node, Python, Go, Rust, Ruby, and native macOS.
+# Seven behavior-rich contracts: data formats, Node, Python, Go, Rust, Ruby,
+# and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -150,6 +151,17 @@ cargo test --locked --workspace --all-targets
 # Optional host-PATH compatibility lane; missing programs are structured skips.
 cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
+
+The data-formats representative pins the official jq 1.8.2 macOS arm64
+release and its GitHub SLSA provenance, then exercises `jq empty` once per
+file. The `-e` option is intentionally absent: `empty` produces no result, so
+`jq -e empty` exits four even for valid input. Per-file execution prevents jq
+from joining adjacent file bytes into one parse stream. Within an individual
+file, the contract still accepts an empty stream or multiple
+whitespace-separated top-level values rather than requiring exactly one JSON
+document. The exact artifact URLs, SHA-256 digests, status mapping, and
+provenance identity are in the
+[pinned environment guide](docs/pinned-tool-environments.md#jq-validation-contract).
 
 Run `scripts/regen-licenses.sh` after dependency changes. The generated
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) is checked in alongside

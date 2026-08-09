@@ -2,8 +2,10 @@
 ///
 /// hk's recipes are multi-line bash pipelines (per-file stdout-to-tempfile and
 /// `diff -u`) that the single-argv runtime can't express directly. We expose a
-/// verify-only phase that asks `jq` to parse each file: `jq -e empty <files>`
-/// returns non-zero if parsing fails or the result is null. Use the `taplo`/
+/// verify-only phase that asks `jq` to parse each file independently. Plain
+/// `empty` returns zero for a valid JSON value stream and five for malformed
+/// input; `-e empty` must not be used because `empty` deliberately produces no
+/// output and `-e` therefore returns four even for valid JSON. Use the `taplo`/
 /// `prettier`-style formatters for actual rewriting.
 
 module velvet_glove.builtins.tools.Jq
@@ -19,19 +21,22 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> { "*.json"; "**/*.json" }
   }
+  // jq streams file bytes through one parser when passed multiple paths. Run
+  // one command per file so malformed fragments cannot combine into valid JSON.
+  phaseInvocation = "per-file"
 
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
-        "-e"
         "empty"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1; 2; 3; 4; 5 }
+        issues = new Listing<Int> { 5 }
+        failure = new Listing<Int> { 1; 2; 3; 4 }
       }
     }
   }

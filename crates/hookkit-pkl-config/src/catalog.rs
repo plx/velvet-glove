@@ -345,9 +345,18 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
         checks,
         remedies,
         scopes,
-        invocations: vec!["batch".into()],
-        limitation: if mutators.is_empty() {
-            "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
+        invocations: vec![invocation(spec.phase_invocation).into()],
+        limitation: if spec.id == "jq" {
+            "The per-file parse check accepts an empty stream and multiple whitespace-separated top-level JSON values; exact-one-document validation is not claimed.".into()
+        } else if mutators.is_empty() {
+            if spec.phase_invocation == InvocationGranularity::Batch {
+                "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
+            } else {
+                format!(
+                    "Read-only checks are compatibility-translated with {} invocation granularity; real-tool behavior is version-dependent.",
+                    invocation(spec.phase_invocation)
+                )
+            }
         } else if let Some(reason) = &spec.unverified_remedy_fallback {
             format!("Unverified mutator-first fallback: {reason}")
         } else {
@@ -561,5 +570,20 @@ mod tests {
         let error = validate_builtin_catalog(&specs).expect_err("duplicate id must fail");
 
         assert_eq!(error.errors, ["enabled (shared): duplicate tool id"]);
+    }
+
+    #[test]
+    fn compatibility_audit_uses_phase_invocation_and_records_jq_stream_limit() {
+        let spec = ToolSpec {
+            phase_invocation: InvocationGranularity::PerFile,
+            ..enabled_checker("jq")
+        };
+
+        let audit = audit_tool(&spec);
+
+        assert_eq!(audit.mode, "compatibility");
+        assert_eq!(audit.invocations, ["per-file"]);
+        assert!(audit.limitation.contains("empty stream"));
+        assert!(audit.limitation.contains("exact-one-document"));
     }
 }

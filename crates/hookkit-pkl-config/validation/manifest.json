@@ -19317,7 +19317,7 @@
         "immediate": {
           "capabilities": [
             "checker",
-            "batch"
+            "per-file"
           ],
           "requiredCases": [
             "command-coverage",
@@ -19327,7 +19327,7 @@
             "operational-failure",
             "no-mutation",
             "multi-file",
-            "batch-attribution"
+            "per-file-invocation"
           ],
           "orchestrationCases": [
             "immediate-phase-order"
@@ -19337,7 +19337,7 @@
               "id": "pipeline",
               "kind": "immediate-pipeline",
               "order": 0,
-              "invocation": "batch",
+              "invocation": "per-file",
               "checkScope": null,
               "workingDirectory": "project-root",
               "workspaceIndicator": null,
@@ -19354,7 +19354,6 @@
                   "reusesImmediatePhase": null,
                   "program": "jq",
                   "argv": [
-                    "-e",
                     "empty",
                     {
                       "type": "ExtraArgs"
@@ -19368,13 +19367,14 @@
                       0
                     ],
                     "issues": [
+                      5
+                    ],
+                    "failure": [
                       1,
                       2,
                       3,
-                      4,
-                      5
+                      4
                     ],
-                    "failure": [],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -19384,7 +19384,7 @@
               ],
               "capabilities": [
                 "checker",
-                "batch"
+                "per-file"
               ],
               "requiredCases": [
                 "command-coverage",
@@ -19393,7 +19393,7 @@
                 "operational-failure",
                 "no-mutation",
                 "multi-file",
-                "batch-attribution"
+                "per-file-invocation"
               ]
             }
           ]
@@ -19401,7 +19401,7 @@
         "deferred": {
           "capabilities": [
             "checker",
-            "batch"
+            "per-file"
           ],
           "requiredCases": [
             "command-coverage",
@@ -19411,7 +19411,7 @@
             "operational-failure",
             "no-mutation",
             "multi-file",
-            "batch-attribution"
+            "per-file-invocation"
           ],
           "orchestrationCases": [
             "deferred-lifecycle"
@@ -19421,7 +19421,7 @@
               "id": "verify",
               "kind": "compatibility-workflow",
               "order": 0,
-              "invocation": "batch",
+              "invocation": "per-file",
               "checkScope": "target-files",
               "workingDirectory": "project-root",
               "workspaceIndicator": null,
@@ -19438,7 +19438,6 @@
                   "reusesImmediatePhase": "verify",
                   "program": "jq",
                   "argv": [
-                    "-e",
                     "empty",
                     {
                       "type": "ExtraArgs"
@@ -19452,13 +19451,14 @@
                       0
                     ],
                     "issues": [
+                      5
+                    ],
+                    "failure": [
                       1,
                       2,
                       3,
-                      4,
-                      5
+                      4
                     ],
-                    "failure": [],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -19468,7 +19468,7 @@
               ],
               "capabilities": [
                 "checker",
-                "batch"
+                "per-file"
               ],
               "requiredCases": [
                 "command-coverage",
@@ -19477,14 +19477,17 @@
                 "operational-failure",
                 "no-mutation",
                 "multi-file",
-                "batch-attribution"
+                "per-file-invocation"
               ]
             }
           ]
         }
       },
       "fixtureCases": [
-        "invalid"
+        "clean",
+        "invalid",
+        "multi-file-fragments",
+        "operational-failure"
       ],
       "dependencies": {
         "provisioningGroup": "data-formats",
@@ -19495,9 +19498,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 11
+          "status": "recorded",
+          "url": "https://github.com/jqlang/jq/releases/tag/jq-1.8.2",
+          "version": "1.8.2",
+          "installationSource": "jqlang/jq 1.8.2 macOS arm64 release asset locked by SHA-256 with GitHub SLSA provenance",
+          "versionCommand": ["jq", "--version"]
         }
       },
       "constraints": {
@@ -19529,7 +19534,7 @@
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -19543,18 +19548,20 @@
             "operational-failure",
             "no-mutation",
             "multi-file",
-            "batch-attribution"
+            "per-file-invocation"
           ],
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No probe-backed immediate rendered-command contract is recorded for this target.",
-          "trackingIssue": 7
+          "references": [
+            "cargo:test/run_all_tool_fixtures[jq/immediate-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -19568,18 +19575,28 @@
             "operational-failure",
             "no-mutation",
             "multi-file",
-            "batch-attribution"
+            "per-file-invocation"
           ],
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 11
+          "references": [
+            "recipe:jq-macos-arm64",
+            "artifact:clean/pinned-environment.json#jq-1.8.2",
+            "artifact:clean/fixtures/report.json#jq/clean/immediate",
+            "artifact:invalid/pinned-environment.json#jq-1.8.2",
+            "artifact:invalid/fixtures/report.json#jq/invalid/immediate",
+            "artifact:multi-file-fragments/pinned-environment.json#jq-1.8.2",
+            "artifact:multi-file-fragments/fixtures/report.json#jq/multi-file-fragments/immediate",
+            "artifact:operational-failure/pinned-environment.json#jq-1.8.2",
+            "artifact:operational-failure/fixtures/report.json#jq/operational-failure/immediate"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -19593,18 +19610,20 @@
             "operational-failure",
             "no-mutation",
             "multi-file",
-            "batch-attribution"
+            "per-file-invocation"
           ],
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No probe-backed deferred rendered-command contract is recorded for this target.",
-          "trackingIssue": 8
+          "references": [
+            "cargo:test/run_all_tool_fixtures[jq/compatibility-deferred-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -19618,14 +19637,24 @@
             "operational-failure",
             "no-mutation",
             "multi-file",
-            "batch-attribution"
+            "per-file-invocation"
           ],
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 11
+          "references": [
+            "recipe:jq-macos-arm64",
+            "artifact:clean/pinned-environment.json#jq-1.8.2",
+            "artifact:clean/fixtures/report.json#jq/clean/deferred",
+            "artifact:invalid/pinned-environment.json#jq-1.8.2",
+            "artifact:invalid/fixtures/report.json#jq/invalid/deferred",
+            "artifact:multi-file-fragments/pinned-environment.json#jq-1.8.2",
+            "artifact:multi-file-fragments/fixtures/report.json#jq/multi-file-fragments/deferred",
+            "artifact:operational-failure/pinned-environment.json#jq-1.8.2",
+            "artifact:operational-failure/fixtures/report.json#jq/operational-failure/deferred"
+          ],
+          "reason": null,
+          "trackingIssue": null
         }
       ],
       "exceptions": []
@@ -46692,6 +46721,7 @@
             "complete-workspace-diff",
             "post-mutation-verification",
             "idempotence",
+            "multi-file",
             "per-file-invocation"
           ],
           "orchestrationCases": [
@@ -46794,6 +46824,7 @@
                 "complete-workspace-diff",
                 "post-mutation-verification",
                 "idempotence",
+                "multi-file",
                 "per-file-invocation"
               ]
             }
@@ -46921,6 +46952,7 @@
             "complete-workspace-diff",
             "post-mutation-verification",
             "idempotence",
+            "multi-file",
             "per-file-invocation"
           ],
           "surfaceCases": [
@@ -46949,6 +46981,7 @@
             "complete-workspace-diff",
             "post-mutation-verification",
             "idempotence",
+            "multi-file",
             "per-file-invocation"
           ],
           "surfaceCases": [

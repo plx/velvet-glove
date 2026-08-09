@@ -20,7 +20,7 @@ native lowering is covered by the probe without duplicating the full catalog.
 
 ## Directory layout
 
-```
+```text
 tests/tool-fixtures/<tool-id>/<example-name>/
   example.<ext>                # the input file (required)
   <supporting files>           # optional sibling files copied as-is
@@ -31,7 +31,9 @@ tests/tool-fixtures/<tool-id>/<example-name>/
   codex.json codex.stderr.txt codex.exit
 ```
 
-- `<tool-id>` matches the tool's `id` field in `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl` (e.g. `ruff`, `cargo-fmt`).
+- `<tool-id>` matches the tool's `id` field in
+  `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl` (for example,
+  `ruff` or `cargo-fmt`).
 - The harness picks the entry file (the one cited in the synthesized
   `PostToolUse` event) by looking for a top-level file whose name starts with
   `example.`. If none exists, the first non-golden, non-`expected/` file at
@@ -82,16 +84,17 @@ cargo test -p velvet-glove --test tool_fixtures
 Run the host-tool compatibility matrix explicitly with:
 
 ```sh
-cargo test -p velvet-glove --test tool_fixtures run_all_tool_fixtures -- --ignored --exact --nocapture
+cargo test -p velvet-glove --test tool_fixtures \
+  run_all_tool_fixtures -- --ignored --exact --nocapture
 ```
 
 Run one selected case in its pinned, controlled macOS environment with:
 
 ```sh
-just tool-case black unformatted
+just tool-case jq multi-file-fragments
 ```
 
-Run all six pinned representative environments with `just
+Run all seven pinned representative environments with `just
 tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -124,5 +127,9 @@ pass/skip/fail, structured skip-reason, and probe-command totals. To retain a
 failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
-run report is written there as well; successful case workspaces are still
-removed.
+run report is written to the stable `report.json` path, with a timestamped copy
+alongside it. Successful jq cases are retained too: they
+include exact pass-through program/argv/cwd/environment traces, complete
+workspace snapshots and diffs for repeated immediate runs, and two independent
+compatibility-deferred summaries plus their semantic idempotence comparison.
+Other successful case workspaces are removed.

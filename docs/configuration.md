@@ -35,7 +35,10 @@ run = new Listing<String> { "ruff"; "prettier" }
 
 `phases` drive `post-tool-immediate`. Explicit `workflows` drive deferred
 `turn-completion`; compatible legacy phase sets are translated only when the
-catalog validator can prove a read-only final check.
+catalog validator can prove a read-only final check. `phaseInvocation` controls
+how matching files are divided for the immediate phase pipeline and for those
+phase-derived compatibility workflows: `batch` (the default), `per-file`, or
+`workspace`. Explicit workflows continue to use their own `invocation` field.
 
 ## Discovery and merge order
 
