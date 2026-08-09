@@ -2413,6 +2413,80 @@ fn mutating_contract_registry_preserves_biome_target_file_writes() {
 }
 
 #[test]
+fn explicit_workflow_trace_membership_keeps_gofmt_and_dclint_distinct() {
+    let specs = builtin_index().expect("builtin specs");
+
+    let (_, gofmt) = specs.get("go-fmt").expect("gofmt spec");
+    let gofmt_check = gofmt
+        .workflows
+        .get("format")
+        .and_then(|workflow| workflow.check.as_ref())
+        .expect("gofmt workflow check");
+    assert_eq!(gofmt.phase_order, ["format"]);
+    assert!(
+        gofmt
+            .phase_order
+            .iter()
+            .filter_map(|phase_id| gofmt.phases.get(phase_id))
+            .all(|phase| !phase_matches_workflow_check(phase, gofmt_check)),
+        "gofmt's deferred checker must not be appended to its immediate format phase"
+    );
+    let gofmt_mutation = mutating_tool_contract_case(&named_fixture_case("go-fmt", "multi-file"))
+        .expect("gofmt mutation lookup")
+        .expect("gofmt mutation contract");
+    assert_eq!(
+        gofmt_mutation.remedy_invocations[0].trace_exit_codes.len(),
+        2
+    );
+    assert_eq!(
+        gofmt_mutation.final_invocations[0].trace_exit_codes.len(),
+        1
+    );
+    assert_eq!(
+        1 + usize::from(!gofmt_mutation.remedy_invocations.is_empty())
+            + usize::from(!gofmt_mutation.final_invocations.is_empty()),
+        3,
+        "gofmt deferred execution remains check, remedy, final-check"
+    );
+
+    let (_, dclint) = specs.get("dclint").expect("dclint spec");
+    let dclint_check = dclint
+        .workflows
+        .get("fix")
+        .and_then(|workflow| workflow.check.as_ref())
+        .expect("dclint workflow check");
+    let matching_phases = dclint
+        .phase_order
+        .iter()
+        .filter(|phase_id| {
+            dclint
+                .phases
+                .get(*phase_id)
+                .is_some_and(|phase| phase_matches_workflow_check(phase, dclint_check))
+        })
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(matching_phases, ["verify"]);
+    let dclint_clean = mutating_tool_contract_case(&named_fixture_case("dclint", "clean"))
+        .expect("dclint clean mutation lookup")
+        .expect("dclint clean mutation contract");
+    assert_eq!(
+        dclint_clean.remedy_invocations[0].trace_exit_codes.len()
+            + dclint_clean.final_invocations[0].trace_exit_codes.len(),
+        2,
+        "dclint immediate execution remains fix plus authoritative verify"
+    );
+    let dclint_source = mutating_tool_contract_case(&named_fixture_case("dclint", "source-issue"))
+        .expect("dclint source mutation lookup")
+        .expect("dclint source mutation contract");
+    assert_eq!(
+        dclint_source.immediate_outcome,
+        ExpectedOutcome::Issues,
+        "persistent dclint findings remain issues after the final check"
+    );
+}
+
+#[test]
 fn prettier_contract_registry_binds_read_only_format_preflight() {
     for (case_name, expected) in [
         ("clean", &[0, 0][..]),
@@ -4928,9 +5002,11 @@ fn run_mutating_fixture_case_inner(
 ) -> Result<(), String> {
     validate_mutation_expected_tree(case, mutation)?;
     let phase_trace = |immediate: &ResolvedContract| {
-        let final_check = resolved_mutation
-            .final_check
-            .iter()
+        let final_check = (!resolved_mutation.explicit_workflow
+            || resolved_mutation.immediate_includes_final_check)
+            .then_some(&resolved_mutation.final_check)
+            .into_iter()
+            .flat_map(|phase| phase.iter())
             .flat_map(|phase| phase.trace_invocations.iter());
         immediate
             .trace_invocations
@@ -5267,6 +5343,8 @@ struct ResolvedMutatingContract {
     repeat_immediate: Option<ResolvedContract>,
     remedy: ResolvedContract,
     final_check: Option<ResolvedContract>,
+    explicit_workflow: bool,
+    immediate_includes_final_check: bool,
 }
 
 fn resolve_real_tool_contract(
@@ -5559,6 +5637,7 @@ fn resolve_mutating_tool_contract(
     }
 
     let explicit_workflow = !spec.workflows.is_empty();
+    let mut immediate_includes_final_check = false;
     let (remedy, final_check) = if explicit_workflow {
         let workflow = spec.workflows.get(contract.phase_id).ok_or_else(|| {
             format!(
@@ -5627,6 +5706,23 @@ fn resolve_mutating_tool_contract(
                     check.extra_args
                 ));
             }
+            let matching_immediate_checks = spec
+                .phase_order
+                .iter()
+                .filter_map(|phase_id| {
+                    spec.phases
+                        .get(phase_id)
+                        .filter(|phase| phase_matches_workflow_check(phase, check))
+                        .map(|_| phase_id)
+                })
+                .collect::<Vec<_>>();
+            if matching_immediate_checks.len() > 1 {
+                return Err(format!(
+                    "{} explicit workflow checker is duplicated in immediate phase order: {:?}",
+                    case.tool, matching_immediate_checks
+                ));
+            }
+            immediate_includes_final_check = !matching_immediate_checks.is_empty();
             Some(resolve_workflow_invocations(
                 case,
                 spec,
@@ -5714,7 +5810,19 @@ fn resolve_mutating_tool_contract(
         repeat_immediate,
         remedy,
         final_check,
+        explicit_workflow,
+        immediate_includes_final_check,
     })
+}
+
+fn phase_matches_workflow_check(phase: &Phase, check: &WorkflowCommand) -> bool {
+    phase.enabled
+        && matches!(phase.mode, PhaseMode::Verify | PhaseMode::CheckOnly)
+        && phase.program == check.program
+        && phase.argv == check.argv
+        && phase.exit_codes == check.exit_codes
+        && phase.writes == check.writes
+        && phase.extra_args == check.extra_args
 }
 
 fn resolve_phase_invocations(
@@ -7250,9 +7358,10 @@ fn resolve_dclint_trace_invocations(
     }];
     if expected_exit_codes.len() == 3 {
         if mode != "fix" || fixable_targets.is_empty() {
-            return Err(format!(
+            return Err(
                 "dclint three-child trace requires fix mode and a nonempty proven-fixable subset"
-            ));
+                    .to_owned(),
+            );
         }
         let mut fixable_files = Vec::new();
         let mut fixable_paths = Vec::new();
@@ -8246,6 +8355,11 @@ impl ToolTraceHarness {
                 "node" if contextlint_toolchain.is_some() => contextlint_toolchain
                     .as_ref()
                     .expect("checked Contextlint toolchain")
+                    .node
+                    .clone(),
+                "node" if dclint_toolchain.is_some() => dclint_toolchain
+                    .as_ref()
+                    .expect("checked dclint toolchain")
                     .node
                     .clone(),
                 "dclint" if dclint_toolchain.is_some() => dclint_toolchain

@@ -117,9 +117,6 @@ contextlint_cli_manifest="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_mo
 dclint_node="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/bin/node"
 dclint_npm_cli="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
 dclint_cli="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/.bin/dclint"
-if [[ $dclint_selected == true ]]; then
-  export PATH="$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/.bin:$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/node/bin:$PATH"
-fi
 
 while IFS= read -r program; do
   resolved=

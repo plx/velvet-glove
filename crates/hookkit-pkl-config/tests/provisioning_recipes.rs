@@ -990,17 +990,27 @@ fn dclint_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
     ));
     let base_path_export = inner
         .lines()
-        .find(|line| line.starts_with("export PATH=") && !line.contains("DCLINT_ROOT"))
+        .find(|line| line.starts_with("export PATH="))
         .expect("controlled base PATH export");
     assert!(
         !base_path_export.contains("dclint-environment"),
         "dedicated dclint Node must not leak into unrelated case PATHs"
     );
     assert!(
+        !inner
+            .contains("export PATH=\"$VELVET_GLOVE_FIXTURE_DCLINT_ROOT/package/node_modules/.bin:"),
+        "combined representatives must retain the shared Node runtime on PATH"
+    );
+    assert!(inner.contains(
+        "if [[ $shared_node_selected == false ]]; then\n          resolved=\"$dclint_node\""
+    ));
+    assert!(
         harness.contains("const DCLINT_ROOT_ENV: &str = \"VELVET_GLOVE_FIXTURE_DCLINT_ROOT\";")
     );
+    assert!(harness.contains("\"node\" if dclint_toolchain.is_some()"));
     assert!(harness.contains("\"dclint\" if dclint_toolchain.is_some()"));
     assert!(harness.contains("toolchain.package_bin.clone()"));
+    assert!(harness.contains("path_entries.push(toolchain.node_bin.clone())"));
     assert!(!shared_package.contains("\"dclint\""));
 }
 
