@@ -509,7 +509,13 @@ fn prettier_adapter_locks_completion_config_and_target_scope() {
         "os.killpg(process.pid, signum)",
         "signal.SIGKILL",
         "combined output exceeded",
-        "returncode == 1 and not stderr_bytes",
+        "def validated_list_different",
+        "native_status == 0",
+        "native_status != 1 or native_stderr",
+        "native Prettier format preflight",
+        "child_arguments(config_for_child, \"list\")",
+        "child_arguments(config_for_child, \"write\")",
+        "phase == \"verify\" and returncode == 1",
         "list-different output repeats files",
         "list-different output names a file outside the selection",
         "prettier: formatting differs:",
@@ -520,6 +526,15 @@ fn prettier_adapter_locks_completion_config_and_target_scope() {
             "Prettier adapter omits {required:?}"
         );
     }
+    assert!(
+        adapter
+            .find("child_arguments(config_for_child, \"list\")")
+            .expect("format preflight invocation")
+            < adapter
+                .find("child_arguments(config_for_child, \"write\")")
+                .expect("format write invocation"),
+        "Prettier format must finish its read-only list-different preflight before write"
+    );
     assert!(!adapter.contains("os.environ.copy"));
     assert_eq!(format.argv[3], literal("node"));
     assert_eq!(format.argv[4], token(ArgToken::ToolExecutable));

@@ -6,6 +6,10 @@
 /// disables implicit config, ignore, EditorConfig, cache, plugin, and pragma
 /// discovery; an explicitly requested override-free JSON config is validated
 /// as data and copied outside the project before Prettier loads it.
+/// Format first runs that same read-only check across the complete batch so a
+/// known parse/config failure cannot mutate an earlier file. A file changed
+/// after preflight or a late native write failure can still leave partial
+/// writes; the adapter deliberately does not attempt unsafe rollback.
 
 module velvet_glove.builtins.tools.Prettier
 
@@ -310,12 +314,120 @@ prettierAdapter: String = #"""
 
 
   previous_handlers = {}
-  stdout_chunks = []
-  stderr_chunks = []
   total = 0
   adapter_error = None
   private_config_dir = None
   private_config_path = None
+  stdout_bytes = b""
+  stderr_bytes = b""
+  returncode = 2
+
+
+  class EvidenceError(Exception):
+      pass
+
+
+  def validated_list_different(native_status, native_stdout, native_stderr, label):
+      if native_status == 0:
+          if native_stdout or native_stderr:
+              raise EvidenceError(
+                  f"{label} exited 0 with output instead of clean completion evidence"
+              )
+          return set()
+      if native_status != 1 or native_stderr:
+          raise EvidenceError(
+              f"{label} exited {native_status} without valid list-different evidence"
+          )
+      try:
+          output = native_stdout.decode("utf-8")
+      except UnicodeError as error:
+          raise EvidenceError(f"{label} emitted invalid list-different UTF-8: {error}")
+      if not output.endswith("\n"):
+          raise EvidenceError(f"{label} list-different output has no final newline")
+      rendered_different = output.splitlines()
+      if not rendered_different:
+          raise EvidenceError(f"{label} list-different output is empty")
+      different = [os.path.abspath(path) for path in rendered_different]
+      if len(different) != len(set(different)):
+          raise EvidenceError(f"{label} list-different output repeats files")
+      selected = set(files)
+      if any(path not in selected for path in different):
+          raise EvidenceError(
+              f"{label} list-different output names a file outside the selection"
+          )
+      return set(different)
+
+
+  def child_arguments(config_for_child, native_mode):
+      child_args = [node, tool, f"--config={config_for_child}"]
+      if native_mode == "write":
+          child_args.extend(("--write", "--log-level=error"))
+      elif native_mode == "list":
+          child_args.extend(("--list-different", "--log-level=log"))
+      else:
+          raise ValueError(f"unsupported native mode {native_mode!r}")
+      child_args.extend(forwarded_args)
+      child_args.extend(
+          (
+              "--no-editorconfig",
+              "--ignore-path=/dev/null",
+              "--with-node-modules",
+              "--no-color",
+              "--",
+          )
+      )
+      child_args.extend(files)
+      return child_args
+
+
+  def run_child(child_args):
+      global process
+      global total
+      if pending_signal is not None:
+          raise AdapterSignal(pending_signal)
+      process = subprocess.Popen(
+          child_args,
+          stdin=subprocess.DEVNULL,
+          stdout=subprocess.PIPE,
+          stderr=subprocess.PIPE,
+          cwd=workspace,
+          env=environment,
+          start_new_session=True,
+      )
+      if pending_signal is not None:
+          raise AdapterSignal(pending_signal)
+      stdout_chunks = []
+      stderr_chunks = []
+      selector = selectors.DefaultSelector()
+      try:
+          for stream, target in (
+              (process.stdout, stdout_chunks),
+              (process.stderr, stderr_chunks),
+          ):
+              if stream is None:
+                  raise OSError("failed to capture tool output")
+              os.set_blocking(stream.fileno(), False)
+              selector.register(stream, selectors.EVENT_READ, target)
+          while selector.get_map():
+              if pending_signal is not None:
+                  raise InterruptedError(f"received signal {pending_signal}")
+              for key, _ in selector.select(timeout=0.1):
+                  chunk = os.read(key.fileobj.fileno(), 65536)
+                  if chunk:
+                      total += len(chunk)
+                      if total > LIMIT:
+                          raise BufferError(f"combined output exceeded {LIMIT} bytes")
+                      key.data.append(chunk)
+                  else:
+                      selector.unregister(key.fileobj)
+                      key.fileobj.close()
+          native_status = process.wait()
+      finally:
+          selector.close()
+      process = None
+      return native_status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+
+
   try:
       for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
           previous_handlers[signum] = signal.signal(signum, forward_signal)
@@ -350,55 +462,28 @@ prettierAdapter: String = #"""
               if private_fd is not None:
                   os.close(private_fd)
           config_for_child = private_config_path
-      child_args = [node, tool, f"--config={config_for_child}"]
       if phase == "format":
-          child_args.extend(("--write", "--log-level=error"))
-      else:
-          child_args.extend(("--list-different", "--log-level=log"))
-      child_args.extend(forwarded_args)
-      child_args.extend(
-          (
-              "--no-editorconfig",
-              "--ignore-path=/dev/null",
-              "--with-node-modules",
-              "--no-color",
-              "--",
+          preflight_status, preflight_stdout, preflight_stderr = run_child(
+              child_arguments(config_for_child, "list")
           )
-      )
-      child_args.extend(files)
-      if pending_signal is not None:
-          raise AdapterSignal(pending_signal)
-      process = subprocess.Popen(
-          child_args,
-          stdin=subprocess.DEVNULL,
-          stdout=subprocess.PIPE,
-          stderr=subprocess.PIPE,
-          cwd=workspace,
-          env=environment,
-          start_new_session=True,
-      )
-      if pending_signal is not None:
-          raise AdapterSignal(pending_signal)
-      selector = selectors.DefaultSelector()
-      for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
-          if stream is None:
-              raise OSError("failed to capture tool output")
-          os.set_blocking(stream.fileno(), False)
-          selector.register(stream, selectors.EVENT_READ, target)
-      while selector.get_map():
-          if pending_signal is not None:
-              raise InterruptedError(f"received signal {pending_signal}")
-          for key, _ in selector.select(timeout=0.1):
-              chunk = os.read(key.fileobj.fileno(), 65536)
-              if chunk:
-                  total += len(chunk)
-                  if total > LIMIT:
-                      raise BufferError(f"combined output exceeded {LIMIT} bytes")
-                  key.data.append(chunk)
-              else:
-                  selector.unregister(key.fileobj)
-                  key.fileobj.close()
-      returncode = process.wait()
+          try:
+              validated_list_different(
+                  preflight_status,
+                  preflight_stdout,
+                  preflight_stderr,
+                  "native Prettier format preflight",
+              )
+          except EvidenceError:
+              stdout_bytes = preflight_stdout
+              stderr_bytes = preflight_stderr
+              raise
+          returncode, stdout_bytes, stderr_bytes = run_child(
+              child_arguments(config_for_child, "write")
+          )
+      else:
+          returncode, stdout_bytes, stderr_bytes = run_child(
+              child_arguments(config_for_child, "list")
+          )
   except AdapterSignal as error:
       stop_child(error.signum)
       adapter_error = error
@@ -440,10 +525,6 @@ prettierAdapter: String = #"""
           returncode = 2
   process = None
 
-  stdout_bytes = b"".join(stdout_chunks)
-  stderr_bytes = b"".join(stderr_chunks)
-
-
   def forward_raw():
       if stdout_bytes:
           sys.stdout.buffer.write(stdout_bytes)
@@ -458,28 +539,14 @@ prettierAdapter: String = #"""
   if returncode == 0 and not stdout_bytes and not stderr_bytes:
       raise SystemExit(0)
 
-  if phase == "verify" and returncode == 1 and not stderr_bytes:
+  if phase == "verify" and returncode == 1:
       try:
-          output = stdout_bytes.decode("utf-8")
-      except UnicodeError as error:
+          different_set = validated_list_different(
+              returncode, stdout_bytes, stderr_bytes, "native Prettier verify"
+          )
+      except EvidenceError as error:
           forward_raw()
-          fail(f"invalid list-different UTF-8: {error}")
-      if not output.endswith("\n"):
-          forward_raw()
-          fail("list-different output has no final newline")
-      rendered_different = output.splitlines()
-      if not rendered_different:
-          forward_raw()
-          fail("list-different output is empty")
-      different = [os.path.abspath(path) for path in rendered_different]
-      if len(different) != len(set(different)):
-          forward_raw()
-          fail("list-different output repeats files")
-      selected = set(files)
-      if any(path not in selected for path in different):
-          forward_raw()
-          fail("list-different output names a file outside the selection")
-      different_set = set(different)
+          fail(str(error))
       for path in files:
           if path in different_set:
               print(f"prettier: formatting differs: {path}", file=sys.stderr)
