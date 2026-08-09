@@ -638,32 +638,152 @@ fn cargo_fmt_builtin_uses_workspace_indicator() {
     assert_eq!(cargo_fmt.id, "cargo-fmt");
     assert_eq!(cargo_fmt.display_name, "cargo fmt");
     assert_eq!(cargo_fmt.executable, "cargo");
-    assert_eq!(cargo_fmt.workspace_indicator.as_deref(), Some("Cargo.toml"));
+    assert_eq!(
+        cargo_fmt.install_hint.as_deref(),
+        Some(
+            "install exact Rust/Cargo 1.97.1 with cargo-fmt/rustfmt 1.9.0 and Python 3 isolated-mode support"
+        )
+    );
+    assert_eq!(cargo_fmt.workspace_indicator.as_deref(), Some("Cargo.lock"));
+    assert_eq!(cargo_fmt.phase_invocation, InvocationGranularity::Workspace);
 
     let format = cargo_fmt.phases.get("format").expect("format");
-    assert_argv(
-        format,
-        vec![
-            literal("fmt"),
-            literal("--manifest-path"),
-            token(ArgToken::WorkspaceIndicator),
-            token(ArgToken::ExtraArgs),
-        ],
+    assert_eq!(format.program.as_deref(), Some("python"));
+    assert_eq!(format.argv.len(), 10);
+    assert_eq!(format.argv[0], literal("-I"));
+    assert_eq!(format.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &format.argv[2] else {
+        panic!("cargo-fmt adapter must be a literal Python program")
+    };
+    for required in [
+        "class AdapterSignal(BaseException)",
+        "OUTPUT_LIMIT = 16 * 1024 * 1024",
+        "start_new_session=True",
+        "os.killpg(process.pid, signum)",
+        "def sweep_process_group():",
+        "child left same-group descendants after leader exit",
+        "reported_signal = error.signum",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "initialization_mask = signal.pthread_sigmask(",
+        "signal.sigpending()",
+        "signal.sigwait({queued[0]})",
+        "combined output exceeded",
+        "extra arguments are unsupported",
+        "stat.S_ISLNK(initial.st_mode)",
+        "initial.st_nlink != 1",
+        "cargo, cargo-fmt, and rustfmt must resolve from one launcher directory",
+        "the paired {companion} executable is unavailable beside rustc",
+        "Cargo home configuration is unsupported",
+        "Cargo invocation-path configuration is unsupported",
+        "getattr(os, \"O_NOFOLLOW\", 0)",
+        "def directory_snapshot(path):",
+        "workspace contains more than 8192 validated directories",
+        "--format-version=1",
+        "--locked",
+        "--offline",
+        "--files-with-diff",
+        "create_coverage_workspace()",
+        "const _: ()=();",
+        "coverage workspace directory topology or modes differ from the validated workspace",
+        "cargo-fmt does not cover the complete physical Rust source set",
+        "workspace lock is not a unique regular file",
+        "workspace manifest is not a unique canonical regular file",
+        "non-member Cargo path dependency is unsupported",
+        "cargo-fmt wrote stderr, so status cannot be classified as a formatting issue",
+        "cargo-fmt changed-file report differs from workspace bytes",
+        "if before[relative][\"mode\"] != after[relative][\"mode\"]",
+        "cannot remove controlled Cargo Fmt directory",
+        "rollback_eligible = True",
+        "ns=(opened.st_atime_ns, snapshot[\"mtime\"])",
+        "for key in (\"content\", \"mode\", \"mtime\")",
+        "restored workspace paths differ from the baseline",
+        "restored workspace directory topology differs from the baseline",
+        "set_directory_mode(",
+        "added_directories",
+        "removed_directories",
+        "touched_directories",
+        "restore_workspace(baseline, baseline_directories)",
+        "rollback failed",
+        "os.path.basename(candidate).startswith(\"velvet-glove-cargo-fmt-\")",
+        "sanitize_private_output(raw_stdout)",
+        "sanitize_private_output(raw_stderr)",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "cargo-fmt adapter omits {required:?}"
+        );
+    }
+    let handler_install = adapter
+        .find("previous_handlers[signum] = signal.signal(signum, forward_signal)")
+        .expect("Cargo Fmt handler installation");
+    let private_root_create = adapter
+        .find("private_root = tempfile.mkdtemp")
+        .expect("Cargo Fmt private-root creation");
+    let rollback_enable = adapter
+        .find("rollback_eligible = True")
+        .expect("Cargo Fmt rollback eligibility");
+    let real_child = adapter
+        .find("format_status, format_stdout, format_stderr = run_child(format_args)")
+        .expect("Cargo Fmt real child");
+    let owned_cleanup = adapter
+        .rfind("shutil.rmtree(private_root)")
+        .expect("Cargo Fmt final private-root cleanup");
+    let signal_cutoff = adapter
+        .find("blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)")
+        .expect("Cargo Fmt final signal cutoff");
+    let final_rollback = adapter
+        .rfind("restore_workspace(baseline, baseline_directories)")
+        .expect("Cargo Fmt final rollback");
+    let handler_restore = adapter
+        .rfind("signal.signal(signum, handler)")
+        .expect("Cargo Fmt final handler restoration");
+    assert!(handler_install < private_root_create);
+    assert!(rollback_enable < real_child);
+    assert!(owned_cleanup < signal_cutoff);
+    assert!(signal_cutoff < final_rollback);
+    assert!(final_rollback < handler_restore);
+    let normal_wait = adapter
+        .find("status = process.wait()")
+        .expect("Cargo Fmt normal child wait");
+    let descendant_sweep = adapter[normal_wait..]
+        .find("left_descendants = sweep_process_group()")
+        .map(|offset| normal_wait + offset)
+        .expect("Cargo Fmt normal-exit process-group sweep");
+    let child_clear = adapter[descendant_sweep..]
+        .find("process = None")
+        .map(|offset| descendant_sweep + offset)
+        .expect("Cargo Fmt normal child clear");
+    assert!(normal_wait < descendant_sweep);
+    assert!(descendant_sweep < child_clear);
+    assert_eq!(adapter.matches("raw_stdout = b\"\"").count(), 5);
+    assert_eq!(format.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(format.argv[4], literal("cargo-fmt"));
+    assert_eq!(format.argv[5], literal("rustfmt"));
+    assert_eq!(format.argv[6], literal("format"));
+    assert_eq!(format.argv[7], token(ArgToken::ExtraArgs));
+    assert_eq!(
+        format.argv[8],
+        literal("__VELVET_GLOVE_CARGO_FMT_WORKSPACE__")
     );
-    assert_exit_codes(&format.exit_codes, &[0], &[], &[]);
-    assert_eq!(format.writes, WriteBehavior::MatchingGlobs);
+    assert_eq!(format.argv[9], token(ArgToken::WorkspaceIndicator));
+    assert_exit_codes(&format.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(format.writes, WriteBehavior::Workspace);
 
     let verify = cargo_fmt.phases.get("verify").expect("verify");
-    assert_argv(
-        verify,
-        vec![
-            literal("fmt"),
-            literal("--check"),
-            literal("--manifest-path"),
-            token(ArgToken::WorkspaceIndicator),
-            token(ArgToken::ExtraArgs),
-        ],
-    );
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    assert_eq!(verify.argv[2], format.argv[2]);
+    assert_eq!(verify.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[4], literal("cargo-fmt"));
+    assert_eq!(verify.argv[5], literal("rustfmt"));
+    assert_eq!(verify.argv[6], literal("verify"));
+    assert_eq!(verify.argv[7], token(ArgToken::ExtraArgs));
+    assert_eq!(verify.argv[8], format.argv[8]);
+    assert_eq!(verify.argv[9], token(ArgToken::WorkspaceIndicator));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(cargo_fmt.phase_order, vec!["format", "verify"]);
 }
 
 #[test]
