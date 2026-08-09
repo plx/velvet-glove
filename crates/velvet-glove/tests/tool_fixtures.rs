@@ -10,7 +10,10 @@ mod bounded_process;
 mod support;
 
 use bounded_process::{BoundedCommandError, BoundedOutput, run_with_timeout};
-use hookkit_pkl_config::ToolSpec;
+use hookkit_pkl_config::{
+    ArgToken, ArgvElement, InvocationGranularity, Phase, PhaseMode, ToolSpec, UnexpectedExitPolicy,
+    WriteBehavior,
+};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -32,62 +35,200 @@ const SELECTION_ENV: &str = "VELVET_GLOVE_FIXTURE_SELECTION";
 const REPORT_PREFIX: &str = "VELVET_GLOVE_FIXTURE_JSON=";
 const PROBE_SENTINEL_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_SENTINEL";
 const PROBE_DIR_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_DIR";
-const JQ_TRACE_DIR_ENV: &str = "VELVET_GLOVE_JQ_TRACE_DIR";
-const JQ_REAL_PROGRAM_ENV: &str = "VELVET_GLOVE_JQ_REAL_PROGRAM";
-const JQ_LOGICAL_PROGRAM_ENV: &str = "VELVET_GLOVE_JQ_LOGICAL_PROGRAM";
-const JQ_TRACE_SENTINEL_ENV: &str = "VELVET_GLOVE_JQ_TRACE_SENTINEL";
-const JQ_TRACE_SENTINEL: &str = "jq-real-tool-fixture";
+const TOOL_TRACE_DIR_ENV: &str = "VELVET_GLOVE_TOOL_TRACE_DIR";
+const TOOL_REAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_REAL_PROGRAM";
+const TOOL_LOGICAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_LOGICAL_PROGRAM";
+const TOOL_TRACE_SENTINEL_ENV: &str = "VELVET_GLOVE_TOOL_TRACE_SENTINEL";
+const TOOL_TRACE_SENTINEL: &str = "real-tool-fixture";
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JqExpectedOutcome {
+enum ExpectedOutcome {
     Clean,
     Issues,
     OperationalFailure,
 }
 
-#[derive(Debug)]
-struct JqContractCase {
-    targets: &'static [(&'static str, i32)],
-    extra_args: &'static [&'static str],
-    outcome: JqExpectedOutcome,
-    diagnostic_contains: Option<&'static str>,
+impl ExpectedOutcome {
+    fn summary_status(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::Issues => "issues",
+            Self::OperationalFailure => "operational-failure",
+        }
+    }
+
+    fn artifact_classification(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::Issues => "issues",
+            Self::OperationalFailure => "failure",
+        }
+    }
 }
 
-fn jq_contract_case(case: &FixtureCase) -> Result<Option<JqContractCase>, String> {
-    if case.tool != "jq" {
-        return Ok(None);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TracePlan {
+    Direct,
+    TrailingOptionsAdapter {
+        preflight: &'static [&'static str],
+        validation: &'static [&'static str],
+    },
+}
+
+const ASCIIDOCTOR_TRACE_PLAN: TracePlan = TracePlan::TrailingOptionsAdapter {
+    preflight: &[
+        "--safe-mode=safe",
+        "--failure-level=FATAL",
+        "--out-file=/dev/null",
+    ],
+    validation: &[
+        "--safe-mode=safe",
+        "--failure-level=WARNING",
+        "--out-file=/dev/null",
+    ],
+};
+
+#[derive(Debug)]
+struct ExpectedInvocation {
+    targets: &'static [&'static str],
+    exit_code: i32,
+    trace_exit_codes: &'static [i32],
+}
+
+#[derive(Debug)]
+struct RealToolContractCase {
+    phase_id: &'static str,
+    invocations: &'static [ExpectedInvocation],
+    extra_args: &'static [&'static str],
+    outcome: ExpectedOutcome,
+    diagnostic_contains: &'static [&'static str],
+    trace_plan: TracePlan,
+}
+
+impl RealToolContractCase {
+    fn targets(&self) -> Vec<&'static str> {
+        self.invocations
+            .iter()
+            .flat_map(|invocation| invocation.targets.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
-    let contract = match case.case.as_str() {
-        "clean" => JqContractCase {
-            targets: &[("example.json", 0)],
+}
+
+fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContractCase>, String> {
+    let contract = match (case.tool.as_str(), case.case.as_str()) {
+        ("jq", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.json"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
             extra_args: &[],
-            outcome: JqExpectedOutcome::Clean,
-            diagnostic_contains: None,
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            trace_plan: TracePlan::Direct,
         },
-        "invalid" => JqContractCase {
-            targets: &[("example.json", 5)],
+        ("jq", "invalid") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.json"],
+                exit_code: 5,
+                trace_exit_codes: &[5],
+            }],
             extra_args: &[],
-            outcome: JqExpectedOutcome::Issues,
-            diagnostic_contains: Some("jq: parse error:"),
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["jq: parse error:"],
+            trace_plan: TracePlan::Direct,
         },
-        "operational-failure" => JqContractCase {
-            targets: &[("example.json", 2)],
+        ("jq", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.json"],
+                exit_code: 2,
+                trace_exit_codes: &[2],
+            }],
             extra_args: &["--indent", "9"],
-            outcome: JqExpectedOutcome::OperationalFailure,
-            diagnostic_contains: Some("jq: --indent takes a number between -1 and 7"),
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["jq: --indent takes a number between -1 and 7"],
+            trace_plan: TracePlan::Direct,
         },
-        "multi-file-fragments" => JqContractCase {
-            targets: &[("example.1-open.json", 5), ("example.2-close.json", 5)],
+        ("jq", "multi-file-fragments") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[
+                ExpectedInvocation {
+                    targets: &["example.1-open.json"],
+                    exit_code: 5,
+                    trace_exit_codes: &[5],
+                },
+                ExpectedInvocation {
+                    targets: &["example.2-close.json"],
+                    exit_code: 5,
+                    trace_exit_codes: &[5],
+                },
+            ],
             extra_args: &[],
-            outcome: JqExpectedOutcome::Issues,
-            diagnostic_contains: Some("jq: parse error:"),
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["jq: parse error:"],
+            trace_plan: TracePlan::Direct,
         },
-        other => {
+        ("asciidoctor", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.adoc"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            trace_plan: ASCIIDOCTOR_TRACE_PLAN,
+        },
+        ("asciidoctor", "missing-include") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.adoc"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["include file not found:", "does-not-exist.adoc"],
+            trace_plan: ASCIIDOCTOR_TRACE_PLAN,
+        },
+        ("asciidoctor", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.1-clean.adoc", "example.2-missing-include.adoc"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["include file not found:", "does-not-exist.adoc"],
+            trace_plan: ASCIIDOCTOR_TRACE_PLAN,
+        },
+        ("asciidoctor", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.adoc"],
+                exit_code: 2,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &["--backend=definitely-not-a-backend"],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["missing converter for backend 'definitely-not-a-backend'"],
+            trace_plan: ASCIIDOCTOR_TRACE_PLAN,
+        },
+        ("jq" | "asciidoctor", other) => {
             return Err(format!(
-                "jq fixture {other:?} has no real-tool contract declaration"
+                "{} fixture {other:?} has no real-tool contract declaration",
+                case.tool
             ));
         }
+        _ => return Ok(None),
     };
     Ok(Some(contract))
 }
@@ -368,6 +509,46 @@ fn fixture_selection_rejects_unknown_tools_and_cases() {
     .apply(catalog())
     .expect_err("unknown case must fail");
     assert!(unknown_case.contains("tool-a/issues"));
+}
+
+#[test]
+fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
+    let jq_multi = real_tool_contract_case(&named_fixture_case("jq", "multi-file-fragments"))
+        .expect("jq contract lookup")
+        .expect("jq contract");
+    assert_eq!(jq_multi.invocations.len(), 2);
+    assert!(
+        jq_multi
+            .invocations
+            .iter()
+            .all(|invocation| invocation.targets.len() == 1)
+    );
+    assert_eq!(jq_multi.targets().len(), 2);
+    assert_eq!(jq_multi.trace_plan, TracePlan::Direct);
+
+    let asciidoctor_multi =
+        real_tool_contract_case(&named_fixture_case("asciidoctor", "multi-file"))
+            .expect("Asciidoctor contract lookup")
+            .expect("Asciidoctor contract");
+    assert_eq!(asciidoctor_multi.invocations.len(), 1);
+    assert_eq!(asciidoctor_multi.invocations[0].targets.len(), 2);
+    assert_eq!(asciidoctor_multi.invocations[0].trace_exit_codes, &[0, 1]);
+    assert_eq!(asciidoctor_multi.trace_plan, ASCIIDOCTOR_TRACE_PLAN);
+
+    let asciidoctor_failure =
+        real_tool_contract_case(&named_fixture_case("asciidoctor", "operational-failure"))
+            .expect("Asciidoctor failure contract lookup")
+            .expect("Asciidoctor failure contract");
+    assert_eq!(
+        asciidoctor_failure.extra_args,
+        &["--backend=definitely-not-a-backend"]
+    );
+    assert_eq!(asciidoctor_failure.invocations[0].exit_code, 2);
+    assert_eq!(asciidoctor_failure.invocations[0].trace_exit_codes, &[1]);
+    assert_eq!(
+        asciidoctor_failure.outcome,
+        ExpectedOutcome::OperationalFailure
+    );
 }
 
 #[test]
@@ -1053,9 +1234,9 @@ fn finalize_fixture_outcome(
     mut outcome: FixtureOutcome,
 ) -> FixtureOutcome {
     let mut preserve_temporary_evidence = false;
-    let retain_success = case.tool == "jq"
-        && matches!(outcome.status, FixtureStatus::Pass)
-        && options.artifact_dir.is_some();
+    let retain_success = matches!(outcome.status, FixtureStatus::Pass)
+        && options.artifact_dir.is_some()
+        && matches!(real_tool_contract_case(case), Ok(Some(_)));
 
     if matches!(outcome.status, FixtureStatus::Fail(_)) || retain_success {
         let evidence = root.join("evidence");
@@ -1100,22 +1281,26 @@ fn run_fixture_case_inner(
     timeout: Duration,
     workspace: &FixtureWorkspace,
 ) -> Result<(), String> {
-    let jq_contract = jq_contract_case(case)?;
+    let contract = real_tool_contract_case(case)?;
     let config = write_pkl_config(
         &workspace.project,
         &case.tool,
         &case.pkl_property,
-        jq_contract.as_ref(),
+        contract.as_ref(),
     )?;
-    let input = build_fixture_input(case, surface, &workspace.project, jq_contract.as_ref())?;
+    let resolved_contract = contract
+        .as_ref()
+        .map(|contract| resolve_real_tool_contract(case, contract, &config, &workspace.project))
+        .transpose()?;
+    let input = build_fixture_input(case, surface, &workspace.project, contract.as_ref())?;
     std::fs::write(workspace.evidence.join("input.json"), input.bytes())
         .map_err(|error| format!("write input evidence: {error}"))?;
 
-    let jq_trace = jq_contract
+    let tool_trace = resolved_contract
         .as_ref()
-        .map(|_| JqTraceHarness::prepare(workspace, &case.spec))
+        .map(|contract| ToolTraceHarness::prepare(workspace, &contract.trace_program))
         .transpose()?;
-    let before = jq_contract
+    let before = contract
         .as_ref()
         .map(|_| TreeSnapshot::read(&workspace.project))
         .transpose()?;
@@ -1133,7 +1318,7 @@ fn run_fixture_case_inner(
         .arg(&config)
         .arg("post-tool-immediate");
     input.configure_command(&mut command);
-    if let Some(trace) = &jq_trace {
+    if let Some(trace) = &tool_trace {
         trace.configure(&mut command, "immediate-1")?;
     }
     let output = run_with_timeout(&mut command, input.bytes(), timeout, &workspace.evidence)
@@ -1145,23 +1330,28 @@ fn run_fixture_case_inner(
     .map_err(|error| format!("write exit evidence: {error}"))?;
     verify_outputs(case, surface, &workspace.project, &output)?;
 
-    let Some(contract) = jq_contract.as_ref() else {
+    let Some(contract) = contract.as_ref() else {
         return Ok(());
     };
-    let trace = jq_trace.as_ref().expect("jq contract has trace harness");
-    verify_jq_trace(
+    let resolved = resolved_contract
+        .as_ref()
+        .expect("real-tool contract was resolved");
+    let trace = tool_trace
+        .as_ref()
+        .expect("real-tool contract has trace harness");
+    verify_tool_trace(
         trace,
         "immediate-1",
-        contract,
+        resolved,
         &workspace.project,
         &workspace.evidence.join("immediate-1-trace.json"),
     )?;
     let after_first = TreeSnapshot::read(&workspace.project)?;
     let first_diff = before
         .as_ref()
-        .expect("jq contract has before snapshot")
+        .expect("real-tool contract has before snapshot")
         .diff(&after_first);
-    verify_jq_first_workspace_diff(contract, &first_diff)?;
+    verify_first_workspace_diff(case, contract, &first_diff)?;
     write_json(
         &workspace.evidence.join("workspace-after-immediate-1.json"),
         &after_first.as_json(),
@@ -1170,7 +1360,7 @@ fn run_fixture_case_inner(
         &workspace.evidence.join("workspace-immediate-1-diff.json"),
         &first_diff.as_json(),
     )?;
-    verify_jq_immediate_artifact(contract, &workspace.project)?;
+    verify_immediate_artifact(case, contract, &workspace.project)?;
 
     let repeat_dir = workspace.evidence.join("immediate-repeat");
     let mut repeat_command = Command::new(binary);
@@ -1187,11 +1377,11 @@ fn run_fixture_case_inner(
         format!("{}\n", repeated.status.code().unwrap_or(-1)),
     )
     .map_err(|error| format!("write repeated exit evidence: {error}"))?;
-    verify_repeated_output(&output, &repeated, &workspace.project)?;
-    verify_jq_trace(
+    verify_repeated_output(&case.tool, &output, &repeated, &workspace.project)?;
+    verify_tool_trace(
         trace,
         "immediate-2",
-        contract,
+        resolved,
         &workspace.project,
         &workspace.evidence.join("immediate-2-trace.json"),
     )?;
@@ -1199,7 +1389,8 @@ fn run_fixture_case_inner(
     let repeat_diff = after_first.diff(&after_second);
     if !repeat_diff.is_empty() {
         return Err(format!(
-            "jq immediate repeat was not idempotent: {}",
+            "{} immediate repeat was not idempotent: {}",
+            case.tool,
             repeat_diff.describe()
         ));
     }
@@ -1210,7 +1401,8 @@ fn run_fixture_case_inner(
 
     let mut deferred_contract = None;
     for attempt in 1..=2 {
-        let observed = run_jq_deferred_attempt(
+        let observed = run_deferred_attempt(
+            case,
             surface,
             timeout,
             workspace,
@@ -1218,13 +1410,15 @@ fn run_fixture_case_inner(
             &input,
             trace,
             contract,
+            resolved,
             attempt,
             &after_second,
         )?;
         if let Some(expected) = &deferred_contract {
             if expected != &observed {
                 return Err(format!(
-                    "jq deferred repeat changed its semantic evidence\nfirst:\n{}\nsecond:\n{}",
+                    "{} deferred repeat changed its semantic evidence\nfirst:\n{}\nsecond:\n{}",
+                    case.tool,
                     serde_json::to_string_pretty(expected)
                         .unwrap_or_else(|_| format!("{expected:?}")),
                     serde_json::to_string_pretty(&observed)
@@ -1250,25 +1444,27 @@ fn build_fixture_input(
     case: &FixtureCase,
     surface: ProtocolSurface,
     project: &Path,
-    jq_contract: Option<&JqContractCase>,
+    contract: Option<&RealToolContractCase>,
 ) -> Result<support::native_events::NativePostToolInput, String> {
     let mut builder = PostToolUseBuilder::new(surface, project, &case.entry).identity(
         "test-session",
         "test-turn",
         format!("{}-tool", case.tool),
     );
-    if let Some(contract) = jq_contract {
-        for (relative, _) in contract.targets {
+    if let Some(contract) = contract {
+        let targets = contract.targets();
+        for relative in &targets {
             let target = project.join(relative);
             if !target.is_file() {
                 return Err(format!(
-                    "jq contract target is not a fixture file: {target:?}"
+                    "{} contract target is not a fixture file: {target:?}",
+                    case.tool
                 ));
             }
         }
-        if contract.targets.len() > 1 {
+        if targets.len() > 1 {
             let mut patch = String::from("*** Begin Patch\n");
-            for (relative, _) in contract.targets {
+            for relative in targets {
                 patch.push_str(&format!("*** Update File: {relative}\n@@\n"));
             }
             patch.push_str("*** End Patch\n");
@@ -1282,46 +1478,350 @@ fn build_fixture_input(
     builder.build()
 }
 
-struct JqTraceHarness {
+#[derive(Debug)]
+struct ResolvedContract {
+    outer_program: String,
+    trace_program: String,
+    invocations: Vec<ResolvedInvocation>,
+    trace_invocations: Vec<ResolvedTraceInvocation>,
+}
+
+#[derive(Debug)]
+struct ResolvedInvocation {
+    targets: Vec<PathBuf>,
+    arguments: Vec<String>,
+    exit_code: i32,
+    outcome: ExpectedOutcome,
+}
+
+#[derive(Debug)]
+struct ResolvedTraceInvocation {
+    targets: Vec<PathBuf>,
+    arguments: Vec<String>,
+    exit_code: i32,
+}
+
+fn resolve_real_tool_contract(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    config: &Path,
+    project: &Path,
+) -> Result<ResolvedContract, String> {
+    let loaded = hookkit_pkl_config::load_explicit(config, project)
+        .map_err(|error| format!("reload evaluated fixture config {config:?}: {error}"))?;
+    if loaded.config.run != vec![case.tool.clone()] {
+        return Err(format!(
+            "{} contract config run list drifted: {:?}",
+            case.tool, loaded.config.run
+        ));
+    }
+    let spec = loaded
+        .config
+        .tools
+        .get(&case.tool)
+        .ok_or_else(|| format!("evaluated fixture config omitted tool {}", case.tool))?;
+    if !spec.workflows.is_empty() {
+        return Err(format!(
+            "{} contract expected a compatibility-translated deferred workflow, found explicit workflows",
+            case.tool
+        ));
+    }
+    let phase = spec.phases.get(contract.phase_id).ok_or_else(|| {
+        format!(
+            "{} contract phase {:?} is absent from evaluated config",
+            case.tool, contract.phase_id
+        )
+    })?;
+    if !phase.enabled || !matches!(phase.mode, PhaseMode::Verify | PhaseMode::CheckOnly) {
+        return Err(format!(
+            "{} contract phase {:?} is not an enabled checker",
+            case.tool, contract.phase_id
+        ));
+    }
+    if phase.writes != WriteBehavior::None {
+        return Err(format!(
+            "{} contract phase {:?} declares writes {:?}",
+            case.tool, contract.phase_id, phase.writes
+        ));
+    }
+    let expected_extra_args = contract
+        .extra_args
+        .iter()
+        .map(|argument| (*argument).to_owned())
+        .collect::<Vec<_>>();
+    if phase.extra_args != expected_extra_args {
+        return Err(format!(
+            "{} contract extra args mismatch: expected {:?}, evaluated {:?}",
+            case.tool, expected_extra_args, phase.extra_args
+        ));
+    }
+    match spec.phase_invocation {
+        InvocationGranularity::PerFile
+            if contract
+                .invocations
+                .iter()
+                .all(|invocation| invocation.targets.len() == 1) => {}
+        InvocationGranularity::Batch if contract.invocations.len() == 1 => {}
+        actual => {
+            return Err(format!(
+                "{} contract invocation groups do not match evaluated granularity {actual:?}",
+                case.tool
+            ));
+        }
+    }
+
+    let outer_program = phase
+        .program
+        .clone()
+        .unwrap_or_else(|| spec.executable.clone());
+    let mut invocations = Vec::with_capacity(contract.invocations.len());
+    let mut trace_program = None;
+    let mut trace_invocations = Vec::new();
+    for invocation in contract.invocations {
+        let targets = invocation
+            .targets
+            .iter()
+            .map(|relative| canonical_project(&project.join(relative)))
+            .collect::<Vec<_>>();
+        let arguments = render_expected_arguments(spec, phase, project, &targets)?;
+        let outcome = classify_expected_exit(phase, invocation.exit_code);
+        let (invocation_trace_program, mut invocation_traces) = resolve_trace_invocations(
+            contract.trace_plan,
+            &outer_program,
+            &arguments,
+            &targets,
+            invocation.trace_exit_codes,
+        )?;
+        if let Some(expected) = &trace_program {
+            if expected != &invocation_trace_program {
+                return Err(format!(
+                    "{} contract trace program changed between invocation groups",
+                    case.tool
+                ));
+            }
+        } else {
+            trace_program = Some(invocation_trace_program);
+        }
+        trace_invocations.append(&mut invocation_traces);
+        invocations.push(ResolvedInvocation {
+            targets,
+            arguments,
+            exit_code: invocation.exit_code,
+            outcome,
+        });
+    }
+    let aggregate = if invocations
+        .iter()
+        .any(|invocation| invocation.outcome == ExpectedOutcome::OperationalFailure)
+    {
+        ExpectedOutcome::OperationalFailure
+    } else if invocations
+        .iter()
+        .any(|invocation| invocation.outcome == ExpectedOutcome::Issues)
+    {
+        ExpectedOutcome::Issues
+    } else {
+        ExpectedOutcome::Clean
+    };
+    if aggregate != contract.outcome {
+        return Err(format!(
+            "{} contract expected {:?}, but evaluated exit policy classifies its invocations as {aggregate:?}",
+            case.tool, contract.outcome
+        ));
+    }
+    Ok(ResolvedContract {
+        outer_program,
+        trace_program: trace_program
+            .ok_or_else(|| format!("{} contract has no trace program", case.tool))?,
+        invocations,
+        trace_invocations,
+    })
+}
+
+fn resolve_trace_invocations(
+    plan: TracePlan,
+    outer_program: &str,
+    outer_arguments: &[String],
+    targets: &[PathBuf],
+    expected_exit_codes: &[i32],
+) -> Result<(String, Vec<ResolvedTraceInvocation>), String> {
+    match plan {
+        TracePlan::Direct => {
+            if expected_exit_codes.len() != 1 {
+                return Err(format!(
+                    "direct trace for {outer_program} must declare exactly one exit code"
+                ));
+            }
+            Ok((
+                outer_program.to_owned(),
+                vec![ResolvedTraceInvocation {
+                    targets: targets.to_vec(),
+                    arguments: outer_arguments.to_vec(),
+                    exit_code: expected_exit_codes[0],
+                }],
+            ))
+        }
+        TracePlan::TrailingOptionsAdapter {
+            preflight,
+            validation,
+        } => {
+            if !matches!(expected_exit_codes.len(), 1 | 2) {
+                return Err(format!(
+                    "failure-level adapter trace must declare one or two exit codes, got {expected_exit_codes:?}"
+                ));
+            }
+            let separator = outer_arguments
+                .iter()
+                .position(|argument| argument == "--")
+                .ok_or_else(|| {
+                    format!(
+                        "failure-level adapter {outer_program} command has no `--` separator: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(separator + 1)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "failure-level adapter {outer_program} command has no nested tool executable"
+                    )
+                })?;
+            let base_arguments = outer_arguments[(separator + 2)..].to_vec();
+            if base_arguments.iter().any(|argument| argument == "--") {
+                return Err(format!(
+                    "failure-level adapter nested command rejects inner `--`: {base_arguments:?}"
+                ));
+            }
+            let render_nested = |trailing_options: &[&str]| {
+                base_arguments
+                    .iter()
+                    .cloned()
+                    .chain(
+                        trailing_options
+                            .iter()
+                            .map(|argument| (*argument).to_owned()),
+                    )
+                    .collect::<Vec<_>>()
+            };
+            let mut traces = vec![ResolvedTraceInvocation {
+                targets: targets.to_vec(),
+                arguments: render_nested(preflight),
+                exit_code: expected_exit_codes[0],
+            }];
+            if let Some(exit_code) = expected_exit_codes.get(1) {
+                traces.push(ResolvedTraceInvocation {
+                    targets: targets.to_vec(),
+                    arguments: render_nested(validation),
+                    exit_code: *exit_code,
+                });
+            }
+            Ok((trace_program, traces))
+        }
+    }
+}
+
+fn render_expected_arguments(
+    spec: &ToolSpec,
+    phase: &Phase,
+    project: &Path,
+    targets: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    let mut arguments = Vec::new();
+    for element in &phase.argv {
+        match element {
+            ArgvElement::Literal(value) => arguments.push(value.clone()),
+            ArgvElement::Token(ArgToken::Files) => arguments.extend(
+                targets
+                    .iter()
+                    .map(|target| target.to_string_lossy().into_owned()),
+            ),
+            ArgvElement::Token(ArgToken::ExtraArgs) => {
+                arguments.extend(phase.extra_args.iter().cloned());
+            }
+            ArgvElement::Token(ArgToken::ProjectRoot | ArgToken::Workspace) => {
+                arguments.push(canonical_project(project).to_string_lossy().into_owned());
+            }
+            ArgvElement::Token(ArgToken::WorkspaceFiles) => {
+                arguments.extend(targets.iter().map(|target| {
+                    target
+                        .strip_prefix(project)
+                        .unwrap_or(target)
+                        .to_string_lossy()
+                        .into_owned()
+                }));
+            }
+            ArgvElement::Token(ArgToken::ToolExecutable) => {
+                arguments.push(spec.executable.clone());
+            }
+            ArgvElement::Token(ArgToken::WorkspaceIndicator) => {
+                return Err(format!(
+                    "{} fixture contract cannot render WorkspaceIndicator without a marker",
+                    spec.id
+                ));
+            }
+        }
+    }
+    Ok(arguments)
+}
+
+fn classify_expected_exit(phase: &Phase, code: i32) -> ExpectedOutcome {
+    if phase.exit_codes.clean.contains(&code) {
+        ExpectedOutcome::Clean
+    } else if phase.exit_codes.issues.contains(&code) {
+        ExpectedOutcome::Issues
+    } else if phase.exit_codes.failure.contains(&code) {
+        ExpectedOutcome::OperationalFailure
+    } else {
+        match phase.exit_codes.unexpected {
+            UnexpectedExitPolicy::Failure => ExpectedOutcome::OperationalFailure,
+            UnexpectedExitPolicy::Issues => ExpectedOutcome::Issues,
+        }
+    }
+}
+
+struct ToolTraceHarness {
     shim_dir: PathBuf,
     trace_root: PathBuf,
+    logical_program: String,
     real_program: PathBuf,
 }
 
-impl JqTraceHarness {
-    fn prepare(workspace: &FixtureWorkspace, spec: &ToolSpec) -> Result<Self, String> {
-        if spec.executable != "jq" {
+impl ToolTraceHarness {
+    fn prepare(workspace: &FixtureWorkspace, logical_program: &str) -> Result<Self, String> {
+        if Path::new(logical_program).components().count() != 1 || logical_program.is_empty() {
             return Err(format!(
-                "jq contract expected logical executable `jq`, got {:?}",
-                spec.executable
+                "real-tool trace requires a bare logical program name, got {logical_program:?}"
             ));
         }
-        let real_program = resolve_program(&spec.executable)
-            .ok_or_else(|| "jq contract could not resolve pinned jq before tracing".to_owned())?;
-        let real_program = real_program.canonicalize().map_err(|error| {
-            format!("canonicalize jq contract executable {real_program:?}: {error}")
+        let real_program = resolve_program(logical_program).ok_or_else(|| {
+            format!("contract could not resolve pinned {logical_program} before tracing")
         })?;
-        let shim_dir = workspace.root.join("jq-shim");
-        let trace_root = workspace.root.join("jq-traces");
+        let real_program = real_program.canonicalize().map_err(|error| {
+            format!("canonicalize contract executable {real_program:?}: {error}")
+        })?;
+        let shim_dir = workspace.root.join("tool-shim");
+        let trace_root = workspace.root.join("tool-traces");
         std::fs::create_dir_all(&shim_dir)
-            .map_err(|error| format!("create jq shim directory {shim_dir:?}: {error}"))?;
+            .map_err(|error| format!("create tool shim directory {shim_dir:?}: {error}"))?;
         std::fs::create_dir_all(&trace_root)
-            .map_err(|error| format!("create jq trace directory {trace_root:?}: {error}"))?;
-        let shim = shim_dir.join("jq");
-        std::fs::write(&shim, include_bytes!("support/jq-trace.sh"))
-            .map_err(|error| format!("write jq trace shim {shim:?}: {error}"))?;
+            .map_err(|error| format!("create tool trace directory {trace_root:?}: {error}"))?;
+        let shim = shim_dir.join(logical_program);
+        std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
+            .map_err(|error| format!("write tool trace shim {shim:?}: {error}"))?;
         #[cfg(unix)]
         {
             let mut permissions = std::fs::metadata(&shim)
-                .map_err(|error| format!("jq trace shim metadata {shim:?}: {error}"))?
+                .map_err(|error| format!("tool trace shim metadata {shim:?}: {error}"))?
                 .permissions();
             permissions.set_mode(0o755);
             std::fs::set_permissions(&shim, permissions)
-                .map_err(|error| format!("make jq trace shim executable {shim:?}: {error}"))?;
+                .map_err(|error| format!("make tool trace shim executable {shim:?}: {error}"))?;
         }
         Ok(Self {
             shim_dir,
             trace_root,
+            logical_program: logical_program.to_owned(),
             real_program,
         })
     }
@@ -1331,10 +1831,10 @@ impl JqTraceHarness {
         let path = std::env::join_paths(
             std::iter::once(self.shim_dir.clone()).chain(std::env::split_paths(&inherited)),
         )
-        .map_err(|error| format!("construct jq trace PATH: {error}"))?;
+        .map_err(|error| format!("construct tool trace PATH: {error}"))?;
         let trace_dir = self.trace_root.join(label);
         std::fs::create_dir_all(&trace_dir)
-            .map_err(|error| format!("create jq trace attempt {trace_dir:?}: {error}"))?;
+            .map_err(|error| format!("create tool trace attempt {trace_dir:?}: {error}"))?;
         command
             .env("PATH", path)
             .env("LANG", "C")
@@ -1343,18 +1843,18 @@ impl JqTraceHarness {
             .env("NO_COLOR", "1")
             .env("CLICOLOR", "0")
             .env("FORCE_COLOR", "0")
-            .env(JQ_TRACE_DIR_ENV, trace_dir)
-            .env(JQ_REAL_PROGRAM_ENV, &self.real_program)
-            .env(JQ_LOGICAL_PROGRAM_ENV, "jq")
-            .env(JQ_TRACE_SENTINEL_ENV, JQ_TRACE_SENTINEL);
+            .env(TOOL_TRACE_DIR_ENV, trace_dir)
+            .env(TOOL_REAL_PROGRAM_ENV, &self.real_program)
+            .env(TOOL_LOGICAL_PROGRAM_ENV, &self.logical_program)
+            .env(TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL);
         Ok(())
     }
 }
 
-fn verify_jq_trace(
-    harness: &JqTraceHarness,
+fn verify_tool_trace(
+    harness: &ToolTraceHarness,
     label: &str,
-    contract: &JqContractCase,
+    contract: &ResolvedContract,
     project: &Path,
     evidence_path: &Path,
 ) -> Result<(), String> {
@@ -1363,28 +1863,20 @@ fn verify_jq_trace(
         .into_iter()
         .filter(|entry| entry.path().is_dir())
         .collect::<Vec<_>>();
-    if invocations.len() != contract.targets.len() {
+    if invocations.len() != contract.trace_invocations.len() {
         return Err(format!(
-            "jq {label} expected {} per-file invocation(s), observed {} at {trace_dir:?}",
-            contract.targets.len(),
+            "{} {label} expected {} invocation(s), observed {} at {trace_dir:?}",
+            contract.trace_program,
+            contract.trace_invocations.len(),
             invocations.len()
         ));
     }
 
-    let mut expected = contract
-        .targets
-        .iter()
-        .map(|(relative, status)| {
-            let target = canonical_project(&project.join(relative));
-            (target, *status)
-        })
-        .collect::<Vec<_>>();
-    expected.sort_by(|left, right| left.0.cmp(&right.0));
     let cwd = canonical_project(project);
     let mut records = Vec::new();
-    for (invocation, (target, expected_status)) in invocations.iter().zip(expected) {
+    for (invocation, expected) in invocations.iter().zip(&contract.trace_invocations) {
         let record = invocation.path();
-        assert_record(&record, "logical-program", "jq")?;
+        assert_record(&record, "logical-program", &contract.trace_program)?;
         for (name, expected) in [
             ("LANG", "C"),
             ("LC_ALL", "C"),
@@ -1392,7 +1884,7 @@ fn verify_jq_trace(
             ("NO_COLOR", "1"),
             ("CLICOLOR", "0"),
             ("FORCE_COLOR", "0"),
-            (JQ_TRACE_SENTINEL_ENV, JQ_TRACE_SENTINEL),
+            (TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL),
         ] {
             assert_record(&record, &format!("env-{name}"), expected)?;
         }
@@ -1402,26 +1894,26 @@ fn verify_jq_trace(
             harness.real_program.to_string_lossy().as_ref(),
         )?;
         assert_record(&record, "cwd", cwd.to_string_lossy().trim_end())?;
-        let mut expected_args = vec!["empty".to_owned()];
-        expected_args.extend(contract.extra_args.iter().map(|value| (*value).to_owned()));
-        expected_args.push(target.to_string_lossy().into_owned());
-        assert_record(&record, "argc", &expected_args.len().to_string())?;
-        for (index, argument) in expected_args.iter().enumerate() {
+        assert_record(&record, "argc", &expected.arguments.len().to_string())?;
+        for (index, argument) in expected.arguments.iter().enumerate() {
             assert_record(&record, &format!("argv-{index}"), argument)?;
         }
-        assert_record(&record, "status", &expected_status.to_string())?;
+        assert_record(&record, "status", &expected.exit_code.to_string())?;
+        assert_record(&record, "execution", "pass-through")?;
         let program = read_record(&record, "program")?;
-        if Path::new(&program).file_name() != Some(OsStr::new("jq")) {
+        if Path::new(&program).file_name() != Some(OsStr::new(&contract.trace_program)) {
             return Err(format!(
-                "jq {label} trace recorded unexpected shim program {program:?}"
+                "{} {label} trace recorded unexpected shim program {program:?}",
+                contract.trace_program
             ));
         }
         records.push(serde_json::json!({
-            "logicalProgram": "jq",
+            "logicalProgram": contract.trace_program,
             "shimProgram": program,
             "realProgram": harness.real_program,
             "cwd": cwd,
-            "argv": expected_args,
+            "argv": expected.arguments,
+            "candidateFiles": expected.targets,
             "environment": {
                 "LANG": "C",
                 "LC_ALL": "C",
@@ -1429,9 +1921,10 @@ fn verify_jq_trace(
                 "NO_COLOR": "1",
                 "CLICOLOR": "0",
                 "FORCE_COLOR": "0",
-                JQ_TRACE_SENTINEL_ENV: JQ_TRACE_SENTINEL,
+                TOOL_TRACE_SENTINEL_ENV: TOOL_TRACE_SENTINEL,
             },
-            "exitCode": expected_status,
+            "execution": "pass-through",
+            "exitCode": expected.exit_code,
         }));
     }
     write_json(
@@ -1448,7 +1941,7 @@ fn read_record(record: &Path, name: &str) -> Result<String, String> {
     let path = record.join(name);
     std::fs::read_to_string(&path)
         .map(|value| value.trim_end().to_owned())
-        .map_err(|error| format!("read jq trace record {path:?}: {error}"))
+        .map_err(|error| format!("read tool trace record {path:?}: {error}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1576,33 +2069,41 @@ fn slash_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn verify_jq_first_workspace_diff(
-    contract: &JqContractCase,
+fn verify_first_workspace_diff(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
     diff: &TreeDiff,
 ) -> Result<(), String> {
     if !diff.removed.is_empty() || !diff.changed.is_empty() {
         return Err(format!(
-            "jq changed or removed existing workspace files: {}",
+            "{} changed or removed existing workspace files: {}",
+            case.tool,
             diff.describe()
         ));
     }
-    let expected_artifacts = usize::from(contract.outcome != JqExpectedOutcome::Clean);
+    let expected_artifacts = usize::from(contract.outcome != ExpectedOutcome::Clean);
+    let diagnostics = format!(".velvet-glove/{}-agent-hook", case.tool);
     if diff.added.len() != expected_artifacts
         || diff.added.iter().any(|path| {
-            !path.starts_with(Path::new(".velvet-glove/jq-agent-hook"))
+            !path.starts_with(Path::new(&diagnostics))
                 || path.extension() != Some(OsStr::new("txt"))
         })
     {
         return Err(format!(
-            "jq workspace diff contained unexpected additions: {}",
+            "{} workspace diff contained unexpected additions: {}",
+            case.tool,
             diff.describe()
         ));
     }
     Ok(())
 }
 
-fn verify_jq_immediate_artifact(contract: &JqContractCase, project: &Path) -> Result<(), String> {
-    let directory = project.join(".velvet-glove/jq-agent-hook");
+fn verify_immediate_artifact(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    project: &Path,
+) -> Result<(), String> {
+    let directory = project.join(format!(".velvet-glove/{}-agent-hook", case.tool));
     let artifacts = if directory.is_dir() {
         sorted_entries(&directory)?
             .into_iter()
@@ -1612,38 +2113,63 @@ fn verify_jq_immediate_artifact(contract: &JqContractCase, project: &Path) -> Re
     } else {
         Vec::new()
     };
-    let expected = usize::from(contract.outcome != JqExpectedOutcome::Clean);
+    let expected = usize::from(contract.outcome != ExpectedOutcome::Clean);
     if artifacts.len() != expected {
         return Err(format!(
-            "jq immediate expected {expected} diagnostic artifact(s), found {artifacts:?}"
+            "{} immediate expected {expected} diagnostic artifact(s), found {artifacts:?}",
+            case.tool
         ));
     }
     let Some(path) = artifacts.first() else {
         return Ok(());
     };
     let contents = std::fs::read_to_string(path)
-        .map_err(|error| format!("read jq immediate artifact {path:?}: {error}"))?;
+        .map_err(|error| format!("read {} immediate artifact {path:?}: {error}", case.tool))?;
     let classification = match contract.outcome {
-        JqExpectedOutcome::Clean => unreachable!(),
-        JqExpectedOutcome::Issues => "classification: Some(Issues)",
-        JqExpectedOutcome::OperationalFailure => "classification: Some(Failure)",
+        ExpectedOutcome::Clean => unreachable!(),
+        ExpectedOutcome::Issues => "classification: Some(Issues)",
+        ExpectedOutcome::OperationalFailure => "classification: Some(Failure)",
     };
     if !contents.contains(classification) {
         return Err(format!(
-            "jq immediate artifact lacks {classification:?}:\n{contents}"
+            "{} immediate artifact lacks {classification:?}:\n{contents}",
+            case.tool
         ));
     }
-    if let Some(needle) = contract.diagnostic_contains {
+    verify_stable_diagnostics(case, contract, &contents, "immediate artifact")?;
+    Ok(())
+}
+
+fn verify_stable_diagnostics(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    contents: &str,
+    context: &str,
+) -> Result<(), String> {
+    for needle in contract.diagnostic_contains {
         if !contents.contains(needle) {
             return Err(format!(
-                "jq immediate artifact lacks stable diagnostic {needle:?}:\n{contents}"
+                "{} {context} lacks stable diagnostic {needle:?}:\n{contents}",
+                case.tool
             ));
+        }
+    }
+    if case.tool == "asciidoctor" {
+        if let Some(primary) = contract.diagnostic_contains.first() {
+            let occurrences = contents.matches(primary).count();
+            if occurrences != 1 {
+                return Err(format!(
+                    "{} {context} emitted its primary diagnostic {occurrences} times, expected exactly once: {primary:?}\n{contents}",
+                    case.tool
+                ));
+            }
         }
     }
     Ok(())
 }
 
 fn verify_repeated_output(
+    tool: &str,
     first: &BoundedOutput,
     second: &BoundedOutput,
     project: &Path,
@@ -1658,32 +2184,38 @@ fn verify_repeated_output(
         || first_stderr != second_stderr
     {
         return Err(format!(
-            "jq immediate repeat changed its observable result\nfirst stdout:\n{first_stdout}\nsecond stdout:\n{second_stdout}\nfirst stderr:\n{first_stderr}\nsecond stderr:\n{second_stderr}"
+            "{tool} immediate repeat changed its observable result\nfirst stdout:\n{first_stdout}\nsecond stdout:\n{second_stdout}\nfirst stderr:\n{first_stderr}\nsecond stderr:\n{second_stderr}"
         ));
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_jq_deferred_attempt(
+fn run_deferred_attempt(
+    case: &FixtureCase,
     surface: ProtocolSurface,
     timeout: Duration,
     workspace: &FixtureWorkspace,
     config: &Path,
     immediate_input: &support::native_events::NativePostToolInput,
-    trace: &JqTraceHarness,
-    contract: &JqContractCase,
+    trace: &ToolTraceHarness,
+    contract: &RealToolContractCase,
+    resolved: &ResolvedContract,
     attempt: usize,
     project_baseline: &TreeSnapshot,
 ) -> Result<JsonValue, String> {
     let state_dir = workspace.root.join(format!("deferred-state-{attempt}"));
-    seed_jq_pending_targets(&state_dir, surface, &workspace.project, contract)?;
-    let turn_input = jq_turn_completion_input(surface, &workspace.project)?;
+    seed_pending_targets(case, &state_dir, surface, &workspace.project, contract)?;
+    let turn_input = turn_completion_input(case, surface, &workspace.project)?;
     let evidence = workspace.evidence.join(format!("deferred-{attempt}"));
-    std::fs::create_dir_all(&evidence)
-        .map_err(|error| format!("create jq deferred evidence {evidence:?}: {error}"))?;
+    std::fs::create_dir_all(&evidence).map_err(|error| {
+        format!(
+            "create {} deferred evidence {evidence:?}: {error}",
+            case.tool
+        )
+    })?;
     std::fs::write(evidence.join("input.json"), &turn_input)
-        .map_err(|error| format!("write jq deferred input evidence: {error}"))?;
+        .map_err(|error| format!("write {} deferred input evidence: {error}", case.tool))?;
 
     let binary = env!("CARGO_BIN_EXE_velvet-glove");
     let mut command = Command::new(binary);
@@ -1702,10 +2234,11 @@ fn run_jq_deferred_attempt(
         evidence.join("exit.txt"),
         format!("{}\n", output.status.code().unwrap_or(-1)),
     )
-    .map_err(|error| format!("write jq deferred exit evidence: {error}"))?;
+    .map_err(|error| format!("write {} deferred exit evidence: {error}", case.tool))?;
     if !output.status.success() {
         return Err(format!(
-            "jq deferred {surface} attempt {attempt} exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            "{} deferred {surface} attempt {attempt} exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            case.tool,
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
@@ -1713,15 +2246,16 @@ fn run_jq_deferred_attempt(
     }
     let native: JsonValue = serde_json::from_slice(&output.stdout).map_err(|error| {
         format!(
-            "parse jq deferred {surface} attempt {attempt} native output: {error}\n{}",
+            "parse {} deferred {surface} attempt {attempt} native output: {error}\n{}",
+            case.tool,
             String::from_utf8_lossy(&output.stdout)
         )
     })?;
-    verify_jq_deferred_native(contract, &native, surface)?;
-    verify_jq_trace(
+    verify_deferred_native(case, contract, &native, surface)?;
+    verify_tool_trace(
         trace,
         &trace_label,
-        contract,
+        resolved,
         &workspace.project,
         &workspace
             .evidence
@@ -1731,16 +2265,25 @@ fn run_jq_deferred_attempt(
     let summaries = files_named(&state_dir, "summary.json");
     if summaries.len() != 1 {
         return Err(format!(
-            "jq deferred {surface} attempt {attempt} expected one summary, found {summaries:?}"
+            "{} deferred {surface} attempt {attempt} expected one summary, found {summaries:?}",
+            case.tool
         ));
     }
     let summary_path = &summaries[0];
-    let summary: JsonValue = serde_json::from_slice(
-        &std::fs::read(summary_path)
-            .map_err(|error| format!("read jq deferred summary {summary_path:?}: {error}"))?,
-    )
-    .map_err(|error| format!("parse jq deferred summary {summary_path:?}: {error}"))?;
-    let semantic = verify_jq_deferred_summary(contract, &workspace.project, &summary)?;
+    let summary: JsonValue =
+        serde_json::from_slice(&std::fs::read(summary_path).map_err(|error| {
+            format!(
+                "read {} deferred summary {summary_path:?}: {error}",
+                case.tool
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "parse {} deferred summary {summary_path:?}: {error}",
+                case.tool
+            )
+        })?;
+    let semantic = verify_deferred_summary(case, contract, resolved, &workspace.project, &summary)?;
     write_json(
         &workspace
             .evidence
@@ -1758,7 +2301,8 @@ fn run_jq_deferred_attempt(
     let diff = project_baseline.diff(&after);
     if !diff.is_empty() {
         return Err(format!(
-            "jq deferred {surface} attempt {attempt} mutated the fixture workspace: {}",
+            "{} deferred {surface} attempt {attempt} mutated the fixture workspace: {}",
+            case.tool,
             diff.describe()
         ));
     }
@@ -1771,41 +2315,51 @@ fn run_jq_deferred_attempt(
     Ok(semantic)
 }
 
-fn seed_jq_pending_targets(
+fn seed_pending_targets(
+    case: &FixtureCase,
     state_dir: &Path,
     surface: ProtocolSurface,
     project: &Path,
-    contract: &JqContractCase,
+    contract: &RealToolContractCase,
 ) -> Result<(), String> {
     let state = hookkit_session_state::SessionState::open(
         surface.harness_id(),
         hookkit_session_state::SessionIdentity::Session("test-session".into()),
         hookkit_session_state::StateRoot::new(state_dir),
     )
-    .map_err(|error| format!("open jq deferred state for {surface}: {error}"))?;
-    let store = hookkit_file_activity::FileActivityStore::from_state(state)
-        .map_err(|error| format!("open jq file-activity state for {surface}: {error}"))?;
+    .map_err(|error| format!("open {} deferred state for {surface}: {error}", case.tool))?;
+    let store = hookkit_file_activity::FileActivityStore::from_state(state).map_err(|error| {
+        format!(
+            "open {} file-activity state for {surface}: {error}",
+            case.tool
+        )
+    })?;
     let targets = contract
-        .targets
-        .iter()
-        .map(|(relative, _)| {
+        .targets()
+        .into_iter()
+        .map(|relative| {
             let path = canonical_project(&project.join(relative));
             hookkit_core::Utf8PathBuf::from_path_buf(path.clone())
                 .map(hookkit_file_activity::FileActivityTarget::exact)
-                .map_err(|path| format!("jq deferred target is not UTF-8: {path:?}"))
+                .map_err(|path| format!("{} deferred target is not UTF-8: {path:?}", case.tool))
         })
         .collect::<Result<Vec<_>, _>>()?;
     store
-        .requeue_targets("jq-real-tool-fixture", targets)
+        .requeue_targets(&format!("{}-real-tool-fixture", case.tool), targets)
         .map(|_| ())
-        .map_err(|error| format!("seed jq deferred targets for {surface}: {error}"))
+        .map_err(|error| format!("seed {} deferred targets for {surface}: {error}", case.tool))
 }
 
-fn jq_turn_completion_input(surface: ProtocolSurface, project: &Path) -> Result<Vec<u8>, String> {
+fn turn_completion_input(
+    case: &FixtureCase,
+    surface: ProtocolSurface,
+    project: &Path,
+) -> Result<Vec<u8>, String> {
+    let transcript = format!("/tmp/velvet-glove-{}-fixture.jsonl", case.tool);
     let value = match surface {
         ProtocolSurface::Claude => serde_json::json!({
             "session_id": "test-session",
-            "transcript_path": "/tmp/velvet-glove-jq-fixture.jsonl",
+            "transcript_path": transcript,
             "cwd": project,
             "hook_event_name": "Stop",
             "stop_hook_active": false,
@@ -1813,7 +2367,7 @@ fn jq_turn_completion_input(surface: ProtocolSurface, project: &Path) -> Result<
         }),
         ProtocolSurface::Codex => serde_json::json!({
             "session_id": "test-session",
-            "transcript_path": "/tmp/velvet-glove-jq-fixture.jsonl",
+            "transcript_path": transcript,
             "cwd": project,
             "hook_event_name": "Stop",
             "model": "fixture-model",
@@ -1823,41 +2377,51 @@ fn jq_turn_completion_input(surface: ProtocolSurface, project: &Path) -> Result<
             "last_assistant_message": "done",
         }),
         ProtocolSurface::Antigravity => {
-            return Err("jq real-tool lane does not execute Antigravity".to_owned());
+            return Err(format!(
+                "{} real-tool lane does not execute Antigravity",
+                case.tool
+            ));
         }
     };
     serde_json::to_vec(&value)
-        .map_err(|error| format!("serialize jq deferred {surface} input: {error}"))
+        .map_err(|error| format!("serialize {} deferred {surface} input: {error}", case.tool))
 }
 
-fn verify_jq_deferred_native(
-    contract: &JqContractCase,
+fn verify_deferred_native(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
     native: &JsonValue,
     surface: ProtocolSurface,
 ) -> Result<(), String> {
     match contract.outcome {
-        JqExpectedOutcome::Clean => {
+        ExpectedOutcome::Clean => {
             if native.get("decision").is_some() {
                 return Err(format!(
-                    "jq clean deferred {surface} unexpectedly blocked: {native}"
+                    "{} clean deferred {surface} unexpectedly blocked: {native}",
+                    case.tool
                 ));
             }
             let message = native
                 .get("systemMessage")
                 .and_then(JsonValue::as_str)
                 .ok_or_else(|| {
-                    format!("jq clean deferred {surface} lacked systemMessage: {native}")
+                    format!(
+                        "{} clean deferred {surface} lacked systemMessage: {native}",
+                        case.tool
+                    )
                 })?;
             if !message.contains("Checked") || !message.contains("clean") {
                 return Err(format!(
-                    "jq clean deferred {surface} had unexpected systemMessage: {message:?}"
+                    "{} clean deferred {surface} had unexpected systemMessage: {message:?}",
+                    case.tool
                 ));
             }
         }
-        JqExpectedOutcome::Issues | JqExpectedOutcome::OperationalFailure => {
+        ExpectedOutcome::Issues | ExpectedOutcome::OperationalFailure => {
             if native.get("decision").and_then(JsonValue::as_str) != Some("block") {
                 return Err(format!(
-                    "jq deferred {surface} expected a native block: {native}"
+                    "{} deferred {surface} expected a native block: {native}",
+                    case.tool
                 ));
             }
         }
@@ -1865,100 +2429,109 @@ fn verify_jq_deferred_native(
     Ok(())
 }
 
-fn verify_jq_deferred_summary(
-    contract: &JqContractCase,
+fn verify_deferred_summary(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    resolved: &ResolvedContract,
     project: &Path,
     summary: &JsonValue,
 ) -> Result<JsonValue, String> {
-    let expected_status = match contract.outcome {
-        JqExpectedOutcome::Clean => "clean",
-        JqExpectedOutcome::Issues => "issues",
-        JqExpectedOutcome::OperationalFailure => "operational-failure",
-    };
+    let expected_status = contract.outcome.summary_status();
     require_json_string(summary, "status", expected_status)?;
     let expected_targets = contract
-        .targets
-        .iter()
-        .map(|(relative, status)| (canonical_project(&project.join(relative)), *status))
-        .collect::<BTreeMap<_, _>>();
-    require_path_array(summary, "candidateFiles", expected_targets.keys())?;
+        .targets()
+        .into_iter()
+        .map(|relative| canonical_project(&project.join(relative)))
+        .collect::<Vec<_>>();
+    require_path_array(summary, "candidateFiles", &expected_targets)?;
 
     let result = require_json_object(summary, "result")?;
     let artifacts = require_json_object_value(result, "artifacts")?;
-    if artifacts.len() != expected_targets.len() {
+    if artifacts.len() != resolved.invocations.len() {
         return Err(format!(
-            "jq deferred expected {} artifacts, got {}: {artifacts:?}",
-            expected_targets.len(),
+            "{} deferred expected {} artifacts, got {}: {artifacts:?}",
+            case.tool,
+            resolved.invocations.len(),
             artifacts.len()
         ));
     }
     let reports = require_json_object_value(result, "reports")?;
-    if reports.len() != expected_targets.len() {
+    if reports.len() != resolved.invocations.len() {
         return Err(format!(
-            "jq deferred expected {} reports, got {}: {reports:?}",
-            expected_targets.len(),
+            "{} deferred expected {} reports, got {}: {reports:?}",
+            case.tool,
+            resolved.invocations.len(),
             reports.len()
         ));
     }
 
     let cwd = canonical_project(project);
     let mut artifact_contracts = Vec::new();
-    for (target, exit_code) in &expected_targets {
-        let expected_classification = match *exit_code {
-            0 => "clean",
-            5 => "issues",
-            2 => "failure",
-            other => {
-                return Err(format!("unsupported jq fixture exit code {other}"));
-            }
-        };
+    for invocation in &resolved.invocations {
+        let expected_classification = invocation.outcome.artifact_classification();
         let artifact = artifacts
             .values()
-            .find(|artifact| json_path_array_equals(artifact, "candidateFiles", [target]))
-            .ok_or_else(|| format!("jq deferred artifact missing for {target:?}: {artifacts:?}"))?;
-        require_json_string(artifact, "toolId", "jq")?;
-        require_json_string(artifact, "workflowId", "verify")?;
+            .find(|artifact| {
+                json_path_array_equals(artifact, "candidateFiles", &invocation.targets)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "{} deferred artifact missing for {:?}: {artifacts:?}",
+                    case.tool, invocation.targets
+                )
+            })?;
+        require_json_string(artifact, "toolId", &case.tool)?;
+        require_json_string(artifact, "workflowId", contract.phase_id)?;
         require_json_string(artifact, "phase", "initial-check")?;
         require_json_string(artifact, "classification", expected_classification)?;
-        require_json_i64(artifact, "exitCode", i64::from(*exit_code))?;
-        require_json_string(artifact, "program", "jq")?;
-        let mut expected_args = vec!["empty".to_owned()];
-        expected_args.extend(contract.extra_args.iter().map(|value| (*value).to_owned()));
-        expected_args.push(target.to_string_lossy().into_owned());
-        require_string_array(artifact, "arguments", &expected_args)?;
+        require_json_i64(artifact, "exitCode", i64::from(invocation.exit_code))?;
+        require_json_string(artifact, "program", &resolved.outer_program)?;
+        require_string_array(artifact, "arguments", &invocation.arguments)?;
         require_json_path(artifact, "workingDirectory", &cwd)?;
-        require_path_array(artifact, "files", [target])?;
-        require_path_array(artifact, "candidateFiles", [target])?;
+        require_path_array(artifact, "files", &invocation.targets)?;
+        require_path_array(artifact, "candidateFiles", &invocation.targets)?;
         require_empty_array(artifact, "changedFiles")?;
         let contents = artifact
             .get("contents")
             .and_then(JsonValue::as_str)
-            .ok_or_else(|| format!("jq deferred artifact lacks text contents: {artifact}"))?;
-        if let Some(needle) = contract.diagnostic_contains {
-            if !contents.contains(needle) {
-                return Err(format!(
-                    "jq deferred artifact for {target:?} lacks {needle:?}:\n{contents}"
-                ));
-            }
-        }
+            .ok_or_else(|| {
+                format!(
+                    "{} deferred artifact lacks text contents: {artifact}",
+                    case.tool
+                )
+            })?;
+        verify_stable_diagnostics(
+            case,
+            contract,
+            contents,
+            &format!("deferred artifact for {:?}", invocation.targets),
+        )?;
         let absolute = artifact
             .get("absolutePath")
             .and_then(JsonValue::as_str)
-            .ok_or_else(|| format!("jq deferred artifact lacks absolutePath: {artifact}"))?;
-        let on_disk = std::fs::read_to_string(absolute)
-            .map_err(|error| format!("read jq deferred artifact {absolute:?}: {error}"))?;
+            .ok_or_else(|| {
+                format!(
+                    "{} deferred artifact lacks absolutePath: {artifact}",
+                    case.tool
+                )
+            })?;
+        let on_disk = std::fs::read_to_string(absolute).map_err(|error| {
+            format!("read {} deferred artifact {absolute:?}: {error}", case.tool)
+        })?;
         if on_disk != contents {
             return Err(format!(
-                "jq deferred artifact contents differ from {absolute:?}"
+                "{} deferred artifact contents differ from {absolute:?}",
+                case.tool
             ));
         }
         artifact_contracts.push(serde_json::json!({
-            "target": target,
+            "target": (invocation.targets.len() == 1).then(|| &invocation.targets[0]),
+            "targets": invocation.targets,
             "phase": "initial-check",
             "classification": expected_classification,
-            "exitCode": exit_code,
-            "program": "jq",
-            "arguments": expected_args,
+            "exitCode": invocation.exit_code,
+            "program": resolved.outer_program,
+            "arguments": invocation.arguments,
             "workingDirectory": cwd,
             "changedFiles": [],
             "contents": contents,
@@ -1966,63 +2539,82 @@ fn verify_jq_deferred_summary(
 
         let report = reports
             .values()
-            .find(|report| json_path_array_equals(report, "candidateFiles", [target]))
-            .ok_or_else(|| format!("jq deferred report missing for {target:?}: {reports:?}"))?;
-        require_json_string(report, "toolId", "jq")?;
-        require_json_string(report, "workflowId", "verify")?;
-        require_path_array(report, "candidateFiles", [target])?;
+            .find(|report| json_path_array_equals(report, "candidateFiles", &invocation.targets))
+            .ok_or_else(|| {
+                format!(
+                    "{} deferred report missing for {:?}: {reports:?}",
+                    case.tool, invocation.targets
+                )
+            })?;
+        require_json_string(report, "toolId", &case.tool)?;
+        require_json_string(report, "workflowId", contract.phase_id)?;
+        require_path_array(report, "candidateFiles", &invocation.targets)?;
         require_empty_array(report, "changedFiles")?;
         require_json_bool(report, "fixAttempted", false)?;
-        require_json_bool(report, "conservativeAttribution", false)?;
-        let expected_check = match *exit_code {
-            0 => Some("clean"),
-            5 => Some("issues"),
-            2 => None,
-            _ => unreachable!(),
+        require_json_bool(
+            report,
+            "conservativeAttribution",
+            invocation.targets.len() > 1,
+        )?;
+        let expected_check = match invocation.outcome {
+            ExpectedOutcome::Clean => Some("clean"),
+            ExpectedOutcome::Issues => Some("issues"),
+            ExpectedOutcome::OperationalFailure => None,
         };
         require_optional_json_string(report, "initialCheck", expected_check)?;
         require_optional_json_string(report, "finalCheck", expected_check)?;
     }
-    artifact_contracts
-        .sort_by(|left, right| left["target"].as_str().cmp(&right["target"].as_str()));
-
     let files = require_json_object_value(result, "files")?;
     let operational = require_json_object_value(result, "operationalProblems")?;
     match contract.outcome {
-        JqExpectedOutcome::Clean | JqExpectedOutcome::Issues => {
+        ExpectedOutcome::Clean | ExpectedOutcome::Issues => {
             if files.len() != expected_targets.len() || !operational.is_empty() {
                 return Err(format!(
-                    "jq deferred normal result shape mismatch: files={files:?}, operational={operational:?}"
+                    "{} deferred normal result shape mismatch: files={files:?}, operational={operational:?}",
+                    case.tool
                 ));
             }
-            let status = if contract.outcome == JqExpectedOutcome::Clean {
+            let status = if contract.outcome == ExpectedOutcome::Clean {
                 "clean"
             } else {
                 "manual-fixes-needed"
             };
-            for target in expected_targets.keys() {
+            for target in &expected_targets {
                 let file = files
                     .values()
                     .find(|file| json_path_equals(file, "path", target))
-                    .ok_or_else(|| format!("jq deferred file result missing for {target:?}"))?;
+                    .ok_or_else(|| {
+                        format!("{} deferred file result missing for {target:?}", case.tool)
+                    })?;
                 require_json_string(file, "status", status)?;
                 require_json_bool(file, "changedByRunner", false)?;
             }
         }
-        JqExpectedOutcome::OperationalFailure => {
-            if !files.is_empty() || operational.len() != expected_targets.len() {
+        ExpectedOutcome::OperationalFailure => {
+            let failed_invocations = resolved
+                .invocations
+                .iter()
+                .filter(|invocation| invocation.outcome == ExpectedOutcome::OperationalFailure)
+                .collect::<Vec<_>>();
+            if !files.is_empty() || operational.len() != failed_invocations.len() {
                 return Err(format!(
-                    "jq deferred operational shape mismatch: files={files:?}, operational={operational:?}"
+                    "{} deferred operational shape mismatch: files={files:?}, operational={operational:?}",
+                    case.tool
                 ));
             }
-            for target in expected_targets.keys() {
+            for invocation in failed_invocations {
                 let problem = operational
                     .values()
-                    .find(|problem| json_path_array_equals(problem, "affectedFiles", [target]))
+                    .find(|problem| {
+                        json_path_array_equals(problem, "affectedFiles", &invocation.targets)
+                    })
                     .ok_or_else(|| {
-                        format!("jq deferred operational problem missing for {target:?}")
+                        format!(
+                            "{} deferred operational problem missing for {:?}",
+                            case.tool, invocation.targets
+                        )
                     })?;
-                require_json_string(problem, "toolId", "jq")?;
+                require_json_string(problem, "toolId", &case.tool)?;
                 require_json_string(problem, "phase", "initial-check")?;
             }
         }
@@ -2030,7 +2622,7 @@ fn verify_jq_deferred_summary(
 
     Ok(serde_json::json!({
         "status": expected_status,
-        "targets": expected_targets.keys().collect::<Vec<_>>(),
+        "targets": expected_targets,
         "artifacts": artifact_contracts,
         "fileStatuses": files.values().map(|file| serde_json::json!({
             "path": file.get("path"),
@@ -2343,12 +2935,12 @@ fn write_pkl_config(
     project: &Path,
     tool: &str,
     property: &str,
-    jq_contract: Option<&JqContractCase>,
+    contract: Option<&RealToolContractCase>,
 ) -> Result<PathBuf, String> {
     let config_dir = project.join(".velvet-glove");
     std::fs::create_dir_all(&config_dir)
         .map_err(|error| format!("create config directory {config_dir:?}: {error}"))?;
-    let tool_definition = if let Some(contract) = jq_contract {
+    let tool_definition = if let Some(contract) = contract {
         let extra_args = contract
             .extra_args
             .iter()
@@ -2358,16 +2950,17 @@ fn write_pkl_config(
         format!(
             r#"(Builtins.{property}) {{
     phases {{
-      ["verify"] {{
+      ["{phase_id}"] {{
         extraArgs = new Listing<String> {{ {extra_args} }}
       }}
     }}
-  }}"#
+  }}"#,
+            phase_id = contract.phase_id,
         )
     } else {
         format!("Builtins.{property}")
     };
-    let contract_settings = if jq_contract.is_some() {
+    let contract_settings = if contract.is_some() {
         "  jobs = 1\n  fileActivity { filesystemMtime = false }\n"
     } else {
         ""

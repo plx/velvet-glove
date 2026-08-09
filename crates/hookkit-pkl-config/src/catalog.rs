@@ -348,6 +348,8 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
         invocations: vec![invocation(spec.phase_invocation).into()],
         limitation: if spec.id == "jq" {
             "The per-file parse check accepts an empty stream and multiple whitespace-separated top-level JSON values; exact-one-document validation is not claimed.".into()
+        } else if spec.id == "asciidoctor" {
+            "The adapter rejects early-exit or diagnostic-suppression arguments, then a silent FATAL-threshold preflight maps CLI/configuration failures to exit 2 before the WARNING-threshold pass maps document diagnostics to exit 1; safe mode rejects ancestor includes, and batch inputs remain independent documents.".into()
         } else if mutators.is_empty() {
             if spec.phase_invocation == InvocationGranularity::Batch {
                 "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
@@ -464,6 +466,7 @@ fn command_text(program: &str, argv: &[ArgvElement]) -> String {
 
 fn argv_text(element: &ArgvElement) -> String {
     match element {
+        ArgvElement::Literal(value) if value.contains('\n') => "<inline-script>".into(),
         ArgvElement::Literal(value) => value.replace('`', "'").replace('|', "\\|"),
         ArgvElement::Token(token) => format!(
             "{{{}}}",

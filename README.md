@@ -139,8 +139,8 @@ just check
 # Apple silicon, mise 2026.5.15).
 just tool-case jq multi-file-fragments
 
-# Seven behavior-rich contracts: data formats, Node, Python, Go, Rust, Ruby,
-# and native macOS.
+# Eight behavior-rich contracts across data formats, Node, Python, Go, Rust,
+# Ruby, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -162,6 +162,14 @@ whitespace-separated top-level values rather than requiring exactly one JSON
 document. The exact artifact URLs, SHA-256 digests, status mapping, and
 provenance identity are in the
 [pinned environment guide](docs/pinned-tool-environments.md#jq-validation-contract).
+
+The Ruby lane also pins the dependency-free Asciidoctor 2.0.26 gem by SHA-256.
+Its checked command runs in safe mode through a small Ruby preflight adapter:
+document warnings and nonfatal errors remain source issues, while Asciidoctor
+usage and configuration failures are remapped to operational failures despite
+the upstream CLI using status one for both. Exact provenance, batch behavior,
+and the adapter and safe-mode limitations are in the
+[Asciidoctor contract](docs/pinned-tool-environments.md#asciidoctor-validation-contract).
 
 Run `scripts/regen-licenses.sh` after dependency changes. The generated
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) is checked in alongside

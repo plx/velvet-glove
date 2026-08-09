@@ -92,6 +92,59 @@ fn jq_uses_per_file_parse_validation_and_distinguishes_tool_failures() {
     assert_exit_codes(&verify.exit_codes, &[0], &[5], &[1, 2, 3, 4]);
 }
 
+#[test]
+fn asciidoctor_adapter_distinguishes_document_issues_from_cli_failures() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let asciidoctor = spec(&specs, "asciidoctor");
+
+    assert_eq!(asciidoctor.phase_invocation, InvocationGranularity::Batch);
+    assert!(
+        asciidoctor.workflows.is_empty(),
+        "asciidoctor uses compatibility translation"
+    );
+    let verify = asciidoctor
+        .phases
+        .get("verify")
+        .expect("asciidoctor verify phase");
+    assert_eq!(verify.program.as_deref(), Some("ruby"));
+    assert_eq!(verify.argv.len(), 7);
+    assert_eq!(verify.argv[0], literal("-ropen3"));
+    assert_eq!(verify.argv[1], literal("-e"));
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("asciidoctor adapter must be a literal Ruby program")
+    };
+    for required in [
+        "Open3.capture3",
+        "--safe-mode=safe",
+        "--failure-level=FATAL",
+        "--failure-level=WARNING",
+        "--out-file=/dev/null",
+        "argument == \"--\"",
+        "short = argument.start_with?(\"-\") && !argument.start_with?(\"--\")",
+        "argument.include?(\"h\")",
+        "argument.include?(\"V\")",
+        "argument.include?(\"v\")",
+        "argument.include?(\"q\")",
+        "argument.include?(\"?\")",
+        "argument.start_with?(\"--h\")",
+        "argument.start_with?(\"--v\")",
+        "argument.start_with?(\"--q\")",
+        "would bypass validation or diagnostic evidence",
+        "exit 2",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "asciidoctor adapter omits {required:?}"
+        );
+    }
+    assert_eq!(verify.argv[3], literal("--"));
+    assert_eq!(verify.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[5], token(ArgToken::ExtraArgs));
+    assert_eq!(verify.argv[6], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+}
+
 fn spec(specs: &std::collections::BTreeMap<String, ToolSpec>, key: &str) -> ToolSpec {
     specs
         .get(key)

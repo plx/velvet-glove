@@ -1,0 +1,35 @@
+warning: Asciidoctor: issues remain; diagnostics: <workspace>/.velvet-glove/asciidoctor-agent-hook/test-session_test-turn_asciidoctor-tool_asciidoctor-tool-issues.txt
+Asciidoctor diagnostics:
+[verify] command: ruby -ropen3 -e tool = ARGV.shift
+unless tool
+  warn "velvet-glove-asciidoctor: missing tool executable"
+  exit 2
+end
+unsupported = ARGV.find do |argument|
+  short = argument.start_with?("-") && !argument.start_with?("--")
+  argument == "--" ||
+    (short && (argument.include?("h") || argument.include?("V") || argument.include?("v") || argument.include?("q") || argument.include?("?"))) ||
+    argument.start_with?("--h") || argument.start_with?("--v") || argument.start_with?("--q")
+end
+if unsupported
+  warn "velvet-glove-asciidoctor: unsupported argument #{unsupported.inspect} would bypass validation or diagnostic evidence"
+  exit 2
+end
+begin
+  stdout, stderr, status = Open3.capture3(tool, *ARGV, "--safe-mode=safe", "--failure-level=FATAL", "--out-file=/dev/null")
+  unless status.success?
+    $stdout.write(stdout)
+    $stderr.write(stderr)
+    exit 2
+  end
+  exec(tool, *ARGV, "--safe-mode=safe", "--failure-level=WARNING", "--out-file=/dev/null")
+rescue SystemCallError => error
+  warn "velvet-glove-asciidoctor: #{error.message}"
+  exit 2
+end -- asciidoctor <workspace>/example.adoc
+status: Some(1)
+classification: Some(Issues)
+stderr:
+asciidoctor: ERROR: example.adoc: line 3: include file not found: <workspace>/does-not-exist.adoc
+artifact: <workspace>/.velvet-glove/asciidoctor-agent-hook/test-session_test-turn_asciidoctor-tool_asciidoctor-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

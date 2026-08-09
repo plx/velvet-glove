@@ -2,7 +2,9 @@ source "https://rubygems.org"
 
 # Keep the analyzer graph on the latest pre-native-extension RuboCop line.
 # Base64 and Racc come from the checksum-pinned Ruby archive; every package
-# Bundler adds is checksum-locked, platform-independent Ruby code.
+# Bundler adds is checksum-locked, platform-independent Ruby code. Asciidoctor
+# is likewise a dependency-free pure-Ruby package.
+gem "asciidoctor", "2.0.26"
 gem "base64", "0.2.0"
 gem "benchmark", "0.4.0"
 gem "ostruct", "0.6.1"
