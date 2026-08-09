@@ -988,7 +988,7 @@
       "toolId": "go-fmt",
       "environmentId": "macos-arm64-go",
       "version": "go1.26.5",
-      "installationSource": "gofmt in the Go 1.26.5 archive pinned by validation/provisioning/mise.lock",
+      "installationSource": "official go1.26.5 Darwin arm64 archive at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a, tag commit c19862e5f8415b4f24b189d065ed739517c548ba, and the exact mise archive lock in validation/provisioning/mise.lock",
       "integrity": {
         "kind": "mise-lock",
         "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
@@ -998,9 +998,9 @@
         "match": "prefix",
         "expected": "go version go1.26.5 "
       },
-      "caseExecutables": ["gofmt"],
-      "cases": ["unformatted"],
-      "representativeCase": "unformatted"
+      "caseExecutables": ["gofmt", "python"],
+      "cases": ["clean", "multi-file", "operational-failure", "unformatted"],
+      "representativeCase": "multi-file"
     },
     {
       "id": "rustfmt-macos-arm64",

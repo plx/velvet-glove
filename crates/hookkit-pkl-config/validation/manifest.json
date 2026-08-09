@@ -14198,12 +14198,19 @@
                   "role": "phase",
                   "mode": "format",
                   "reusesImmediatePhase": null,
-                  "program": "gofmt",
+                  "program": "python",
                   "argv": [
-                    "-w",
+                    "-I",
+                    "-c",
+                    "import os\nimport selectors\nimport shutil\nimport signal\nimport stat\nimport subprocess\nimport sys\n\nMARKER = \"__VELVET_GLOVE_GOFMT_FILES__\"\nLIMIT = 64 * 1024 * 1024\n\n\ndef fail(message):\n    print(f\"velvet-glove-gofmt: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\nrequested_tool = sys.argv[1]\nmode = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif mode not in (\"verify\", \"write\") or not files:\n    fail(\"invalid mode or empty file selection\")\nif extra_args:\n    fail(\"extra arguments are unsupported because gofmt flags change the controlled contract\")\n\nnormalized_files = []\nseen_paths = set()\nseen_identities = set()\nfor requested_path in files:\n    if \"\\n\" in requested_path or \"\\r\" in requested_path or \"\\0\" in requested_path:\n        fail(f\"selected path contains a control character: {requested_path!r}\")\n    if not os.path.isabs(requested_path) or os.path.normpath(requested_path) != requested_path:\n        fail(f\"selected path is not normalized and absolute: {requested_path}\")\n    if os.path.realpath(requested_path) != requested_path:\n        fail(f\"selected path traverses a symlink: {requested_path}\")\n    try:\n        requested_path.encode(\"utf-8\")\n        info = os.lstat(requested_path)\n    except (OSError, UnicodeError) as error:\n        fail(f\"cannot inspect {requested_path}: {error}\")\n    identity = (info.st_dev, info.st_ino)\n    if (\n        requested_path in seen_paths\n        or identity in seen_identities\n        or not stat.S_ISREG(info.st_mode)\n        or info.st_nlink != 1\n    ):\n        fail(f\"selected path is not a unique regular file: {requested_path}\")\n    seen_paths.add(requested_path)\n    seen_identities.add(identity)\n    normalized_files.append(requested_path)\nfiles = normalized_files\n\ntool = shutil.which(requested_tool)\nif tool is None:\n    fail(f\"cannot resolve tool executable {requested_tool!r}\")\ntool = os.path.abspath(tool)\ntry:\n    tool_info = os.stat(tool)\nexcept OSError as error:\n    fail(f\"cannot inspect resolved tool {tool}: {error}\")\nif not stat.S_ISREG(tool_info.st_mode) or not os.access(tool, os.X_OK):\n    fail(f\"resolved tool is not an executable regular file: {tool}\")\n\nenvironment = os.environ.copy()\nfor name in tuple(environment):\n    if (\n        name.startswith(\"GO\")\n        or name.startswith(\"DYLD_\")\n        or name.startswith(\"LD_\")\n        or name == \"DEBUG\"\n    ):\n        environment.pop(name, None)\nenvironment.update(\n    {\n        \"PATH\": \"/usr/bin:/bin\",\n        \"LANG\": \"C\",\n        \"LC_ALL\": \"C\",\n        \"TZ\": \"UTC\",\n        \"TERM\": \"dumb\",\n        \"NO_COLOR\": \"1\",\n        \"CLICOLOR\": \"0\",\n        \"FORCE_COLOR\": \"0\",\n        \"GODEBUG\": \"\",\n        \"GOENV\": \"off\",\n        \"GOMAXPROCS\": \"1\",\n        \"GOTELEMETRY\": \"off\",\n        \"GOTOOLCHAIN\": \"local\",\n    }\n)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\ndef run_child(arguments):\n    global process\n    stdout_chunks = []\n    stderr_chunks = []\n    total = 0\n    try:\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        process = subprocess.Popen(\n            arguments,\n            stdin=subprocess.DEVNULL,\n            stdout=subprocess.PIPE,\n            stderr=subprocess.PIPE,\n            env=environment,\n            start_new_session=True,\n        )\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        selector = selectors.DefaultSelector()\n        for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n            if stream is None:\n                raise OSError(\"failed to capture tool output\")\n            os.set_blocking(stream.fileno(), False)\n            selector.register(stream, selectors.EVENT_READ, target)\n        while selector.get_map():\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            for key, _ in selector.select(timeout=0.1):\n                chunk = os.read(key.fileobj.fileno(), 65536)\n                if chunk:\n                    total += len(chunk)\n                    if total > LIMIT:\n                        raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                    key.data.append(chunk)\n                else:\n                    selector.unregister(key.fileobj)\n                    key.fileobj.close()\n        status = process.wait()\n        process = None\n        return status, b\"\".join(stdout_chunks), b\"\".join(stderr_chunks)\n    except AdapterSignal as error:\n        stop_child(error.signum)\n        raise SystemExit(2) from None\n    except BaseException as error:\n        stop_child()\n        fail(str(error))\n\n\ndef snapshot():\n    result = []\n    total = 0\n    for path in files:\n        try:\n            info = os.lstat(path)\n            if (\n                os.path.realpath(path) != path\n                or not stat.S_ISREG(info.st_mode)\n                or info.st_nlink != 1\n            ):\n                fail(f\"selected path stopped being a unique regular file: {path}\")\n            with open(path, \"rb\") as source:\n                data = source.read(LIMIT + 1)\n        except OSError as error:\n            fail(f\"cannot read {path}: {error}\")\n        total += len(data)\n        if len(data) > LIMIT or total > LIMIT:\n            fail(f\"selected files exceed the {LIMIT}-byte validation limit\")\n        result.append((info.st_dev, info.st_ino, data))\n    return result\n\n\ndef validate_listing(stdout_bytes, stderr_bytes, status):\n    if status == 2:\n        return None\n    if status != 0:\n        if stdout_bytes:\n            sys.stdout.buffer.write(stdout_bytes)\n        if stderr_bytes:\n            sys.stderr.buffer.write(stderr_bytes)\n        fail(f\"gofmt returned unsupported status {status}\")\n    if stderr_bytes:\n        if stdout_bytes:\n            sys.stdout.buffer.write(stdout_bytes)\n        sys.stderr.buffer.write(stderr_bytes)\n        fail(\"gofmt -l wrote stderr with status 0\")\n    expected = [os.fsencode(path) + b\"\\n\" for path in files]\n    actual = stdout_bytes.splitlines(keepends=True)\n    cursor = 0\n    for line in actual:\n        while cursor < len(expected) and expected[cursor] != line:\n            cursor += 1\n        if cursor == len(expected):\n            if stdout_bytes:\n                sys.stdout.buffer.write(stdout_bytes)\n            fail(\"gofmt -l listed an unselected, repeated, or out-of-order path\")\n        cursor += 1\n    return actual\n\n\nprevious_handlers = {}\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    before = snapshot()\n    status, listed_stdout, listed_stderr = run_child([tool, \"-l\", *files])\n    validate_listing(listed_stdout, listed_stderr, status)\n    if status == 2:\n        if listed_stdout:\n            sys.stdout.buffer.write(listed_stdout)\n        if listed_stderr:\n            sys.stderr.buffer.write(listed_stderr)\n        raise SystemExit(2)\n    if snapshot() != before:\n        fail(\"gofmt -l changed a selected file during the read-only preflight\")\n    if mode == \"verify\":\n        if listed_stdout:\n            sys.stdout.buffer.write(listed_stdout)\n        raise SystemExit(0)\n\n    status, write_stdout, write_stderr = run_child([tool, \"-w\", *files])\n    if status != 0 or write_stdout or write_stderr:\n        if write_stdout:\n            sys.stdout.buffer.write(write_stdout)\n        if write_stderr:\n            sys.stderr.buffer.write(write_stderr)\n        if status not in (0, 2):\n            fail(f\"gofmt -w returned unsupported status {status}\")\n        if status == 0:\n            fail(\"gofmt -w emitted output with status 0\")\n        raise SystemExit(2)\n    after = snapshot()\n    if [(item[0], item[1]) for item in after] != [\n        (item[0], item[1]) for item in before\n    ]:\n        fail(\"gofmt -w replaced or aliased a selected file\")\nfinally:\n    stop_child()\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None:\n        fail(f\"received signal {pending_signal}\")",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "write",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_GOFMT_FILES__",
                     {
                       "type": "Files"
                     }
@@ -14286,12 +14293,19 @@
                   "role": "workflow-check",
                   "mode": "verify",
                   "reusesImmediatePhase": null,
-                  "program": "gofmt",
+                  "program": "python",
                   "argv": [
-                    "-l",
+                    "-I",
+                    "-c",
+                    "import os\nimport selectors\nimport shutil\nimport signal\nimport stat\nimport subprocess\nimport sys\n\nMARKER = \"__VELVET_GLOVE_GOFMT_FILES__\"\nLIMIT = 64 * 1024 * 1024\n\n\ndef fail(message):\n    print(f\"velvet-glove-gofmt: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\nrequested_tool = sys.argv[1]\nmode = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif mode not in (\"verify\", \"write\") or not files:\n    fail(\"invalid mode or empty file selection\")\nif extra_args:\n    fail(\"extra arguments are unsupported because gofmt flags change the controlled contract\")\n\nnormalized_files = []\nseen_paths = set()\nseen_identities = set()\nfor requested_path in files:\n    if \"\\n\" in requested_path or \"\\r\" in requested_path or \"\\0\" in requested_path:\n        fail(f\"selected path contains a control character: {requested_path!r}\")\n    if not os.path.isabs(requested_path) or os.path.normpath(requested_path) != requested_path:\n        fail(f\"selected path is not normalized and absolute: {requested_path}\")\n    if os.path.realpath(requested_path) != requested_path:\n        fail(f\"selected path traverses a symlink: {requested_path}\")\n    try:\n        requested_path.encode(\"utf-8\")\n        info = os.lstat(requested_path)\n    except (OSError, UnicodeError) as error:\n        fail(f\"cannot inspect {requested_path}: {error}\")\n    identity = (info.st_dev, info.st_ino)\n    if (\n        requested_path in seen_paths\n        or identity in seen_identities\n        or not stat.S_ISREG(info.st_mode)\n        or info.st_nlink != 1\n    ):\n        fail(f\"selected path is not a unique regular file: {requested_path}\")\n    seen_paths.add(requested_path)\n    seen_identities.add(identity)\n    normalized_files.append(requested_path)\nfiles = normalized_files\n\ntool = shutil.which(requested_tool)\nif tool is None:\n    fail(f\"cannot resolve tool executable {requested_tool!r}\")\ntool = os.path.abspath(tool)\ntry:\n    tool_info = os.stat(tool)\nexcept OSError as error:\n    fail(f\"cannot inspect resolved tool {tool}: {error}\")\nif not stat.S_ISREG(tool_info.st_mode) or not os.access(tool, os.X_OK):\n    fail(f\"resolved tool is not an executable regular file: {tool}\")\n\nenvironment = os.environ.copy()\nfor name in tuple(environment):\n    if (\n        name.startswith(\"GO\")\n        or name.startswith(\"DYLD_\")\n        or name.startswith(\"LD_\")\n        or name == \"DEBUG\"\n    ):\n        environment.pop(name, None)\nenvironment.update(\n    {\n        \"PATH\": \"/usr/bin:/bin\",\n        \"LANG\": \"C\",\n        \"LC_ALL\": \"C\",\n        \"TZ\": \"UTC\",\n        \"TERM\": \"dumb\",\n        \"NO_COLOR\": \"1\",\n        \"CLICOLOR\": \"0\",\n        \"FORCE_COLOR\": \"0\",\n        \"GODEBUG\": \"\",\n        \"GOENV\": \"off\",\n        \"GOMAXPROCS\": \"1\",\n        \"GOTELEMETRY\": \"off\",\n        \"GOTOOLCHAIN\": \"local\",\n    }\n)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\ndef run_child(arguments):\n    global process\n    stdout_chunks = []\n    stderr_chunks = []\n    total = 0\n    try:\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        process = subprocess.Popen(\n            arguments,\n            stdin=subprocess.DEVNULL,\n            stdout=subprocess.PIPE,\n            stderr=subprocess.PIPE,\n            env=environment,\n            start_new_session=True,\n        )\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        selector = selectors.DefaultSelector()\n        for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n            if stream is None:\n                raise OSError(\"failed to capture tool output\")\n            os.set_blocking(stream.fileno(), False)\n            selector.register(stream, selectors.EVENT_READ, target)\n        while selector.get_map():\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            for key, _ in selector.select(timeout=0.1):\n                chunk = os.read(key.fileobj.fileno(), 65536)\n                if chunk:\n                    total += len(chunk)\n                    if total > LIMIT:\n                        raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                    key.data.append(chunk)\n                else:\n                    selector.unregister(key.fileobj)\n                    key.fileobj.close()\n        status = process.wait()\n        process = None\n        return status, b\"\".join(stdout_chunks), b\"\".join(stderr_chunks)\n    except AdapterSignal as error:\n        stop_child(error.signum)\n        raise SystemExit(2) from None\n    except BaseException as error:\n        stop_child()\n        fail(str(error))\n\n\ndef snapshot():\n    result = []\n    total = 0\n    for path in files:\n        try:\n            info = os.lstat(path)\n            if (\n                os.path.realpath(path) != path\n                or not stat.S_ISREG(info.st_mode)\n                or info.st_nlink != 1\n            ):\n                fail(f\"selected path stopped being a unique regular file: {path}\")\n            with open(path, \"rb\") as source:\n                data = source.read(LIMIT + 1)\n        except OSError as error:\n            fail(f\"cannot read {path}: {error}\")\n        total += len(data)\n        if len(data) > LIMIT or total > LIMIT:\n            fail(f\"selected files exceed the {LIMIT}-byte validation limit\")\n        result.append((info.st_dev, info.st_ino, data))\n    return result\n\n\ndef validate_listing(stdout_bytes, stderr_bytes, status):\n    if status == 2:\n        return None\n    if status != 0:\n        if stdout_bytes:\n            sys.stdout.buffer.write(stdout_bytes)\n        if stderr_bytes:\n            sys.stderr.buffer.write(stderr_bytes)\n        fail(f\"gofmt returned unsupported status {status}\")\n    if stderr_bytes:\n        if stdout_bytes:\n            sys.stdout.buffer.write(stdout_bytes)\n        sys.stderr.buffer.write(stderr_bytes)\n        fail(\"gofmt -l wrote stderr with status 0\")\n    expected = [os.fsencode(path) + b\"\\n\" for path in files]\n    actual = stdout_bytes.splitlines(keepends=True)\n    cursor = 0\n    for line in actual:\n        while cursor < len(expected) and expected[cursor] != line:\n            cursor += 1\n        if cursor == len(expected):\n            if stdout_bytes:\n                sys.stdout.buffer.write(stdout_bytes)\n            fail(\"gofmt -l listed an unselected, repeated, or out-of-order path\")\n        cursor += 1\n    return actual\n\n\nprevious_handlers = {}\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    before = snapshot()\n    status, listed_stdout, listed_stderr = run_child([tool, \"-l\", *files])\n    validate_listing(listed_stdout, listed_stderr, status)\n    if status == 2:\n        if listed_stdout:\n            sys.stdout.buffer.write(listed_stdout)\n        if listed_stderr:\n            sys.stderr.buffer.write(listed_stderr)\n        raise SystemExit(2)\n    if snapshot() != before:\n        fail(\"gofmt -l changed a selected file during the read-only preflight\")\n    if mode == \"verify\":\n        if listed_stdout:\n            sys.stdout.buffer.write(listed_stdout)\n        raise SystemExit(0)\n\n    status, write_stdout, write_stderr = run_child([tool, \"-w\", *files])\n    if status != 0 or write_stdout or write_stderr:\n        if write_stdout:\n            sys.stdout.buffer.write(write_stdout)\n        if write_stderr:\n            sys.stderr.buffer.write(write_stderr)\n        if status not in (0, 2):\n            fail(f\"gofmt -w returned unsupported status {status}\")\n        if status == 0:\n            fail(\"gofmt -w emitted output with status 0\")\n        raise SystemExit(2)\n    after = snapshot()\n    if [(item[0], item[1]) for item in after] != [\n        (item[0], item[1]) for item in before\n    ]:\n        fail(\"gofmt -w replaced or aliased a selected file\")\nfinally:\n    stop_child()\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None:\n        fail(f\"received signal {pending_signal}\")",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "verify",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_GOFMT_FILES__",
                     {
                       "type": "Files"
                     }
@@ -14315,12 +14329,19 @@
                   "role": "workflow-remedy",
                   "mode": "fix",
                   "reusesImmediatePhase": null,
-                  "program": "gofmt",
+                  "program": "python",
                   "argv": [
-                    "-w",
+                    "-I",
+                    "-c",
+                    "import os\nimport selectors\nimport shutil\nimport signal\nimport stat\nimport subprocess\nimport sys\n\nMARKER = \"__VELVET_GLOVE_GOFMT_FILES__\"\nLIMIT = 64 * 1024 * 1024\n\n\ndef fail(message):\n    print(f\"velvet-glove-gofmt: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\nrequested_tool = sys.argv[1]\nmode = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif mode not in (\"verify\", \"write\") or not files:\n    fail(\"invalid mode or empty file selection\")\nif extra_args:\n    fail(\"extra arguments are unsupported because gofmt flags change the controlled contract\")\n\nnormalized_files = []\nseen_paths = set()\nseen_identities = set()\nfor requested_path in files:\n    if \"\\n\" in requested_path or \"\\r\" in requested_path or \"\\0\" in requested_path:\n        fail(f\"selected path contains a control character: {requested_path!r}\")\n    if not os.path.isabs(requested_path) or os.path.normpath(requested_path) != requested_path:\n        fail(f\"selected path is not normalized and absolute: {requested_path}\")\n    if os.path.realpath(requested_path) != requested_path:\n        fail(f\"selected path traverses a symlink: {requested_path}\")\n    try:\n        requested_path.encode(\"utf-8\")\n        info = os.lstat(requested_path)\n    except (OSError, UnicodeError) as error:\n        fail(f\"cannot inspect {requested_path}: {error}\")\n    identity = (info.st_dev, info.st_ino)\n    if (\n        requested_path in seen_paths\n        or identity in seen_identities\n        or not stat.S_ISREG(info.st_mode)\n        or info.st_nlink != 1\n    ):\n        fail(f\"selected path is not a unique regular file: {requested_path}\")\n    seen_paths.add(requested_path)\n    seen_identities.add(identity)\n    normalized_files.append(requested_path)\nfiles = normalized_files\n\ntool = shutil.which(requested_tool)\nif tool is None:\n    fail(f\"cannot resolve tool executable {requested_tool!r}\")\ntool = os.path.abspath(tool)\ntry:\n    tool_info = os.stat(tool)\nexcept OSError as error:\n    fail(f\"cannot inspect resolved tool {tool}: {error}\")\nif not stat.S_ISREG(tool_info.st_mode) or not os.access(tool, os.X_OK):\n    fail(f\"resolved tool is not an executable regular file: {tool}\")\n\nenvironment = os.environ.copy()\nfor name in tuple(environment):\n    if (\n        name.startswith(\"GO\")\n        or name.startswith(\"DYLD_\")\n        or name.startswith(\"LD_\")\n        or name == \"DEBUG\"\n    ):\n        environment.pop(name, None)\nenvironment.update(\n    {\n        \"PATH\": \"/usr/bin:/bin\",\n        \"LANG\": \"C\",\n        \"LC_ALL\": \"C\",\n        \"TZ\": \"UTC\",\n        \"TERM\": \"dumb\",\n        \"NO_COLOR\": \"1\",\n        \"CLICOLOR\": \"0\",\n        \"FORCE_COLOR\": \"0\",\n        \"GODEBUG\": \"\",\n        \"GOENV\": \"off\",\n        \"GOMAXPROCS\": \"1\",\n        \"GOTELEMETRY\": \"off\",\n        \"GOTOOLCHAIN\": \"local\",\n    }\n)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\ndef run_child(arguments):\n    global process\n    stdout_chunks = []\n    stderr_chunks = []\n    total = 0\n    try:\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        process = subprocess.Popen(\n            arguments,\n            stdin=subprocess.DEVNULL,\n            stdout=subprocess.PIPE,\n            stderr=subprocess.PIPE,\n            env=environment,\n            start_new_session=True,\n        )\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        selector = selectors.DefaultSelector()\n        for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n            if stream is None:\n                raise OSError(\"failed to capture tool output\")\n            os.set_blocking(stream.fileno(), False)\n            selector.register(stream, selectors.EVENT_READ, target)\n        while selector.get_map():\n            if pending_signal is not None:\n                raise AdapterSignal(pending_signal)\n            for key, _ in selector.select(timeout=0.1):\n                chunk = os.read(key.fileobj.fileno(), 65536)\n                if chunk:\n                    total += len(chunk)\n                    if total > LIMIT:\n                        raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                    key.data.append(chunk)\n                else:\n                    selector.unregister(key.fileobj)\n                    key.fileobj.close()\n        status = process.wait()\n        process = None\n        return status, b\"\".join(stdout_chunks), b\"\".join(stderr_chunks)\n    except AdapterSignal as error:\n        stop_child(error.signum)\n        raise SystemExit(2) from None\n    except BaseException as error:\n        stop_child()\n        fail(str(error))\n\n\ndef snapshot():\n    result = []\n    total = 0\n    for path in files:\n        try:\n            info = os.lstat(path)\n            if (\n                os.path.realpath(path) != path\n                or not stat.S_ISREG(info.st_mode)\n                or info.st_nlink != 1\n            ):\n                fail(f\"selected path stopped being a unique regular file: {path}\")\n            with open(path, \"rb\") as source:\n                data = source.read(LIMIT + 1)\n        except OSError as error:\n            fail(f\"cannot read {path}: {error}\")\n        total += len(data)\n        if len(data) > LIMIT or total > LIMIT:\n            fail(f\"selected files exceed the {LIMIT}-byte validation limit\")\n        result.append((info.st_dev, info.st_ino, data))\n    return result\n\n\ndef validate_listing(stdout_bytes, stderr_bytes, status):\n    if status == 2:\n        return None\n    if status != 0:\n        if stdout_bytes:\n            sys.stdout.buffer.write(stdout_bytes)\n        if stderr_bytes:\n            sys.stderr.buffer.write(stderr_bytes)\n        fail(f\"gofmt returned unsupported status {status}\")\n    if stderr_bytes:\n        if stdout_bytes:\n            sys.stdout.buffer.write(stdout_bytes)\n        sys.stderr.buffer.write(stderr_bytes)\n        fail(\"gofmt -l wrote stderr with status 0\")\n    expected = [os.fsencode(path) + b\"\\n\" for path in files]\n    actual = stdout_bytes.splitlines(keepends=True)\n    cursor = 0\n    for line in actual:\n        while cursor < len(expected) and expected[cursor] != line:\n            cursor += 1\n        if cursor == len(expected):\n            if stdout_bytes:\n                sys.stdout.buffer.write(stdout_bytes)\n            fail(\"gofmt -l listed an unselected, repeated, or out-of-order path\")\n        cursor += 1\n    return actual\n\n\nprevious_handlers = {}\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    before = snapshot()\n    status, listed_stdout, listed_stderr = run_child([tool, \"-l\", *files])\n    validate_listing(listed_stdout, listed_stderr, status)\n    if status == 2:\n        if listed_stdout:\n            sys.stdout.buffer.write(listed_stdout)\n        if listed_stderr:\n            sys.stderr.buffer.write(listed_stderr)\n        raise SystemExit(2)\n    if snapshot() != before:\n        fail(\"gofmt -l changed a selected file during the read-only preflight\")\n    if mode == \"verify\":\n        if listed_stdout:\n            sys.stdout.buffer.write(listed_stdout)\n        raise SystemExit(0)\n\n    status, write_stdout, write_stderr = run_child([tool, \"-w\", *files])\n    if status != 0 or write_stdout or write_stderr:\n        if write_stdout:\n            sys.stdout.buffer.write(write_stdout)\n        if write_stderr:\n            sys.stderr.buffer.write(write_stderr)\n        if status not in (0, 2):\n            fail(f\"gofmt -w returned unsupported status {status}\")\n        if status == 0:\n            fail(\"gofmt -w emitted output with status 0\")\n        raise SystemExit(2)\n    after = snapshot()\n    if [(item[0], item[1]) for item in after] != [\n        (item[0], item[1]) for item in before\n    ]:\n        fail(\"gofmt -w replaced or aliased a selected file\")\nfinally:\n    stop_child()\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None:\n        fail(f\"received signal {pending_signal}\")",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "write",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_GOFMT_FILES__",
                     {
                       "type": "Files"
                     }
@@ -14366,21 +14387,26 @@
         }
       },
       "fixtureCases": [
+        "clean",
+        "multi-file",
+        "operational-failure",
         "unformatted"
       ],
       "dependencies": {
         "provisioningGroup": "go",
         "primaryExecutable": "gofmt",
-        "programOverrides": [],
+        "programOverrides": [
+          "python"
+        ],
         "wrapperExecutables": []
       },
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
           "status": "recorded",
-          "url": "https://go.dev/",
+          "url": "https://go.dev/dl/#go1.26.5",
           "version": "go1.26.5",
-          "installationSource": "gofmt in the Go 1.26.5 archive pinned by validation/provisioning/mise.lock",
+          "installationSource": "official go1.26.5 Darwin arm64 archive at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a, tag commit c19862e5f8415b4f24b189d065ed739517c548ba, and the exact mise archive lock in validation/provisioning/mise.lock",
           "versionCommand": [
             "go",
             "version"
@@ -14416,7 +14442,7 @@
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -14436,13 +14462,15 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No probe-backed immediate rendered-command contract is recorded for this target.",
-          "trackingIssue": 7
+          "references": [
+            "cargo:test/run_all_tool_fixtures[go-fmt/immediate-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -14462,13 +14490,23 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 24
+          "references": [
+            "recipe:go-fmt-macos-arm64",
+            "artifact:clean/pinned-environment.json#go-1.26.5",
+            "artifact:clean/fixtures/report.json#go-fmt/clean/immediate",
+            "artifact:multi-file/pinned-environment.json#go-1.26.5",
+            "artifact:multi-file/fixtures/report.json#go-fmt/multi-file/immediate",
+            "artifact:operational-failure/pinned-environment.json#go-1.26.5",
+            "artifact:operational-failure/fixtures/report.json#go-fmt/operational-failure/immediate",
+            "artifact:unformatted/pinned-environment.json#go-1.26.5",
+            "artifact:unformatted/fixtures/report.json#go-fmt/unformatted/immediate"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -14493,13 +14531,15 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No probe-backed deferred rendered-command contract is recorded for this target.",
-          "trackingIssue": 8
+          "references": [
+            "cargo:test/run_all_tool_fixtures[go-fmt/explicit-deferred-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -14524,9 +14564,19 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 24
+          "references": [
+            "recipe:go-fmt-macos-arm64",
+            "artifact:clean/pinned-environment.json#go-1.26.5",
+            "artifact:clean/fixtures/report.json#go-fmt/clean/deferred",
+            "artifact:multi-file/pinned-environment.json#go-1.26.5",
+            "artifact:multi-file/fixtures/report.json#go-fmt/multi-file/deferred",
+            "artifact:operational-failure/pinned-environment.json#go-1.26.5",
+            "artifact:operational-failure/fixtures/report.json#go-fmt/operational-failure/deferred",
+            "artifact:unformatted/pinned-environment.json#go-1.26.5",
+            "artifact:unformatted/fixtures/report.json#go-fmt/unformatted/deferred"
+          ],
+          "reason": null,
+          "trackingIssue": null
         }
       ],
       "exceptions": []

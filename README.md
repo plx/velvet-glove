@@ -150,6 +150,7 @@ just tool-case astro multi-file-project
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case buf-format multi-file
+just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 
 # Thirteen behavior-rich contracts across ten environments: jq data formats,
@@ -207,6 +208,19 @@ files, conservative candidate attribution, an untouched unselected sentinel,
 and clean idempotent repeats. Provenance, integrity, command, mutation, and
 security limitations are recorded in the
 [Biome contract](docs/pinned-tool-environments.md#biome-validation-contract).
+
+The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
+stdout as the formatting signal while preserving native status-two failure
+dominance, rejects link aliases and scope-changing arguments, and scrubs Go,
+loader, and debug overrides. Every mutation is gated by a read-only batch
+preflight; deferred writes additionally receive the explicit workflow's
+authoritative final check, while immediate idempotence is proved by its clean
+repeat. The representative selects one dirty and one clean file while
+preserving an unselected dirty sentinel; the full matrix also proves a mixed
+dirty-valid and parse-invalid batch cannot partially mutate. Exact archive/tag
+provenance, command traces, environment controls, and filesystem limitations
+are in the
+[gofmt contract](docs/pinned-tool-environments.md#gofmt-validation-contract).
 
 The dedicated Cargo Clippy lane pins the official Rust and Cargo 1.97.1
 distribution with Clippy 0.1.97. Its isolated adapter runs frozen read-only

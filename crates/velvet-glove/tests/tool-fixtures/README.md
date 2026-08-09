@@ -150,10 +150,11 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, and Buf
-Format contract cases are retained too. Their evidence includes exact pass-through
-program/argv/cwd/environment traces (including Asciidoctor's nested FATAL
-preflight and WARNING validation, Astro's single nested project check, and
+alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, Buf
+Format, and gofmt contract cases are retained too. Their evidence includes
+exact pass-through program/argv/cwd/environment traces (including
+Asciidoctor's nested FATAL preflight and WARNING validation, Astro's single
+nested project check, and
 Betterleaks' marker-delimited batch adapter with locked redaction and finding
 status plus inherited-config scrubbing, and its distinct status-1 missing-config
 failure with the adapter's production-canonicalized `<time> FTL` diagnostic,
@@ -171,6 +172,17 @@ bind `NODE_PATH` to the same controlled `node_modules` graph as the pinned
 Astro executable, verify all three required package manifests, and record
 disabled telemetry, non-interactive CI mode, and a cleared debug channel. Other
 successful case workspaces are removed.
+
+gofmt traces bind the pinned executable behind an isolated Python adapter and
+record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain
+environment. Verify commands contain one native `-l`; write commands must
+trace a read-only `-l` preflight immediately before `-w`, while a status-two
+preflight must never reach `-w`. Immediate runs and explicit deferred
+`initial-check` → `remedy` → `final-check` attempts use independent pristine
+baselines. The four cases bind clean stdout, stdout-signaled dirty paths,
+failure dominance when a dirty filename precedes a parse diagnostic, exact
+multi-file mutation, an untouched unselected sentinel, the deferred
+authoritative final check, and semantic idempotence on both surfaces.
 
 Buf Format traces bind its isolated workspace adapter, absolute managed Buf
 executable, a `buf config ls-modules --log-format=text --format=json` scope
