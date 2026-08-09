@@ -1,0 +1,9 @@
+warning: errcheck: issues remain; diagnostics: <workspace>/.velvet-glove/errcheck-agent-hook/test-session_errcheck-tool_errcheck-tool-issues.txt
+errcheck diagnostics:
+[verify] command: python -I -c <inline-script> errcheck go __VELVET_GLOVE_ERRCHECK_WORKSPACE__ <workspace>/go.mod
+status: Some(1)
+classification: Some(Issues)
+stdout:
+example.go:9:11:	os.Remove("foo")
+artifact: <workspace>/.velvet-glove/errcheck-agent-hook/test-session_errcheck-tool_errcheck-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

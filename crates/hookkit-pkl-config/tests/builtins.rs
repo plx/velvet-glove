@@ -1350,6 +1350,76 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
 }
 
 #[test]
+fn errcheck_builtin_uses_isolated_workspace_adapter() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let errcheck = spec(&specs, "errCheck");
+
+    assert_eq!(errcheck.id, "errcheck");
+    assert_eq!(errcheck.display_name, "errcheck");
+    assert_eq!(errcheck.executable, "errcheck");
+    assert_eq!(errcheck.workspace_indicator.as_deref(), Some("go.mod"));
+    assert_eq!(errcheck.phase_invocation, InvocationGranularity::Batch);
+    assert!(
+        errcheck.workflows.is_empty(),
+        "errcheck retains compatibility-translated deferred verification"
+    );
+    assert_eq!(errcheck.phase_order, ["verify"]);
+
+    let verify = errcheck.phases.get("verify").expect("verify");
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_argv(
+        verify,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            verify.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("go"),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_ERRCHECK_WORKSPACE__"),
+            token(ArgToken::WorkspaceIndicator),
+        ],
+    );
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("errcheck adapter must be a literal Python program")
+    };
+    for required in [
+        "class AdapterSignal(BaseException)",
+        "except AdapterSignal as error:\n        stop_child(error.signum)\n        raise",
+        "except BaseException:\n        stop_child()\n        raise",
+        "start_new_session=True",
+        "os.killpg(process.pid, signum)",
+        "combined output exceeded",
+        "extra arguments are unsupported because they can change package scope",
+        "workspace manifest is not a unique regular file",
+        "workspace contains a symlink directory",
+        "GOTOOLCHAIN\": \"local",
+        "GOPROXY\": \"off",
+        "GOVCS\": \"*:off",
+        "[go_launcher, \"mod\", \"verify\"]",
+        "[go_launcher, \"list\", \"-mod=readonly\", \"-json\", \"./...\"]",
+        "[tool, \"-abspath\", \"-mod=readonly\", \"./...\"]",
+        "go list omitted physical Go sources",
+        "errcheck diagnostic path is not canonical",
+        "errcheck diagnostic source is not stable",
+        "errcheck diagnostics are repeated or not sorted",
+        "errcheck diagnostic source text does not match",
+        "errcheck operational failure omitted complete stderr diagnostics",
+        "assert_workspace_unchanged()",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "errcheck adapter omits {required:?}"
+        );
+    }
+    assert!(!adapter.contains("\"-test\", \"./...\""));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(verify.writes, WriteBehavior::None);
+}
+
+#[test]
 fn catalog_validator_rejects_unchecked_remedies_unless_fallback_is_explicit() {
     let mut legacy = ToolSpec {
         id: "legacy".into(),

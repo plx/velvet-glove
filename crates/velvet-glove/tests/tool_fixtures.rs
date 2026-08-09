@@ -146,7 +146,57 @@ const ESLINT_SCRUBBED_ENV: &[&str] = &[
     "LD_VELVET_GLOVE_POISON",
 ];
 const BUF_POISON_ENV_VALUE: &str = "velvet-glove-buf-adapter-must-clear-this";
+const ERRCHECK_POISON_ENV_VALUE: &str = "velvet-glove-errcheck-adapter-must-clear-this";
 const GOFMT_POISON_ENV_VALUE: &str = "velvet-glove-gofmt-adapter-must-clear-this";
+const ERRCHECK_INITIAL_CHILD_PATH: &str = "/usr/bin:/bin";
+const ERRCHECK_CONTROLLED_ENV: &[(&str, &str)] = &[
+    ("CGO_ENABLED", "0"),
+    ("GO111MODULE", "on"),
+    ("GODEBUG", ""),
+    ("GOENV", "off"),
+    ("GOFLAGS", "-mod=readonly"),
+    ("GOMAXPROCS", "1"),
+    ("GONOPROXY", ""),
+    ("GONOSUMDB", ""),
+    ("GOPRIVATE", ""),
+    ("GOPROXY", "off"),
+    ("GOSUMDB", "off"),
+    ("GOTELEMETRY", "off"),
+    ("GOTOOLCHAIN", "local"),
+    ("GOVCS", "*:off"),
+    ("GOWORK", "off"),
+];
+const ERRCHECK_SCRUBBED_ENV: &[&str] = &[
+    "CC",
+    "CXX",
+    "CGO_CFLAGS",
+    "CGO_CPPFLAGS",
+    "CGO_CXXFLAGS",
+    "CGO_LDFLAGS",
+    "PKG_CONFIG",
+    "GOAUTH",
+    "GOEXPERIMENT",
+    "GOINSECURE",
+    "GOOS",
+    "GOARCH",
+    "GOARM64",
+    "GOROOT",
+    "GO_VELVET_GLOVE_POISON",
+    "DYLD_VELVET_GLOVE_POISON",
+    "LD_VELVET_GLOVE_POISON",
+    CI_ENV,
+    DEBUG_ENV,
+];
+const ERRCHECK_LOADER_SCRUBBED_ENV: &[&str] = &[
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+];
 const GOFMT_CHILD_PATH: &str = "/usr/bin:/bin";
 const GOFMT_CONTROLLED_ENV: &[(&str, &str)] = &[
     ("GODEBUG", ""),
@@ -455,6 +505,14 @@ enum TracePlan {
         target_roots: &'static [&'static str],
         edition: &'static str,
     },
+    ErrcheckWorkspaceIndicatorAdapter {
+        checker_program_index: usize,
+        go_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        go_commands: &'static [&'static [&'static str]],
+        checker_arguments: &'static [&'static str],
+    },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
         validation: &'static [&'static str],
@@ -611,6 +669,33 @@ const ESLINT_FILES_MARKER: &str = "__VELVET_GLOVE_ESLINT_FILES__";
 const ESLINT_TRACE_PLAN: TracePlan = TracePlan::EslintPrivateModeFilesMarker;
 const ESLINT_PRIVATE_ROOT_PLACEHOLDER: &str = "<eslint-private>";
 const ESLINT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-eslint-";
+
+const ERRCHECK_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_ERRCHECK_WORKSPACE__";
+const ERRCHECK_GO_ENV_COMMAND: &[&str] = &[
+    "env",
+    "-json",
+    "GOARCH",
+    "GOMODCACHE",
+    "GOOS",
+    "GOROOT",
+    "GOVERSION",
+];
+const ERRCHECK_GO_VERIFY_COMMAND: &[&str] = &["mod", "verify"];
+const ERRCHECK_GO_LIST_COMMAND: &[&str] = &["list", "-mod=readonly", "-json", "./..."];
+const ERRCHECK_GO_COMMANDS: &[&[&str]] = &[
+    ERRCHECK_GO_ENV_COMMAND,
+    ERRCHECK_GO_VERIFY_COMMAND,
+    ERRCHECK_GO_LIST_COMMAND,
+];
+const ERRCHECK_ARGUMENTS: &[&str] = &["-abspath", "-mod=readonly", "./..."];
+const ERRCHECK_TRACE_PLAN: TracePlan = TracePlan::ErrcheckWorkspaceIndicatorAdapter {
+    checker_program_index: 3,
+    go_program_index: 4,
+    adapter_prefix: &["-I", "-c"],
+    marker: ERRCHECK_WORKSPACE_MARKER,
+    go_commands: ERRCHECK_GO_COMMANDS,
+    checker_arguments: ERRCHECK_ARGUMENTS,
+};
 
 const BUF_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_BUF_WORKSPACE__";
 const BUF_MODE_ARGUMENTS: &[(&str, &[&str])] = &[
@@ -1637,6 +1722,65 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["Traceback", "node_modules"],
             trace_plan: DCLINT_TRACE_PLAN,
         },
+        ("errcheck", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: ERRCHECK_TRACE_PLAN,
+        },
+        ("errcheck", "unhandled") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go:9:11:\tos.Remove(\"foo\")"],
+            diagnostic_excludes: &["<workspace>/example.go"],
+            trace_plan: ERRCHECK_TRACE_PLAN,
+        },
+        ("errcheck", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "pkg/selected_clean.go"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "example.go:6:11:\tos.Remove(\"selected\")",
+                "pkg/workspace_only.go:6:11:\tos.Remove(\"workspace-only\")",
+            ],
+            diagnostic_excludes: &["selected_clean.go:"],
+            trace_plan: ERRCHECK_TRACE_PLAN,
+        },
+        ("errcheck", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 0, 2],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "error: failed to check packages",
+                "invalid.go:3:15",
+                "expected ')', found '{'",
+            ],
+            diagnostic_excludes: &["classification: Some(Issues)"],
+            trace_plan: ERRCHECK_TRACE_PLAN,
+        },
         ("go-fmt", "clean") => RealToolContractCase {
             phase_id: "format",
             invocations: &[ExpectedInvocation {
@@ -1760,7 +1904,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
         },
         (
             "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
-            | "cargo-clippy" | "dclint" | "go-fmt" | "prettier" | "vacuum",
+            | "cargo-clippy" | "dclint" | "errcheck" | "go-fmt" | "prettier" | "vacuum",
             other,
         ) => {
             return Err(format!(
@@ -2901,6 +3045,46 @@ fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
     assert_eq!(ghalint_config.invocations[0].exit_code, 2);
     assert_eq!(ghalint_config.invocations[0].trace_exit_codes, &[0, 1]);
     assert_eq!(ghalint_config.outcome, ExpectedOutcome::OperationalFailure);
+}
+
+#[test]
+fn errcheck_contract_registry_covers_clean_issue_workspace_and_failure() {
+    for (case_name, outcome, checker_status) in [
+        ("clean", ExpectedOutcome::Clean, 0),
+        ("unhandled", ExpectedOutcome::Issues, 1),
+        ("multi-file", ExpectedOutcome::Issues, 1),
+        (
+            "operational-failure",
+            ExpectedOutcome::OperationalFailure,
+            2,
+        ),
+    ] {
+        let contract = real_tool_contract_case(&named_fixture_case("errcheck", case_name))
+            .expect("errcheck contract lookup")
+            .expect("errcheck contract");
+        assert_eq!(contract.phase_id, "verify");
+        assert_eq!(contract.outcome, outcome);
+        assert_eq!(contract.invocations.len(), 1);
+        assert_eq!(
+            contract.invocations[0].trace_exit_codes,
+            &[0, 0, 0, checker_status]
+        );
+        assert_eq!(contract.trace_plan, ERRCHECK_TRACE_PLAN);
+    }
+    let multi = real_tool_contract_case(&named_fixture_case("errcheck", "multi-file"))
+        .expect("errcheck multi-file contract lookup")
+        .expect("errcheck multi-file contract");
+    assert_eq!(
+        multi.invocations[0].targets,
+        &["example.go", "pkg/selected_clean.go"]
+    );
+    assert!(
+        multi
+            .diagnostic_contains
+            .iter()
+            .any(|diagnostic| diagnostic.contains("workspace_only.go")),
+        "workspace-only issue must remain attributed outside the selected candidate set"
+    );
 }
 
 #[test]
@@ -4047,6 +4231,99 @@ fn workspace_indicator_trace_plan_can_stop_after_preflight_or_coverage_and_rejec
 }
 
 #[test]
+fn errcheck_trace_plan_binds_go_preflights_and_checker_workspace() {
+    let root = unique_temp_dir("velvet-glove-errcheck-trace-test");
+    let indicator = root.join("go.mod");
+    let target = root.join("pkg/example.go");
+    std::fs::create_dir_all(target.parent().unwrap()).expect("Go package directory");
+    std::fs::write(&indicator, "module example\n\ngo 1.25.0\n").expect("go.mod indicator");
+    std::fs::write(&target, "package pkg\n").expect("selected Go source");
+    let indicator = canonical_project(&indicator).to_string_lossy().into_owned();
+    let outer_arguments = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "errcheck".to_owned(),
+        "go".to_owned(),
+        ERRCHECK_WORKSPACE_MARKER.to_owned(),
+        indicator,
+    ];
+    let targets = [canonical_project(&target)];
+
+    let (program, invocations) = resolve_trace_invocations(
+        ERRCHECK_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[0, 0, 0, 1],
+    )
+    .expect("resolve errcheck workspace trace");
+
+    assert_eq!(program, "go");
+    assert_eq!(invocations.len(), 4);
+    for (invocation, arguments) in invocations[..3].iter().zip(ERRCHECK_GO_COMMANDS) {
+        assert_eq!(invocation.program, "go");
+        assert_eq!(invocation.arguments, *arguments);
+        assert_eq!(invocation.targets, targets);
+        assert_eq!(invocation.exit_code, 0);
+    }
+    assert_eq!(invocations[3].program, "errcheck");
+    assert_eq!(invocations[3].arguments, ERRCHECK_ARGUMENTS);
+    assert_eq!(invocations[3].targets, targets);
+    assert_eq!(invocations[3].exit_code, 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn errcheck_trace_plan_stops_at_failed_preflight_and_rejects_forwarding() {
+    let root = unique_temp_dir("velvet-glove-errcheck-trace-failure-test");
+    let indicator = root.join("go.mod");
+    let target = root.join("example.go");
+    std::fs::write(&indicator, "module example\n\ngo 1.25.0\n").expect("go.mod indicator");
+    std::fs::write(&target, "package main\n").expect("selected Go source");
+    let indicator = canonical_project(&indicator).to_string_lossy().into_owned();
+    let targets = [canonical_project(&target)];
+    let arguments = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "errcheck".to_owned(),
+        "go".to_owned(),
+        ERRCHECK_WORKSPACE_MARKER.to_owned(),
+        indicator.clone(),
+    ];
+
+    let (_, invocations) =
+        resolve_trace_invocations(ERRCHECK_TRACE_PLAN, "python", &arguments, &targets, &[0, 1])
+            .expect("resolve failed module-verification preflight");
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[1].program, "go");
+    assert_eq!(invocations[1].arguments, ERRCHECK_GO_VERIFY_COMMAND);
+    assert_eq!(invocations[1].exit_code, 1);
+
+    let forwarded = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "errcheck".to_owned(),
+        "go".to_owned(),
+        "-ignoretests".to_owned(),
+        ERRCHECK_WORKSPACE_MARKER.to_owned(),
+        indicator,
+    ];
+    let error = resolve_trace_invocations(
+        ERRCHECK_TRACE_PLAN,
+        "python",
+        &forwarded,
+        &targets,
+        &[0, 0, 0, 0],
+    )
+    .expect_err("forwarded errcheck options must fail closed");
+    assert!(error.contains("does not permit forwarded extra arguments"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn tool_trace_shim_dispatches_distinct_program_bindings() {
     let root = unique_temp_dir("velvet-glove-multi-program-trace-test");
     let shim_dir = root.join("shims");
@@ -4445,6 +4722,117 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
 }
 
 #[test]
+fn errcheck_trace_environment_is_private_offline_and_bound_to_managed_go() {
+    let temporary = unique_temp_dir("velvet-glove-errcheck-trace-environment");
+    let root = temporary
+        .canonicalize()
+        .expect("canonical errcheck trace environment root");
+    let shim_dir = root.join("tool-shim");
+    let trace_root = root.join("tool-traces");
+    let record = root.join("record");
+    let private_root = root.join("tmp/velvet-glove-errcheck-fixture");
+    let managed_bin = root.join("managed/bin");
+    std::fs::create_dir_all(&shim_dir).expect("errcheck shim directory");
+    std::fs::create_dir_all(&trace_root).expect("errcheck trace directory");
+    std::fs::create_dir_all(&record).expect("errcheck trace record");
+    for program in ["errcheck", "go"] {
+        std::fs::write(shim_dir.join(program), "fixture shim\n").expect("errcheck trace shim");
+    }
+    std::fs::write(record.join("logical-program"), "errcheck\n").expect("logical errcheck record");
+    std::fs::write(
+        record.join("program"),
+        format!("{}\n", shim_dir.join("errcheck").display()),
+    )
+    .expect("absolute errcheck shim record");
+    std::fs::write(record.join("argv-0"), "-abspath\n").expect("errcheck argv record");
+    for (name, value) in
+        std::iter::once(("TERM", "dumb")).chain(ERRCHECK_CONTROLLED_ENV.iter().copied())
+    {
+        std::fs::write(record.join(format!("env-{name}")), format!("{value}\n"))
+            .expect("controlled errcheck environment record");
+    }
+    for name in ERRCHECK_SCRUBBED_ENV
+        .iter()
+        .chain(ERRCHECK_LOADER_SCRUBBED_ENV)
+    {
+        std::fs::write(record.join(format!("env-{name}")), "\n")
+            .expect("scrubbed errcheck environment record");
+    }
+    for (name, suffix) in [
+        (HOME_ENV, "home"),
+        (TMPDIR_ENV, "tmp"),
+        (XDG_CACHE_HOME_ENV, "xdg-cache"),
+        ("GOCACHE", "go-build"),
+        ("GOPATH", "gopath"),
+        ("GOTMPDIR", "go-tmp"),
+    ] {
+        std::fs::write(
+            record.join(format!("env-{name}")),
+            format!("{}\n", private_root.join(suffix).display()),
+        )
+        .expect("private errcheck environment record");
+    }
+    std::fs::write(
+        record.join("env-GOMODCACHE"),
+        format!("{}\n", root.join("go-mod-cache").display()),
+    )
+    .expect("controlled errcheck module-cache record");
+    let expected_path = std::env::join_paths([
+        managed_bin.as_path(),
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .expect("errcheck child PATH");
+    std::fs::write(
+        record.join("env-PATH"),
+        format!("{}\n", expected_path.to_string_lossy()),
+    )
+    .expect("controlled errcheck PATH record");
+    let harness = ToolTraceHarness {
+        shim_dir,
+        trace_root,
+        programs: BTreeMap::from([
+            ("errcheck".to_owned(), managed_bin.join("errcheck")),
+            ("go".to_owned(), managed_bin.join("go")),
+        ]),
+        cargo_clippy_toolchain: None,
+        cargo_fmt_toolchain: None,
+        prettier_toolchain: None,
+        eslint_toolchain: None,
+        contextlint_toolchain: None,
+        contextlint: false,
+        dclint_toolchain: None,
+        eslint: false,
+    };
+    let mut observed_private_root = None;
+
+    let environment =
+        verify_errcheck_trace_environment(&record, &harness, &mut observed_private_root)
+            .expect("private offline errcheck trace environment");
+    assert_eq!(environment.get("GOPROXY").map(String::as_str), Some("off"));
+    assert_eq!(
+        environment.get("GOTOOLCHAIN").map(String::as_str),
+        Some("local")
+    );
+    assert_eq!(
+        environment.get("GOMODCACHE").map(String::as_str),
+        Some("<controlled-module-cache>")
+    );
+    assert_eq!(observed_private_root.as_ref(), Some(&private_root));
+
+    std::fs::write(
+        record.join("env-GOPROXY"),
+        format!("{ERRCHECK_POISON_ENV_VALUE}\n"),
+    )
+    .expect("poisoned errcheck proxy record");
+    let mut poisoned_private_root = None;
+    let error = verify_errcheck_trace_environment(&record, &harness, &mut poisoned_private_root)
+        .expect_err("inherited errcheck network configuration must fail closed");
+    assert!(error.contains("GOPROXY"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn betterleaks_output_requires_adapter_canonicalization() {
     let suffix = "unable to load config, err: open does-not-exist.toml: no such file or directory";
     for clock in ["8:10AM", "12:59PM"] {
@@ -4678,6 +5066,19 @@ fn vacuum_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated errcheck adapter adversarial contract; requires controlled Python"]
+fn errcheck_evaluated_adapter_adversarial_contract() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("errcheck")
+        .unwrap_or_else(|| panic!("builtin catalog has no errcheck spec"));
+    verify_errcheck_adapter_adversarial_contract(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated Cargo Fmt adapter lifecycle; requires controlled Python"]
 fn cargo_fmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -4830,6 +5231,11 @@ fn run_all_tool_fixtures() {
         verify_vacuum_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("vacuum adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "errcheck") {
+        verify_errcheck_adapter_adversarial_contract(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("errcheck adapter adversarial contract probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "cargo-fmt") {
         verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -7928,6 +8334,142 @@ fn resolve_trace_invocations(
             }
             Ok((preflight_program, traces))
         }
+        TracePlan::ErrcheckWorkspaceIndicatorAdapter {
+            checker_program_index,
+            go_program_index,
+            adapter_prefix,
+            marker,
+            go_commands,
+            checker_arguments,
+        } => {
+            if expected_exit_codes.is_empty() || expected_exit_codes.len() > go_commands.len() + 1 {
+                return Err(format!(
+                    "errcheck workspace adapter trace for {outer_program} must declare one through {} exit codes, got {expected_exit_codes:?}",
+                    go_commands.len() + 1
+                ));
+            }
+            if checker_program_index != adapter_prefix.len() + 1
+                || go_program_index != checker_program_index + 1
+            {
+                return Err(format!(
+                    "errcheck workspace adapter trace plan for {outer_program} must place exactly one script before consecutive checker and Go tools"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "errcheck workspace adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let checker_program = outer_arguments
+                .get(checker_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "errcheck workspace adapter {outer_program} has no checker at argument {checker_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let go_program = outer_arguments
+                .get(go_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "errcheck workspace adapter {outer_program} has no Go tool at argument {go_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            if checker_program == go_program {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} must trace distinct checker and Go tools"
+                ));
+            }
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= go_program_index {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} places {marker:?} before its tools: {outer_arguments:?}"
+                ));
+            }
+            let forwarded = &outer_arguments[(go_program_index + 1)..*marker_index];
+            if !forwarded.is_empty() {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} fixture trace does not permit forwarded extra arguments: {forwarded:?}"
+                ));
+            }
+            let rendered_indicators = &outer_arguments[(*marker_index + 1)..];
+            let [indicator] = rendered_indicators else {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} requires exactly one indicator after {marker:?}, got {rendered_indicators:?}"
+                ));
+            };
+            let indicator_path = Path::new(indicator);
+            if !indicator_path.is_absolute()
+                || indicator_path.file_name() != Some(OsStr::new("go.mod"))
+                || !indicator_path.is_file()
+            {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} rendered an invalid go.mod indicator {indicator:?}"
+                ));
+            }
+            let workspace = indicator_path.parent().ok_or_else(|| {
+                format!(
+                    "errcheck workspace adapter {outer_program} indicator has no parent: {indicator:?}"
+                )
+            })?;
+            let outside_workspace = targets
+                .iter()
+                .filter(|target| !target.starts_with(workspace))
+                .collect::<Vec<_>>();
+            if !outside_workspace.is_empty() {
+                return Err(format!(
+                    "errcheck workspace adapter {outer_program} targets escape indicator workspace {workspace:?}: {outside_workspace:?}"
+                ));
+            }
+            let mut traces = go_commands
+                .iter()
+                .zip(expected_exit_codes.iter().take(go_commands.len()))
+                .map(|(arguments, exit_code)| ResolvedTraceInvocation {
+                    program: go_program.clone(),
+                    targets: targets.to_vec(),
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| (*argument).to_owned())
+                        .collect(),
+                    exit_code: *exit_code,
+                })
+                .collect::<Vec<_>>();
+            if let Some(exit_code) = expected_exit_codes.get(go_commands.len()) {
+                traces.push(ResolvedTraceInvocation {
+                    program: checker_program,
+                    targets: targets.to_vec(),
+                    arguments: checker_arguments
+                        .iter()
+                        .map(|argument| (*argument).to_owned())
+                        .collect(),
+                    exit_code: *exit_code,
+                });
+            }
+            Ok((go_program, traces))
+        }
         TracePlan::CargoFmtWorkspaceIndicatorMarker {
             adapter_prefix,
             marker,
@@ -9558,6 +10100,17 @@ impl ToolTraceHarness {
                 format!("create controlled dclint temporary directory {temporary:?}: {error}")
             })?;
         }
+        if logical_programs.contains("errcheck") {
+            if !logical_programs.contains("go") {
+                return Err("errcheck trace requires its explicit Go preflight binding".to_owned());
+            }
+            for directory in ["tmp", "go-mod-cache"] {
+                let path = workspace.root.join(directory);
+                std::fs::create_dir_all(&path).map_err(|error| {
+                    format!("create controlled errcheck environment directory {path:?}: {error}")
+                })?;
+            }
+        }
         for (logical_program, real_program) in &programs {
             let shim = shim_dir.join(logical_program);
             std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
@@ -9759,6 +10312,42 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
+        if self.programs.contains_key("errcheck") {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "errcheck trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            let controlled_tmp = root
+                .join("tmp")
+                .canonicalize()
+                .map_err(|error| format!("canonicalize controlled errcheck TMPDIR: {error}"))?;
+            let controlled_modcache =
+                root.join("go-mod-cache").canonicalize().map_err(|error| {
+                    format!("canonicalize controlled errcheck module cache: {error}")
+                })?;
+            command
+                .env(TMPDIR_ENV, controlled_tmp)
+                .env("GOMODCACHE", controlled_modcache)
+                .env(HOME_ENV, ERRCHECK_POISON_ENV_VALUE)
+                .env(XDG_CACHE_HOME_ENV, ERRCHECK_POISON_ENV_VALUE)
+                .env("GOCACHE", ERRCHECK_POISON_ENV_VALUE)
+                .env("GOPATH", ERRCHECK_POISON_ENV_VALUE)
+                .env("GOTMPDIR", ERRCHECK_POISON_ENV_VALUE)
+                .env(CI_ENV, ERRCHECK_POISON_ENV_VALUE)
+                .env(DEBUG_ENV, ERRCHECK_POISON_ENV_VALUE)
+                .env("GO_VELVET_GLOVE_POISON", ERRCHECK_POISON_ENV_VALUE);
+            for (name, _) in ERRCHECK_CONTROLLED_ENV {
+                command.env(name, ERRCHECK_POISON_ENV_VALUE);
+            }
+            for name in ERRCHECK_SCRUBBED_ENV {
+                command.env(name, ERRCHECK_POISON_ENV_VALUE);
+            }
+            for name in ERRCHECK_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         if let Some(toolchain) = &self.cargo_clippy_toolchain {
             command
                 .env(DYLD_LIBRARY_PATH_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
@@ -9853,6 +10442,7 @@ fn verify_tool_trace_invocations(
     let mut cargo_target_dir = None;
     let mut clippy_conf_dir = None;
     let mut dclint_private_configs = Vec::new();
+    let mut errcheck_private_root = None;
     for (invocation, expected) in invocations.iter().zip(expected_invocations) {
         let trace_program = expected.program.as_str();
         let record = invocation.path();
@@ -10063,6 +10653,16 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if matches!(trace_program, "errcheck" | "go") && harness.programs.contains_key("errcheck") {
+            let controlled =
+                verify_errcheck_trace_environment(&record, harness, &mut errcheck_private_root)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
         {
@@ -10124,6 +10724,13 @@ fn verify_tool_trace_invocations(
             contextlint_trace_prerequisites(harness, expected)?
         } else if trace_program == "buf" {
             serde_json::json!({"diff": BUF_DIFF_PROGRAM})
+        } else if matches!(trace_program, "errcheck" | "go")
+            && harness.programs.contains_key("errcheck")
+        {
+            serde_json::json!({
+                "go": harness.programs.get("go"),
+                "moduleCache": "<controlled-module-cache>",
+            })
         } else if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
         {
@@ -11360,6 +11967,153 @@ fn dclint_trace_prerequisites(harness: &ToolTraceHarness) -> Result<JsonValue, S
         "node": toolchain.node,
         "dclintCli": toolchain.cli,
     }))
+}
+
+fn verify_errcheck_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    expected_private_root: &mut Option<PathBuf>,
+) -> Result<BTreeMap<String, String>, String> {
+    let logical_program = read_record(record, "logical-program")?;
+    if !matches!(logical_program.as_str(), "errcheck" | "go") {
+        return Err(format!(
+            "errcheck trace recorded an unexpected logical program {logical_program:?}"
+        ));
+    }
+    let observed_shim = PathBuf::from(read_record(record, "program")?)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced {logical_program} shim: {error}"))?;
+    let expected_shim = harness
+        .shim_dir
+        .join(&logical_program)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize expected {logical_program} shim: {error}"))?;
+    if observed_shim != expected_shim {
+        return Err(format!(
+            "errcheck adapter escaped its {logical_program} trace shim: expected {expected_shim:?}, got {observed_shim:?}"
+        ));
+    }
+
+    let mut environment = BTreeMap::new();
+    for (name, expected) in std::iter::once(("TERM", "dumb")).chain(
+        ERRCHECK_CONTROLLED_ENV
+            .iter()
+            .map(|(name, expected)| (*name, *expected)),
+    ) {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "errcheck trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in ERRCHECK_SCRUBBED_ENV
+        .iter()
+        .chain(ERRCHECK_LOADER_SCRUBBED_ENV)
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "errcheck trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+
+    let controlled_root = harness
+        .trace_root
+        .parent()
+        .ok_or_else(|| {
+            format!(
+                "errcheck trace root has no controlled environment parent: {:?}",
+                harness.trace_root
+            )
+        })?
+        .canonicalize()
+        .map_err(|error| format!("canonicalize errcheck trace environment root: {error}"))?;
+    let home = PathBuf::from(read_record(record, &format!("env-{HOME_ENV}"))?);
+    let private_root = home
+        .parent()
+        .ok_or_else(|| format!("errcheck HOME has no private root: {home:?}"))?
+        .to_path_buf();
+    if home != private_root.join("home")
+        || private_root.parent() != Some(controlled_root.join("tmp").as_path())
+        || !private_root
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("velvet-glove-errcheck-"))
+    {
+        return Err(format!(
+            "errcheck trace escaped its controlled temporary parent: {private_root:?}"
+        ));
+    }
+    if let Some(expected) = expected_private_root {
+        if expected != &private_root {
+            return Err(format!(
+                "errcheck child invocations changed private roots: expected {expected:?}, got {private_root:?}"
+            ));
+        }
+    } else {
+        *expected_private_root = Some(private_root.clone());
+    }
+
+    for (name, expected) in [
+        (HOME_ENV, private_root.join("home")),
+        (TMPDIR_ENV, private_root.join("tmp")),
+        (XDG_CACHE_HOME_ENV, private_root.join("xdg-cache")),
+        ("GOCACHE", private_root.join("go-build")),
+        ("GOPATH", private_root.join("gopath")),
+        ("GOTMPDIR", private_root.join("go-tmp")),
+    ] {
+        let value = PathBuf::from(read_record(record, &format!("env-{name}"))?);
+        if value != expected {
+            return Err(format!(
+                "errcheck trace expected private {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(
+            name.to_owned(),
+            format!(
+                "<controlled-errcheck>/{}",
+                expected.file_name().unwrap().to_string_lossy()
+            ),
+        );
+    }
+    let expected_modcache = controlled_root.join("go-mod-cache");
+    let modcache = PathBuf::from(read_record(record, "env-GOMODCACHE")?);
+    if modcache != expected_modcache {
+        return Err(format!(
+            "errcheck trace expected controlled GOMODCACHE={expected_modcache:?}, got {modcache:?}"
+        ));
+    }
+    environment.insert(
+        "GOMODCACHE".to_owned(),
+        "<controlled-module-cache>".to_owned(),
+    );
+
+    let go_program = harness
+        .programs
+        .get("go")
+        .ok_or_else(|| "errcheck trace has no managed Go binding".to_owned())?;
+    let go_directory = go_program
+        .parent()
+        .ok_or_else(|| format!("errcheck trace Go executable has no parent: {go_program:?}"))?;
+    let expected_path = if logical_program == "go" && read_record(record, "argv-0")? == "env" {
+        ERRCHECK_INITIAL_CHILD_PATH.to_owned()
+    } else {
+        std::env::join_paths([go_directory, Path::new("/usr/bin"), Path::new("/bin")])
+            .map_err(|error| format!("construct errcheck child PATH: {error}"))?
+            .to_string_lossy()
+            .into_owned()
+    };
+    let path = read_record(record, &format!("env-{PATH_ENV}"))?;
+    if path != expected_path {
+        return Err(format!(
+            "errcheck trace expected controlled PATH={expected_path:?}, got {path:?}"
+        ));
+    }
+    environment.insert(PATH_ENV.to_owned(), path);
+    Ok(environment)
 }
 
 fn verify_cargo_clippy_trace_environment(
@@ -13783,6 +14537,9 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
         };
     }
     let mut programs = BTreeSet::from([spec.executable.as_str()]);
+    if spec.id == "errcheck" {
+        programs.insert("go");
+    }
     programs.extend(
         spec.phases
             .values()
@@ -15950,6 +16707,540 @@ fn assert_cargo_fmt_private_roots_removed(root: &Path, label: &str) -> Result<()
     } else {
         Err(format!(
             "Cargo Fmt {label} lifecycle retained private roots: {retained:?}"
+        ))
+    }
+}
+
+fn verify_errcheck_adapter_adversarial_contract(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "errcheck adversarial probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command_flag),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(go_name),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "errcheck adversarial probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I"
+            || command_flag != "-c"
+            || go_name != "go"
+            || marker != ERRCHECK_WORKSPACE_MARKER
+        {
+            return Err(format!(
+                "errcheck adversarial probe expected exact isolated shape, got {isolated:?} {command_flag:?} go={go_name:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "errcheck adversarial probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("errcheck adversarial probe cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize errcheck adversarial Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-errcheck-adversarial");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize errcheck adversarial root: {error}"))?;
+        let result = (|| {
+            let adapter_tmp = root.join("adapter-tmp");
+            let module_cache = root.join("go-mod-cache");
+            let workspace = root.join("workspace");
+            let go_root = root.join("go-root");
+            let fake_bin = go_root.join("bin");
+            for directory in [&adapter_tmp, &module_cache, &workspace, &fake_bin] {
+                std::fs::create_dir_all(directory).map_err(|error| {
+                    format!("create errcheck adversarial directory {directory:?}: {error}")
+                })?;
+            }
+            write_errcheck_probe_workspace(&workspace)?;
+            let manifest = workspace.join("go.mod");
+            let go_log = root.join("go.argv");
+            let checker_log = root.join("errcheck.argv");
+            let child_pid_path = root.join("signal-child.pid");
+            let descendant_pid_path = root.join("signal-descendant.pid");
+            let signal_ready_path = root.join("signal.ready");
+
+            let environment_record = serde_json::json!({
+                "GOARCH": "arm64",
+                "GOMODCACHE": module_cache,
+                "GOOS": "darwin",
+                "GOROOT": go_root,
+                "GOVERSION": "go1.26.5",
+            })
+            .to_string();
+            let package_record = serde_json::json!({
+                "Dir": workspace,
+                "ImportPath": "example.com/errcheckprobe",
+                "Name": "probe",
+                "GoFiles": ["example.go"],
+                "CgoFiles": [],
+                "TestGoFiles": ["example_test.go"],
+                "XTestGoFiles": ["external_test.go"],
+                "IgnoredGoFiles": [],
+                "InvalidGoFiles": [],
+                "Module": {
+                    "Path": "example.com/errcheckprobe",
+                    "Main": true,
+                    "Dir": workspace,
+                    "GoMod": manifest,
+                },
+            })
+            .to_string();
+            let go_source = format!(
+                r#"#!/bin/sh
+set -eu
+separator=
+for argument in "$@"; do
+  printf '%s%s' "$separator" "$argument" >> "${{ERRCHECK_GO_LOG}}"
+  separator='	'
+done
+printf '\n' >> "${{ERRCHECK_GO_LOG}}"
+if [ "${{ERRCHECK_PROBE_MODE-}}" = go-noop ]; then
+  exit 0
+fi
+case "${{1-}}" in
+  env)
+    printf '%s\n' '{environment_record}'
+    ;;
+  mod)
+    if [ "${{2-}}" != verify ]; then
+      printf '%s\n' 'unexpected go mod command' >&2
+      exit 2
+    fi
+    printf '%s\n' 'all modules verified'
+    ;;
+  list)
+    printf '%s\n' '{package_record}'
+    ;;
+  *)
+    printf '%s\n' 'unexpected go command' >&2
+    exit 2
+    ;;
+esac
+"#
+            );
+            let checker_source = r#"#!/bin/sh
+set -eu
+separator=
+for argument in "$@"; do
+  printf '%s%s' "$separator" "$argument" >> "${ERRCHECK_CHECKER_LOG}"
+  separator='	'
+done
+printf '\n' >> "${ERRCHECK_CHECKER_LOG}"
+case "${ERRCHECK_PROBE_MODE-}" in
+  clean)
+    exit 0
+    ;;
+  issue)
+    printf '%s:1:1:\t%s\n' "${ERRCHECK_WORKSPACE}/example_test.go" 'package probe'
+    printf '%s:1:1:\t%s\n' "${ERRCHECK_WORKSPACE}/external_test.go" 'package probe_test'
+    exit 1
+    ;;
+  malformed)
+    printf '%s\n' 'not an errcheck diagnostic'
+    exit 1
+    ;;
+  unstable-path)
+    printf '%s:1:1:\t%s\n' "${ERRCHECK_WORKSPACE}/./example.go" 'package probe'
+    exit 1
+    ;;
+  signal)
+    trap 'exit 0' HUP INT TERM
+    (
+      exec >/dev/null 2>&1
+      trap '' HUP INT TERM
+      while :; do :; done
+    ) &
+    printf '%s\n' "$!" > "${ERRCHECK_DESCENDANT_PID}"
+    printf '%s\n' "$$" > "${ERRCHECK_CHILD_PID}"
+    : > "${ERRCHECK_SIGNAL_READY}"
+    while :; do :; done
+    ;;
+  *)
+    printf '%s\n' "unexpected errcheck probe mode: ${ERRCHECK_PROBE_MODE-}" >&2
+    exit 2
+    ;;
+esac
+"#;
+            let go_tool = fake_bin.join("go");
+            let checker_tool = fake_bin.join("errcheck");
+            write_executable_fixture(&go_tool, &go_source, "errcheck adversarial Go")?;
+            write_executable_fixture(
+                &checker_tool,
+                checker_source,
+                "errcheck adversarial checker",
+            )?;
+
+            let adapter_command = |selected_workspace: &Path, mode: &str| {
+                let mut command = Command::new(&python);
+                command
+                    .env_clear()
+                    .args(["-I", "-c", adapter])
+                    .arg("errcheck")
+                    .arg("go")
+                    .arg(ERRCHECK_WORKSPACE_MARKER)
+                    .arg(selected_workspace.join("go.mod"))
+                    .current_dir(selected_workspace)
+                    .env(PATH_ENV, &fake_bin)
+                    .env(TMPDIR_ENV, &adapter_tmp)
+                    .env("GOMODCACHE", &module_cache)
+                    .env("ERRCHECK_PROBE_MODE", mode)
+                    .env("ERRCHECK_GO_LOG", &go_log)
+                    .env("ERRCHECK_CHECKER_LOG", &checker_log)
+                    .env("ERRCHECK_WORKSPACE", selected_workspace)
+                    .env("ERRCHECK_CHILD_PID", &child_pid_path)
+                    .env("ERRCHECK_DESCENDANT_PID", &descendant_pid_path)
+                    .env("ERRCHECK_SIGNAL_READY", &signal_ready_path);
+                command
+            };
+            let run_adapter = |selected_workspace: &Path,
+                               mode: &str,
+                               evidence: &str|
+             -> Result<BoundedOutput, String> {
+                let mut command = adapter_command(selected_workspace, mode);
+                run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(10)),
+                    &root.join(evidence),
+                )
+                .map_err(|error| format!("run errcheck {mode} adversarial probe: {error}"))
+            };
+            let reset_logs = || {
+                for path in [&go_log, &checker_log] {
+                    match std::fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!(
+                                "reset errcheck adversarial log {path:?}: {error}"
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            };
+
+            let source_baseline = ["example.go", "example_test.go", "external_test.go"]
+                .into_iter()
+                .map(|name| {
+                    let path = workspace.join(name);
+                    std::fs::read(&path)
+                        .map(|bytes| (path, bytes))
+                        .map_err(|error| format!("read errcheck source baseline: {error}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            reset_logs()?;
+            let clean = run_adapter(&workspace, "clean", "clean-evidence")?;
+            if clean.status.code() != Some(0)
+                || !clean.stdout.is_empty()
+                || !clean.stderr.is_empty()
+            {
+                return Err(format!(
+                    "errcheck clean no-op mismatch: status={:?}; stdout={:?}; stderr={:?}",
+                    clean.status.code(),
+                    String::from_utf8_lossy(&clean.stdout),
+                    String::from_utf8_lossy(&clean.stderr)
+                ));
+            }
+            let expected_go_argv = "env\t-json\tGOARCH\tGOMODCACHE\tGOOS\tGOROOT\tGOVERSION\nmod\tverify\nlist\t-mod=readonly\t-json\t./...\n";
+            let observed_go_argv = std::fs::read_to_string(&go_log)
+                .map_err(|error| format!("read errcheck Go argv evidence: {error}"))?;
+            let observed_checker_argv = std::fs::read_to_string(&checker_log)
+                .map_err(|error| format!("read errcheck checker argv evidence: {error}"))?;
+            if observed_go_argv != expected_go_argv
+                || observed_checker_argv != "-abspath\t-mod=readonly\t./...\n"
+                || observed_go_argv.contains("-test")
+            {
+                return Err(format!(
+                    "errcheck ordinary package-list shape mismatch: go={observed_go_argv:?}; checker={observed_checker_argv:?}"
+                ));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "clean")?;
+
+            reset_logs()?;
+            let issue = run_adapter(&workspace, "issue", "issue-evidence")?;
+            let expected_issue =
+                b"example_test.go:1:1:\tpackage probe\nexternal_test.go:1:1:\tpackage probe_test\n";
+            if issue.status.code() != Some(1)
+                || issue.stdout != expected_issue
+                || !issue.stderr.is_empty()
+            {
+                return Err(format!(
+                    "errcheck test-file attribution mismatch: status={:?}; stdout={:?}; stderr={:?}",
+                    issue.status.code(),
+                    String::from_utf8_lossy(&issue.stdout),
+                    String::from_utf8_lossy(&issue.stderr)
+                ));
+            }
+            for (path, expected) in &source_baseline {
+                let observed = std::fs::read(path)
+                    .map_err(|error| format!("read errcheck source after issue run: {error}"))?;
+                if &observed != expected {
+                    return Err(format!("errcheck issue probe mutated source {path:?}"));
+                }
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "issue")?;
+
+            reset_logs()?;
+            let go_noop = run_adapter(&workspace, "go-noop", "go-noop-evidence")?;
+            let go_noop_stderr = String::from_utf8_lossy(&go_noop.stderr);
+            if go_noop.status.code() != Some(2)
+                || !go_noop.stdout.is_empty()
+                || !go_noop_stderr.contains("Go environment preflight is not one UTF-8 JSON object")
+                || checker_log.exists()
+            {
+                return Err(format!(
+                    "errcheck Go no-op did not fail closed: status={:?}; checker_ran={}; stdout={:?}; stderr={go_noop_stderr:?}",
+                    go_noop.status.code(),
+                    checker_log.exists(),
+                    String::from_utf8_lossy(&go_noop.stdout)
+                ));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "Go no-op")?;
+
+            for (mode, diagnostic) in [
+                ("malformed", "errcheck emitted an invalid diagnostic line"),
+                ("unstable-path", "errcheck diagnostic path is not canonical"),
+            ] {
+                reset_logs()?;
+                let output = run_adapter(&workspace, mode, &format!("{mode}-evidence"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains(diagnostic)
+                {
+                    return Err(format!(
+                        "errcheck {mode} output did not fail closed: status={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+                assert_errcheck_private_roots_removed(&adapter_tmp, mode)?;
+            }
+
+            for alias_kind in ["symlink", "hardlink"] {
+                let alias_workspace = root.join(format!("{alias_kind}-workspace"));
+                std::fs::create_dir(&alias_workspace)
+                    .map_err(|error| format!("create errcheck {alias_kind} workspace: {error}"))?;
+                write_errcheck_probe_workspace(&alias_workspace)?;
+                let source = alias_workspace.join("example.go");
+                let alias = alias_workspace.join("alias.go");
+                if alias_kind == "symlink" {
+                    std::os::unix::fs::symlink(&source, &alias)
+                        .map_err(|error| format!("create errcheck source symlink: {error}"))?;
+                } else {
+                    std::fs::hard_link(&source, &alias)
+                        .map_err(|error| format!("create errcheck source hardlink: {error}"))?;
+                }
+                reset_logs()?;
+                let output =
+                    run_adapter(&alias_workspace, "clean", &format!("{alias_kind}-evidence"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains("path is not a unique regular file")
+                    || go_log.exists()
+                    || checker_log.exists()
+                {
+                    return Err(format!(
+                        "errcheck {alias_kind} source did not fail before execution: status={:?}; go_ran={}; checker_ran={}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        go_log.exists(),
+                        checker_log.exists(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+                assert_errcheck_private_roots_removed(&adapter_tmp, alias_kind)?;
+            }
+
+            for (signal_name, signal_number) in [("HUP", 1), ("INT", 2), ("TERM", 15)] {
+                for path in [
+                    &child_pid_path,
+                    &descendant_pid_path,
+                    &signal_ready_path,
+                    &go_log,
+                    &checker_log,
+                ] {
+                    let _ = std::fs::remove_file(path);
+                }
+                let mut command = adapter_command(&workspace, "signal");
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+                let mut outer = command.spawn().map_err(|error| {
+                    format!("spawn errcheck SIG{signal_name} adversarial adapter: {error}")
+                })?;
+                let outer_pid = outer.id();
+                let startup_timeout = timeout.min(Duration::from_secs(5));
+                let startup_deadline = std::time::Instant::now() + startup_timeout;
+                while !signal_ready_path.is_file() {
+                    if let Some(status) = outer.try_wait().map_err(|error| {
+                        format!("poll errcheck SIG{signal_name} adapter: {error}")
+                    })? {
+                        return Err(format!(
+                            "errcheck SIG{signal_name} adapter exited {status:?} before its checker became ready"
+                        ));
+                    }
+                    if std::time::Instant::now() >= startup_deadline {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!(
+                            "errcheck SIG{signal_name} checker did not become ready within {startup_timeout:?}"
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let child_pid =
+                    read_pid_file(&child_pid_path, &format!("errcheck SIG{signal_name} child"))?;
+                let descendant_pid = read_pid_file(
+                    &descendant_pid_path,
+                    &format!("errcheck SIG{signal_name} descendant"),
+                )?;
+                if !signal_process_group(child_pid, "0")?.success() {
+                    let _ = signal_process(descendant_pid, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "errcheck SIG{signal_name} checker did not lead an isolated process group"
+                    ));
+                }
+                if !signal_process(outer_pid, signal_name)?.success() {
+                    let _ = signal_process_group(child_pid, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "send SIG{signal_name} to errcheck adversarial adapter"
+                    ));
+                }
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send(outer.wait_with_output());
+                });
+                let completion_timeout = timeout.min(Duration::from_secs(5));
+                let output = match receiver.recv_timeout(completion_timeout) {
+                    Ok(Ok(output)) => output,
+                    Ok(Err(error)) => {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        return Err(format!(
+                            "wait for errcheck SIG{signal_name} adapter: {error}"
+                        ));
+                    }
+                    Err(error) => {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        return Err(format!(
+                            "errcheck SIG{signal_name} adapter did not finish within {completion_timeout:?}: {error}"
+                        ));
+                    }
+                };
+                let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+                if child_alive || descendant_alive || group_alive {
+                    let _ = signal_process_group(child_pid, "KILL");
+                }
+                let expected_stderr =
+                    format!("velvet-glove-errcheck: received signal {signal_number}\n");
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || String::from_utf8_lossy(&output.stderr) != expected_stderr
+                    || child_alive
+                    || descendant_alive
+                    || group_alive
+                {
+                    return Err(format!(
+                        "errcheck SIG{signal_name} lifecycle mismatch: status={:?}; child={child_alive}; descendant={descendant_alive}; group={group_alive}; stdout={:?}; stderr={:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                assert_errcheck_private_roots_removed(&adapter_tmp, &format!("SIG{signal_name}"))?;
+            }
+
+            write_executable_fixture(
+                &checker_tool,
+                "#!/velvet-glove-missing-interpreter\n",
+                "errcheck missing-interpreter checker",
+            )?;
+            reset_logs()?;
+            let io_failure = run_adapter(&workspace, "clean", "io-failure-evidence")?;
+            let io_stderr = String::from_utf8_lossy(&io_failure.stderr);
+            if io_failure.status.code() != Some(2)
+                || !io_failure.stdout.is_empty()
+                || !io_stderr.contains("No such file or directory")
+                || io_stderr == "velvet-glove-errcheck: 2\n"
+            {
+                return Err(format!(
+                    "errcheck child I/O diagnostic was not preserved: status={:?}; stdout={:?}; stderr={io_stderr:?}",
+                    io_failure.status.code(),
+                    String::from_utf8_lossy(&io_failure.stdout)
+                ));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "I/O failure")?;
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn write_errcheck_probe_workspace(root: &Path) -> Result<(), String> {
+    std::fs::write(
+        root.join("go.mod"),
+        "module example.com/errcheckprobe\n\ngo 1.25.0\n",
+    )
+    .map_err(|error| format!("write errcheck adversarial go.mod: {error}"))?;
+    for (name, source) in [
+        ("example.go", "package probe\n"),
+        ("example_test.go", "package probe\n"),
+        ("external_test.go", "package probe_test\n"),
+    ] {
+        std::fs::write(root.join(name), source)
+            .map_err(|error| format!("write errcheck adversarial source {name}: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assert_errcheck_private_roots_removed(root: &Path, label: &str) -> Result<(), String> {
+    let retained = sorted_entries(root)?
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("velvet-glove-errcheck-"))
+                .then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "errcheck {label} lifecycle retained private roots: {retained:?}"
         ))
     }
 }
@@ -23219,6 +24510,7 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
     let inline_marker = match case.tool.as_str() {
         "go-fmt" => Some(GOFMT_FILES_MARKER),
         "dclint" => Some(DCLINT_FILES_MARKER),
+        "errcheck" => Some(ERRCHECK_WORKSPACE_MARKER),
         _ => None,
     };
     if let Some(inline_marker) = inline_marker {
