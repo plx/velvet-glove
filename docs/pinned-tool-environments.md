@@ -10,9 +10,10 @@ just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
+just tool-case cargo-fmt workspace-multi
 ```
 
-Run all thirteen behavior-rich representative contracts across ten environments
+Run all fourteen behavior-rich representative contracts across ten environments
 with:
 
 ```sh
@@ -75,7 +76,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
-| Cargo Clippy | Rust/Cargo 1.97.1; Clippy 0.1.97; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix` |
+| Cargo Clippy/Fmt | Rust/Cargo 1.97.1; Clippy 0.1.97; cargo-fmt/rustfmt 1.9.0; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix`, `cargo-fmt/workspace-multi` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
 | Security | Go 1.26.5; Betterleaks 1.7.3+velvet-glove.1 | mise SHA-256; source, patch, module closure, and built-artifact SHA-256 | `betterleaks/multi-file` |
 | native macOS | SwiftLint 0.65.0 | mise SHA-256 | `swiftlint/manual-issue` |
@@ -617,7 +618,11 @@ official dated
 distribution archive at SHA-256
 `c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2`.
 That one archive supplies the paired Rust 1.97.1, Cargo 1.97.1, and Clippy
-0.1.97 closure. The exact probes are:
+0.1.97 closure. Its cache key hashes the canonical archive identity together
+with the exact installed component set (`rustc`, the arm64 standard library,
+Cargo, `clippy-preview`, and `rustfmt-preview`). That component-qualified root
+is shared by Cargo Clippy and Cargo Fmt, while a pre-Cargo-Fmt archive-only
+cache cannot satisfy or shadow it. The exact probes are:
 
 ```text
 rustc 1.97.1 (8bab26f4f 2026-07-14)
@@ -732,6 +737,125 @@ the adapter is not a code sandbox. File, config, and executable preflights
 cannot eliminate replacement races, and a filesystem failure can leave a
 partially applied or incompletely rolled-back multi-file repair.
 
+### Cargo Fmt validation contract
+
+Cargo Fmt shares the dedicated Rust 1.97.1 closure above, including the same
+official dated archive, archive SHA-256, signed-channel-manifest cross-check,
+license material, and minimum host constraints. The `rustfmt-preview`
+component adds the paired `cargo-fmt` and `rustfmt` executables. The complete
+exact probe set used by this contract is:
+
+```text
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)  # cargo-fmt --version
+rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)  # rustfmt --version
+```
+
+The reviewed upstream entry point is
+[`cargo-fmt/main.rs`](https://github.com/rust-lang/rust/blob/8bab26f4f68e0e26f0bb7960be334d5b520ea452/src/tools/rustfmt/src/cargo-fmt/main.rs)
+at the Rust release commit; its Git blob object is
+`9b4adc41a8b0fb62aaf09d733dc26448c3de7459`. That source establishes that
+`cargo-fmt` performs its own Cargo metadata query before launching rustfmt, so
+the trace contract binds those descendants as well as the adapter's direct
+children.
+
+Both phases use pinned Python 3.14.5 in isolated mode. The rendered outer
+commands are:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> cargo cargo-fmt rustfmt format {extra-args} __VELVET_GLOVE_CARGO_FMT_WORKSPACE__ {workspace-indicator}
+python -I -c <adapter> cargo cargo-fmt rustfmt verify {extra-args} __VELVET_GLOVE_CARGO_FMT_WORKSPACE__ {workspace-indicator}
+```
+
+The workspace indicator is the root `Cargo.lock`; the adapter uses its sibling
+`Cargo.toml`. A completed clean or source-result invocation records eight
+managed child events in this order: root Cargo metadata, coverage-copy Cargo
+metadata, coverage `cargo-fmt`, its internal Cargo metadata, coverage rustfmt,
+real-workspace `cargo-fmt`, its internal Cargo metadata, and real-workspace
+rustfmt. The adapter's direct commands are locked to:
+
+```text
+cargo metadata --format-version=1 --no-deps --manifest-path {root-or-coverage}/Cargo.toml --locked --offline --quiet
+cargo-fmt fmt --all --manifest-path {coverage}/Cargo.toml --check -- --config-path {config-directory} --color never --files-with-diff
+cargo-fmt fmt --all --manifest-path {root}/Cargo.toml [--check] -- --config-path {config-directory} --color never --files-with-diff
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Before the real formatting command, the adapter snapshots every validated file
+plus the retained non-symlink directory topology and modes. Its private copy
+reproduces that topology and those modes, then appends one parseable formatting
+defect to every physical `.rs` file. The coverage check must exit one, write no
+stderr, and report exactly that complete physical source set. Its private
+metadata must describe the same packages and target roots as the real
+workspace. This positive witness rejects an `autobins = false` or otherwise
+dormant Rust source instead of accepting a clean no-op. The original workspace
+must retain exact file snapshots and directory topology/modes throughout
+metadata and coverage.
+
+Every configured extra argument is rejected. Cargo, cargo-fmt, and rustfmt must
+resolve through one launcher directory and their paired binaries must exist
+beside the selected rustc. The adapter rejects ambient Cargo-home and
+invocation-ancestor configuration, runs children from a private directory with
+locked/offline metadata, a private target directory, one job, no incremental
+build, stable locale and color, and clears Cargo, Rust, wrapper, compiler-cache,
+debug, and dynamic-loader overrides. Exactly one root `rustfmt.toml` or
+`.rustfmt.toml` is honored; when neither exists, an empty private configuration
+prevents ancestor discovery.
+
+Native check status one is formatting evidence only when stdout is a complete,
+unique `--files-with-diff` list inside the validated physical source set and
+stderr is empty. Every other incomplete, configuration, signal, launch,
+cleanup, scope, or unexpected-status result maps to operational failure. A
+format phase must exit zero and its reported files must equal the exact
+workspace byte diff; added, removed, mode-changed (including a file whose bytes
+also changed), touched-only, or non-Rust paths fail. Added or removed retained
+directories and retained-directory mode changes fail as well. Once the
+real-workspace child starts, every operational failure makes baseline file
+content/mode/mtime and retained directory topology/modes eligible for
+best-effort rollback with explicit failure reporting, including a signal or
+output/read failure before the post-run scan. The ordinary final phase remains
+authoritative, and the clean remedy repeat proves idempotence.
+
+The five cases cover a clean package, one ordinary formatting issue, an invalid
+root rustfmt configuration, an `autobins = false` dormant-source coverage
+failure, and a two-member workspace. The workspace case selects one dirty and
+one clean file in `alpha`; `cargo fmt --all` also repairs the unselected dirty
+file in `beta`. Both exact changed paths are recorded, while findings remain
+conservatively attributed to the selected candidates. Immediate and deferred
+surfaces each run from pristine bytes and prove source/failure classification,
+exact mutation, the authoritative postcheck, and clean fixed-state repetition.
+The selected real-tool lane also executes the literal adapter in a focused
+hostile lifecycle probe: HUP, INT, and TERM must reap an ignoring same-group
+descendant; output beyond 16 MiB, source symlinks and hard links, combined
+format-plus-mode and mtime-only changes, retained-directory add/remove/mode
+changes, and an extra argument must fail closed. Unwritable private-root
+initialization must normalize its diagnostic, and injected signals at both the
+initialization and post-cleanup cutoffs must remain contained. Repeated TERM
+across private-root cleanup must preserve exact file content/mode/mtime and
+retained-directory topology/mode rollback; every path must remove its private
+root; and a deterministic rollback failure must be reported. A normally exiting
+formatter that leaves a closed-stdio same-process-group descendant is swept and
+rejected before its delayed mutation can escape the final scan.
+
+This contract deliberately supports only one self-contained locked workspace.
+External path dependencies, non-member manifests, nested rustfmt
+configuration, symlink directories or files, hard-linked files, missing locks,
+and physical Rust files skipped beneath `.git`, `.velvet-glove`,
+`node_modules`, or `target` are rejected or outside scope. Rustfmt establishes
+formatting, not compilation. Cargo metadata and rustfmt still execute project
+configuration inside the active network-denied lane; the adapter is not a code
+sandbox. Every normally completed child is checked for remaining members of its
+owned process group, but a child that deliberately escapes into a new session
+or process group cannot be contained by the adapter. File, config, and
+executable checks cannot eliminate concurrent path replacement. File and
+directory inode identities and directory mtimes are not restored, and a
+filesystem failure can defeat file content/mode/mtime or retained-directory
+topology/mode rollback.
+
 ### Asciidoctor validation contract
 
 The Ruby environment pins the dependency-free, pure-Ruby
@@ -819,11 +943,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These thirteen smoke contracts establish the reproducible environment substrate;
+These fourteen smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
-Asciidoctor, Biome, gofmt, and Cargo Clippy
+Asciidoctor, Biome, gofmt, Cargo Clippy, and Cargo Fmt
 are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 

@@ -86,7 +86,7 @@ if [ "$logical_program" = gofmt ]; then
   printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
   printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
 fi
-if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ]; then
+if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ] || [ "$logical_program" = cargo-fmt ] || [ "$logical_program" = rustfmt ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
   printf '%s\n' "${DYLD_LIBRARY_PATH-}" >"$record/env-DYLD_LIBRARY_PATH"
@@ -100,6 +100,7 @@ if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ]; then
   printf '%s\n' "${CARGO-}" >"$record/env-CARGO"
   printf '%s\n' "${RUSTC-}" >"$record/env-RUSTC"
   printf '%s\n' "${RUSTDOC-}" >"$record/env-RUSTDOC"
+  printf '%s\n' "${RUSTFMT-}" >"$record/env-RUSTFMT"
   printf '%s\n' "${CARGO_HOME-}" >"$record/env-CARGO_HOME"
   printf '%s\n' "${CARGO_TARGET_DIR-}" >"$record/env-CARGO_TARGET_DIR"
   if [ -L "${CARGO_TARGET_DIR-}" ]; then

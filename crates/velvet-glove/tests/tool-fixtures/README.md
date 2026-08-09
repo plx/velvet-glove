@@ -213,3 +213,24 @@ compiled source; its hostile `.cargo/config.toml` proves that ambient
 The expected mirror is the complete two-file change allowlist, and the normal
 mutating lifecycle proves authoritative post-remedy verification plus
 immediate and compatibility-deferred idempotence.
+
+Cargo Fmt traces bind Cargo, cargo-fmt, rustfmt, and rustc from the same pinned
+Rust 1.97.1 component-set-qualified root. Each completed invocation records
+the adapter's root metadata and coverage-copy metadata/format preflights, plus
+cargo-fmt's nested metadata and rustfmt children. The five-case matrix covers
+clean and dirty packages, invalid rustfmt configuration, a fail-closed dormant
+`autobins = false` source, and workspace-wide multi-member mutation. The
+evaluated lifecycle probe additionally binds process-group cleanup, bounded
+output, alias and extra-argument rejection, byte-plus-mode and mtime-only
+mutation rejection, retained-directory add/remove/mode rejection, normalized
+unwritable-TMPDIR diagnostics, deterministic initialization and post-cleanup
+signal cutoffs, and private-root cleanup under repeated TERM. It proves exact
+file content/mode/mtime plus retained-directory topology/mode rollback and
+deterministic reporting when that best-effort rollback fails. Every normally
+completed child is checked for and sweeps remaining same-process-group
+descendants; a closed-stdio delayed-mutation orphan is rejected, while a child
+that deliberately escapes into a new session or process group remains outside
+the adapter's containment guarantee. File and directory inode identities and
+directory mtimes are not rollback fields, and subtrees named `.git`,
+`.velvet-glove`, `node_modules`, or `target` remain deliberately outside the
+retained topology and file snapshot scope.

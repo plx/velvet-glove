@@ -193,6 +193,15 @@
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
+        "installComponents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
+        },
         "integrity": { "$ref": "#/$defs/integrity" },
         "probe": { "$ref": "#/$defs/probe" }
       }

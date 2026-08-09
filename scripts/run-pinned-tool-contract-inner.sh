@@ -9,10 +9,14 @@ fi
 repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 provisioning_dir="$repository_root/crates/hookkit-pkl-config/validation/provisioning"
 registry="$provisioning_dir/recipes.json"
+cache_helpers="$repository_root/scripts/pinned-tool-cache.sh"
 state_dir=$1
 artifact_dir=$2
 selection=$3
 mise_version=$4
+
+# shellcheck source=scripts/pinned-tool-cache.sh
+source "$cache_helpers"
 
 export HOME=${HOME:?controlled HOME is required}
 export LANG=C
@@ -35,7 +39,11 @@ export GIT_CONFIG_SYSTEM=/dev/null
 export NPM_CONFIG_USERCONFIG=/dev/null
 export NODE_PATH="$state_dir/node/node_modules"
 export ASTRO_TELEMETRY_DISABLED=1
-export VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT="$state_dir/cargo-clippy-toolchain-1.97.1"
+cargo_clippy_toolchain_identity=$(pinned_component_install_identity \
+  jq "$registry" cargo-clippy-toolchain)
+export VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT
+VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT=$(pinned_component_cache_root \
+  "$state_dir" cargo-clippy-toolchain-1.97.1 "$cargo_clippy_toolchain_identity")
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -73,16 +81,16 @@ esac
 echo "network denial probe: pass"
 
 tool_ids=$(jq -cn --arg selection "$selection" '$selection | split(",") | map(split("/")[0])')
-clippy_selected=false
-if printf '%s\n' "$tool_ids" | jq -e 'index("cargo-clippy") != null' >/dev/null; then
-  clippy_selected=true
+rust_197_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("cargo-clippy") != null or index("cargo-fmt") != null' >/dev/null; then
+  rust_197_selected=true
 fi
 
 while IFS= read -r program; do
   resolved=
-  if [[ $clippy_selected == true ]]; then
+  if [[ $rust_197_selected == true ]]; then
     case $program in
-      cargo | cargo-clippy | clippy-driver | rustc | rustdoc)
+      cargo | cargo-clippy | cargo-fmt | clippy-driver | rustc | rustdoc | rustfmt)
         resolved="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/$program"
         ;;
     esac
@@ -144,28 +152,36 @@ while IFS= read -r probe; do
   match_kind=$(printf '%s\n' "$probe" | jq -r '.probe.match')
   expected=$(printf '%s\n' "$probe" | jq -r '.probe.expected')
   probe_argv=()
-  clippy_probe=false
+  rust_197_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
   done < <(printf '%s\n' "$probe" | jq -r '.probe.argv[]')
-  if [[ $clippy_selected == true ]]; then
+  if [[ $rust_197_selected == true ]]; then
     case $owner in
       cargo-clippy-toolchain)
         probe_argv[0]="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/rustc"
-        clippy_probe=true
+        rust_197_probe=true
         ;;
       cargo-clippy-cargo)
         probe_argv[0]="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/cargo"
-        clippy_probe=true
+        rust_197_probe=true
         ;;
       clippy | cargo-clippy)
         probe_argv[0]="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/clippy-driver"
-        clippy_probe=true
+        rust_197_probe=true
+        ;;
+      cargo-fmt-driver | cargo-fmt)
+        probe_argv[0]="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/cargo-fmt"
+        rust_197_probe=true
+        ;;
+      cargo-fmt-rustfmt)
+        probe_argv[0]="$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/bin/rustfmt"
+        rust_197_probe=true
         ;;
     esac
   fi
   set +e
-  if [[ $clippy_probe == true ]]; then
+  if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
   else
     observed=$("${probe_argv[@]}" 2>&1)

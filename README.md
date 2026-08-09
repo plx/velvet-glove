@@ -152,9 +152,10 @@ just tool-case biome multi-file
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
+just tool-case cargo-fmt workspace-multi
 
-# Thirteen behavior-rich contracts across ten environments: jq data formats,
-# Buf data formats, Node, Python, Go, Rust, Cargo Clippy, Ruby, security, and
+# Fourteen behavior-rich contracts across ten environments: jq data formats,
+# Buf data formats, Node, Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security, and
 # native macOS.
 just tool-representatives
 
@@ -232,6 +233,18 @@ source while preserving a selected clean source, then proves exact workspace
 diffs and clean idempotent repeats. The deliberately narrow single-package,
 all-targets/all-features scope and execution/TOCTOU limitations are recorded in
 the [Cargo Clippy contract](docs/pinned-tool-environments.md#cargo-clippy-validation-contract).
+
+The same Rust 1.97.1 closure supplies cargo-fmt and rustfmt 1.9.0. The isolated
+Cargo Fmt adapter performs locked metadata checks, then proves on a private
+copy that `cargo fmt --all --check` reaches every physical Rust source before
+it trusts a real check or mutation. The representative two-member workspace
+repairs both a selected dirty source and an unselected dirty member source,
+records that exact workspace diff, and proves the authoritative check and
+idempotent repeat. A dedicated dormant `autobins = false` case proves the
+adapter fails closed when Cargo Fmt omits a physical `.rs` file. Exact archive
+and source provenance, eight-event child trace, status rules, and supported
+workspace limitations are in the
+[Cargo Fmt contract](docs/pinned-tool-environments.md#cargo-fmt-validation-contract).
 
 The security lane reproducibly builds Betterleaks
 `1.7.3+velvet-glove.1` from the checksum-pinned upstream v1.7.3 source and a
