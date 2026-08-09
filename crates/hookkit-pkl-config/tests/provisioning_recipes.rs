@@ -2,6 +2,8 @@ use hookkit_pkl_config::{Architecture, NetworkPolicy, Platform, SupportState, Up
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const RECIPES_JSON: &str = include_str!("../validation/provisioning/recipes.json");
 
@@ -46,6 +48,8 @@ struct Component {
     installation_source: String,
     #[serde(default)]
     runtime_component_ids: Vec<String>,
+    #[serde(default)]
+    install_components: Vec<String>,
     integrity: Integrity,
     probe: Probe,
 }
@@ -126,6 +130,174 @@ struct Recipe {
     case_executables: Vec<String>,
     cases: Vec<String>,
     representative_case: String,
+}
+
+struct TestDirectory(PathBuf);
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn test_directory(name: &str) -> TestDirectory {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "velvet-glove-provisioning-{name}-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&path).expect("create provisioning test directory");
+    TestDirectory(path)
+}
+
+#[cfg(unix)]
+fn write_test_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::write(path, "#!/bin/sh\nexit 0\n").expect("write cache test executable");
+    let mut permissions = std::fs::metadata(path)
+        .expect("cache test executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("mark cache test executable executable");
+}
+
+#[test]
+#[cfg(unix)]
+fn cargo_toolchain_component_set_cache_ignores_the_legacy_root() {
+    let repository = repository_root();
+    let registry: serde_json::Value =
+        serde_json::from_str(RECIPES_JSON).expect("provisioning registry JSON");
+    let component = registry["environments"]
+        .as_array()
+        .expect("environments")
+        .iter()
+        .flat_map(|environment| {
+            environment["components"]
+                .as_array()
+                .expect("environment components")
+        })
+        .find(|component| component["id"] == "cargo-clippy-toolchain")
+        .expect("cargo-clippy toolchain component");
+    let archive_integrity = serde_json::to_string(&component["integrity"])
+        .expect("serialize cargo-clippy archive integrity");
+    let installed_components = serde_json::to_string(&component["installComponents"])
+        .expect("serialize installed component set");
+    let legacy_identity = format!(
+        "{{\"id\":\"cargo-clippy-toolchain\",\"version\":\"1.97.1\",\"integrity\":{archive_integrity}}}"
+    );
+    let component_set_identity = format!(
+        "{{\"integrity\":{legacy_identity},\"installedComponents\":{installed_components}}}"
+    );
+    assert!(component_set_identity.contains("rustfmt-preview"));
+
+    let temporary = test_directory("legacy-cargo-toolchain-cache");
+    let state = &temporary.0;
+    let legacy_root = state.join("cargo-clippy-toolchain-1.97.1");
+    std::fs::create_dir_all(legacy_root.join("bin")).expect("legacy bin directory");
+    std::fs::write(
+        legacy_root.join(".velvet-glove-artifacts.json"),
+        format!("{legacy_identity}\n"),
+    )
+    .expect("legacy archive-only cache stamp");
+    for executable in ["cargo", "cargo-clippy", "clippy-driver", "rustc", "rustdoc"] {
+        write_test_executable(&legacy_root.join("bin").join(executable));
+    }
+    assert!(!legacy_root.join("bin/cargo-fmt").exists());
+    assert!(!legacy_root.join("bin/rustfmt").exists());
+
+    let helper = repository.join("scripts/pinned-tool-cache.sh");
+    let required = [
+        "bin/cargo",
+        "bin/cargo-clippy",
+        "bin/cargo-fmt",
+        "bin/clippy-driver",
+        "bin/rustc",
+        "bin/rustdoc",
+        "bin/rustfmt",
+    ];
+    let shell = r#"
+source "$1"
+state=$2
+identity=$3
+legacy=$4
+shift 4
+root=$(pinned_component_cache_root "$state" cargo-clippy-toolchain-1.97.1 "$identity")
+printf '%s\n' "$root"
+if pinned_component_cache_valid "$legacy" "$identity" "$@"; then
+  exit 20
+fi
+if pinned_component_cache_valid "$root" "$identity" "$@"; then
+  printf 'valid\n'
+else
+  printf 'install-required\n'
+fi
+"#;
+    let invoke_helper = |expected_state: &str| {
+        let mut command = Command::new("/bin/bash");
+        command
+            .args(["-c", shell, "cache-regression"])
+            .arg(&helper)
+            .arg(state)
+            .arg(&component_set_identity)
+            .arg(&legacy_root)
+            .args(required);
+        let output = command.output().expect("execute exact cache helper");
+        assert!(
+            output.status.success(),
+            "cache helper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 cache helper output");
+        assert!(stdout.ends_with(expected_state), "cache helper: {stdout:?}");
+        PathBuf::from(stdout.lines().next().expect("qualified cache root"))
+    };
+
+    let qualified_root = invoke_helper("install-required\n");
+    assert_ne!(qualified_root, legacy_root);
+    assert!(!qualified_root.exists());
+
+    std::fs::create_dir_all(qualified_root.join("bin")).expect("qualified cache bin directory");
+    std::fs::write(
+        qualified_root.join(".velvet-glove-artifacts.json"),
+        format!("{component_set_identity}\n"),
+    )
+    .expect("component-set cache stamp");
+    for executable in required.iter().map(|path| path.trim_start_matches("bin/")) {
+        write_test_executable(&qualified_root.join("bin").join(executable));
+    }
+    assert_eq!(invoke_helper("valid\n"), qualified_root);
+
+    let outer = std::fs::read_to_string(repository.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner =
+        std::fs::read_to_string(repository.join("scripts/run-pinned-tool-contract-inner.sh"))
+            .expect("inner pinned runner");
+    for (name, script) in [("outer", outer.as_str()), ("inner", inner.as_str())] {
+        assert!(
+            script.contains("source \"$cache_helpers\""),
+            "{name} shared helper"
+        );
+        assert!(
+            script.contains("pinned_component_install_identity"),
+            "{name} canonical install identity"
+        );
+        assert!(
+            script.contains("pinned_component_cache_root"),
+            "{name} identity-qualified cache root"
+        );
+        assert!(
+            !script.contains("$state_dir/cargo-clippy-toolchain-1.97.1\""),
+            "{name} must not select the legacy root"
+        );
+    }
+    assert!(outer.contains("if [[ ! -d $clippy_root ]]; then"));
+    assert!(inner.contains(
+        "VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT=$(pinned_component_cache_root"
+    ));
 }
 
 #[test]
@@ -384,6 +556,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "black",
             "buf-format",
             "cargo-clippy",
+            "cargo-fmt",
             "go-fmt",
             "jq",
             "rubocop",
@@ -392,6 +565,56 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "swiftlint"
         ])
     );
+
+    let cargo_fmt = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "cargo-fmt")
+        .expect("cargo-fmt pinned recipe");
+    assert_eq!(cargo_fmt.id, "cargo-fmt-macos-arm64");
+    assert_eq!(cargo_fmt.environment_id, "macos-arm64-cargo-clippy");
+    assert_eq!(
+        cargo_fmt.case_executables,
+        ["cargo", "cargo-fmt", "python", "rustc", "rustfmt"]
+    );
+    assert_eq!(
+        cargo_fmt.cases,
+        [
+            "clean",
+            "coverage-failure",
+            "operational-failure",
+            "source-issue",
+            "workspace-multi"
+        ]
+    );
+    assert_eq!(cargo_fmt.representative_case, "workspace-multi");
+    assert_eq!(cargo_fmt.probe.argv, ["cargo-fmt", "--version"]);
+    assert_eq!(cargo_fmt.probe.match_kind, "exact");
+    assert_eq!(
+        cargo_fmt.probe.expected,
+        "rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)"
+    );
+
+    let cargo_fmt_environment = environments
+        .get(cargo_fmt.environment_id.as_str())
+        .expect("cargo-fmt controlled environment");
+    for required in [
+        "cargo",
+        "cargo-clippy",
+        "cargo-fmt",
+        "clippy-driver",
+        "rustc",
+        "rustdoc",
+        "rustfmt",
+    ] {
+        assert!(
+            cargo_fmt_environment
+                .auxiliary_programs
+                .iter()
+                .any(|program| program == required),
+            "cargo-fmt closure omits {required}"
+        );
+    }
 }
 
 fn validate_components<'a>(
@@ -839,6 +1062,16 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     );
                     assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
                     assert!(component.runtime_component_ids.is_empty());
+                    assert_eq!(
+                        component.install_components,
+                        [
+                            "rustc",
+                            "rust-std-aarch64-apple-darwin",
+                            "cargo",
+                            "clippy-preview",
+                            "rustfmt-preview",
+                        ]
+                    );
                 }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");
@@ -932,6 +1165,18 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                         Some("cargo-clippy-toolchain")
                     );
                     assert_eq!(component.version, "1.97.1");
+                }
+                "cargo-fmt-driver" | "cargo-fmt-rustfmt" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("cargo-clippy-toolchain")
+                    );
+                    assert_eq!(component.version, "1.9.0");
+                    assert_eq!(component.probe.match_kind, "exact");
+                    assert_eq!(
+                        component.probe.expected,
+                        "rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)"
+                    );
                 }
                 "clippy" => {
                     assert_eq!(

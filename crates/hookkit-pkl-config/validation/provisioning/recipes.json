@@ -393,6 +393,13 @@
           "id": "cargo-clippy-toolchain",
           "version": "1.97.1",
           "installationSource": "official dated Rust 1.97.1 distribution archive with bundled Cargo and Clippy for aarch64-apple-darwin, checksum-pinned and independently cross-checked against the Rust-signed channel manifest",
+          "installComponents": [
+            "rustc",
+            "rust-std-aarch64-apple-darwin",
+            "cargo",
+            "clippy-preview",
+            "rustfmt-preview"
+          ],
           "integrity": {
             "kind": "sha256-archive",
             "url": "https://static.rust-lang.org/dist/2026-07-16/rust-1.97.1-aarch64-apple-darwin.tar.xz",
@@ -423,6 +430,34 @@
           }
         },
         {
+          "id": "cargo-fmt-driver",
+          "version": "1.9.0",
+          "installationSource": "cargo-fmt bundled in the checksum-pinned Rust 1.97.1 distribution archive cross-checked against the Rust-signed channel manifest",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "cargo-clippy-toolchain"
+          },
+          "probe": {
+            "argv": ["cargo-fmt", "--version"],
+            "match": "exact",
+            "expected": "rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)"
+          }
+        },
+        {
+          "id": "cargo-fmt-rustfmt",
+          "version": "1.9.0",
+          "installationSource": "rustfmt bundled in the checksum-pinned Rust 1.97.1 distribution archive cross-checked against the Rust-signed channel manifest",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "cargo-clippy-toolchain"
+          },
+          "probe": {
+            "argv": ["rustfmt", "--version"],
+            "match": "exact",
+            "expected": "rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)"
+          }
+        },
+        {
           "id": "clippy",
           "version": "0.1.97",
           "installationSource": "Clippy bundled in the checksum-pinned Rust 1.97.1 distribution archive cross-checked against the Rust-signed channel manifest",
@@ -437,7 +472,7 @@
           }
         }
       ],
-      "auxiliaryPrograms": ["cargo", "cargo-clippy", "clippy-driver", "rustc", "rustdoc"],
+      "auxiliaryPrograms": ["cargo", "cargo-clippy", "cargo-fmt", "clippy-driver", "rustc", "rustdoc", "rustfmt"],
       "bootstrap": []
     },
     {
@@ -1049,6 +1084,30 @@
       "caseExecutables": ["cargo", "cargo-clippy", "clippy-driver", "python", "rustc", "rustdoc"],
       "cases": ["clean", "source-issue", "workspace-autofix", "operational-failure"],
       "representativeCase": "workspace-autofix"
+    },
+    {
+      "id": "cargo-fmt-macos-arm64",
+      "toolId": "cargo-fmt",
+      "environmentId": "macos-arm64-cargo-clippy",
+      "version": "cargo-fmt/rustfmt 1.9.0 (Rust/Cargo 1.97.1)",
+      "installationSource": "cargo-fmt and rustfmt bundled in the official dated Rust 1.97.1 aarch64-apple-darwin archive, checksum-pinned and independently cross-checked against the Rust-signed channel manifest",
+      "integrity": {
+        "kind": "sha256-archive",
+        "url": "https://static.rust-lang.org/dist/2026-07-16/rust-1.97.1-aarch64-apple-darwin.tar.xz",
+        "sha256": "c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2",
+        "archiveFormat": "tar-xz",
+        "archiveRoot": "rust-1.97.1-aarch64-apple-darwin",
+        "minOsVersion": "11.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["cargo-fmt", "--version"],
+        "match": "exact",
+        "expected": "rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)"
+      },
+      "caseExecutables": ["cargo", "cargo-fmt", "python", "rustc", "rustfmt"],
+      "cases": ["clean", "coverage-failure", "operational-failure", "source-issue", "workspace-multi"],
+      "representativeCase": "workspace-multi"
     },
     {
       "id": "asciidoctor-macos-arm64",

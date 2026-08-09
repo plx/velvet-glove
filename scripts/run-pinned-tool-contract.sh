@@ -6,8 +6,12 @@ repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 provisioning_dir="$repository_root/crates/hookkit-pkl-config/validation/provisioning"
 registry="$provisioning_dir/recipes.json"
 inner_runner="$repository_root/scripts/run-pinned-tool-contract-inner.sh"
+cache_helpers="$repository_root/scripts/pinned-tool-cache.sh"
 state_dir=${VELVET_GLOVE_PINNED_TOOL_STATE_DIR:-"$repository_root/target/pinned-tool-environments"}
 artifact_dir=${VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR:-"$state_dir/artifacts"}
+
+# shellcheck source=scripts/pinned-tool-cache.sh
+source "$cache_helpers"
 
 usage() {
   echo "usage: $0 TOOL CASE" >&2
@@ -388,11 +392,25 @@ if needs_group rust; then
     "$rustfmt_root/bin/rustfmt" --version >/dev/null
 fi
 
-clippy_root="$state_dir/cargo-clippy-toolchain-1.97.1"
 if needs_group cargo-clippy; then
   clippy_archive=$(fetch_component_archive cargo-clippy-toolchain)
-  clippy_identity=$(component_integrity_json cargo-clippy-toolchain)
-  if [[ -e $clippy_root && ! -d $clippy_root ]]; then
+  clippy_identity=$(pinned_component_install_identity \
+    "$jq_bin" "$registry" cargo-clippy-toolchain)
+  clippy_install_components=$(
+    printf '%s\n' "$clippy_identity" | "$jq_bin" -r '.installedComponents | join(",")'
+  )
+  clippy_root=$(pinned_component_cache_root \
+    "$state_dir" cargo-clippy-toolchain-1.97.1 "$clippy_identity")
+  clippy_required_executables=(
+    bin/cargo
+    bin/cargo-clippy
+    bin/cargo-fmt
+    bin/clippy-driver
+    bin/rustc
+    bin/rustdoc
+    bin/rustfmt
+  )
+  if [[ -e $clippy_root && ( ! -d $clippy_root || -L $clippy_root ) ]]; then
     echo "error: controlled cargo-clippy toolchain root is not a directory: $clippy_root" >&2
     exit 1
   fi
@@ -405,7 +423,7 @@ if needs_group cargo-clippy; then
     env -i "${provisioning_env[@]}" /bin/bash \
       "$clippy_extract_dir/$clippy_archive_root/install.sh" \
       --prefix="$clippy_install_root" \
-      --components=rustc,rust-std-aarch64-apple-darwin,cargo,clippy-preview \
+      --components="$clippy_install_components" \
       --disable-ldconfig
     printf '%s\n' "$clippy_identity" >"$clippy_install_root/.velvet-glove-artifacts.json"
     verify_macho_closure "$clippy_install_root" cargo-clippy-toolchain
@@ -413,15 +431,9 @@ if needs_group cargo-clippy; then
     rm -rf -- "$clippy_extract_dir"
     clippy_extract_dir=
   fi
-  for executable in cargo cargo-clippy clippy-driver rustc rustdoc; do
-    if [[ ! -x $clippy_root/bin/$executable ]]; then
-      echo "error: controlled cargo-clippy toolchain is incomplete: $clippy_root/bin/$executable" >&2
-      exit 1
-    fi
-  done
-  if [[ ! -f $clippy_root/.velvet-glove-artifacts.json ]] || \
-    [[ $(<"$clippy_root/.velvet-glove-artifacts.json") != "$clippy_identity" ]]; then
-    echo "error: controlled cargo-clippy toolchain does not match the declared archive: $clippy_root" >&2
+  if ! pinned_component_cache_valid \
+    "$clippy_root" "$clippy_identity" "${clippy_required_executables[@]}"; then
+    echo "error: controlled cargo-clippy toolchain does not match the declared archive and installed component set: $clippy_root" >&2
     exit 1
   fi
   verify_macho_closure "$clippy_root" cargo-clippy-toolchain
@@ -434,6 +446,12 @@ if needs_group cargo-clippy; then
   env -i "${provisioning_env[@]}" \
     "DYLD_LIBRARY_PATH=$clippy_root/lib" \
     "$clippy_root/bin/clippy-driver" --version >/dev/null
+  env -i "${provisioning_env[@]}" \
+    "DYLD_LIBRARY_PATH=$clippy_root/lib" \
+    "$clippy_root/bin/cargo-fmt" --version >/dev/null
+  env -i "${provisioning_env[@]}" \
+    "DYLD_LIBRARY_PATH=$clippy_root/lib" \
+    "$clippy_root/bin/rustfmt" --version >/dev/null
 fi
 
 echo "==> Fetching the Cargo.lock graph with the pinned Cargo binary"
