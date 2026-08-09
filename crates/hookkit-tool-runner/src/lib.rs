@@ -3648,6 +3648,54 @@ mod tests {
     }
 
     #[test]
+    fn contextlint_file_selection_covers_mixed_case_and_fixed_skipped_subtrees() {
+        let selection = FileSelection::include([
+            "*.[mM][dD]",
+            "**/*.[mM][dD]",
+            "*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+            "**/*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+        ])
+        .with_exclude([
+            ".git/**",
+            "**/.git/**",
+            "node_modules/**",
+            "**/node_modules/**",
+            ".velvet-glove/**",
+            "**/.velvet-glove/**",
+        ]);
+        let matcher = FileMatcher::new(&selection).expect("Contextlint file globs compile");
+        let root = Path::new("/tmp/contextlint-file-selection");
+
+        for relative in [
+            "README.Md",
+            "docs/notes.mD",
+            "guide.MarkDown",
+            "nested/guide.mArKdOwN",
+        ] {
+            assert!(
+                matcher.matches(&root.join(relative), root),
+                "mixed-case Markdown path must be selected: {relative}"
+            );
+        }
+
+        for relative in [
+            ".git/root.Md",
+            "nested/.git/deeper.mD",
+            "node_modules/root.MarkDown",
+            "nested/node_modules/deeper.mArKdOwN",
+            ".velvet-glove/root.md",
+            "nested/.velvet-glove/deeper.markdown",
+        ] {
+            assert!(
+                !matcher.matches(&root.join(relative), root),
+                "fixed skipped subtree must not produce a runner candidate: {relative}"
+            );
+        }
+
+        assert!(!matcher.matches(&root.join("docs/not-markdown.txt"), root));
+    }
+
+    #[test]
     fn resolve_worker_count_honors_jobs_setting() {
         // auto (0) is reserved for future use and runs serially for now.
         assert_eq!(resolve_worker_count(0, 5), 1);

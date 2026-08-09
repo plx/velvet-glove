@@ -733,6 +733,106 @@ fn biome_adapter_distinguishes_source_issues_and_verifies_mutations() {
 }
 
 #[test]
+fn contextlint_adapter_locks_workspace_coverage_and_private_completion() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let contextlint = spec(&specs, "contextlint");
+
+    assert_eq!(contextlint.display_name, "Contextlint");
+    assert_eq!(contextlint.executable, "contextlint");
+    assert_eq!(
+        contextlint.workspace_indicator.as_deref(),
+        Some("contextlint.config.json")
+    );
+    assert_eq!(
+        contextlint.phase_invocation,
+        InvocationGranularity::Workspace
+    );
+    assert_eq!(
+        contextlint.files.include,
+        vec![
+            "*.[mM][dD]",
+            "**/*.[mM][dD]",
+            "*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+            "**/*.[mM][aA][rR][kK][dD][oO][wW][nN]",
+        ]
+    );
+    assert_eq!(
+        contextlint.files.exclude,
+        vec![
+            ".git/**",
+            "**/.git/**",
+            "node_modules/**",
+            "**/node_modules/**",
+            ".velvet-glove/**",
+            "**/.velvet-glove/**",
+        ]
+    );
+    assert!(
+        contextlint.workflows.is_empty(),
+        "Contextlint intentionally exercises compatibility-deferred translation"
+    );
+    let verify = contextlint.phases.get("verify").expect("verify phase");
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.mode, PhaseMode::Verify);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(verify.argv.len(), 9);
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("Contextlint adapter must be an evaluated literal Python program")
+    };
+    for invariant in [
+        "contextlint.config.json must declare at least one rule",
+        "payload[0] != MARKER",
+        "inventory_workspace(workspace)",
+        r#"GLOB_MAGIC = frozenset("*?()[]{}\\")"#,
+        "reject_glob_magic_path(indicator, \"workspace indicator\")",
+        "reject_glob_magic_path(path, \"workspace inventory path\")",
+        "reject_glob_magic_path(absolute, \"runner candidate\")",
+        "reject_glob_magic_path(base, \"TMPDIR\")",
+        "workspace inventory rejects symbolic links",
+        "private SEC-001 completion probe did not return its exact pinned result",
+        "--permission",
+        "--allow-fs-read=",
+        "@contextlint/cli/dist/index.js",
+        "@contextlint/core",
+        "status == 1) != has_errors",
+        "1 if report else 0",
+    ] {
+        assert!(
+            adapter.contains(invariant),
+            "Contextlint adapter lost structural invariant {invariant:?}"
+        );
+    }
+    let symlink_rejection = adapter
+        .find("workspace inventory rejects symbolic links")
+        .expect("Contextlint unconditional symlink rejection");
+    let excluded_directory_skip = adapter[symlink_rejection..]
+        .find("if child.name in EXCLUDED_DIRECTORIES:")
+        .map(|offset| symlink_rejection + offset)
+        .expect("Contextlint physical excluded-directory skip");
+    assert!(symlink_rejection < excluded_directory_skip);
+    let active_workspace = adapter
+        .find("active_workspace = workspace")
+        .expect("Contextlint active workspace assignment");
+    let indicator_magic = adapter
+        .find("reject_glob_magic_path(indicator, \"workspace indicator\")")
+        .expect("Contextlint indicator glob-magic rejection");
+    assert!(active_workspace < indicator_magic);
+    assert_eq!(verify.argv[3], literal("node"));
+    assert_eq!(verify.argv[4], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[5], token(ArgToken::WorkspaceIndicator));
+    assert_eq!(verify.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(
+        verify.argv[7],
+        literal("__VELVET_GLOVE_CONTEXTLINT_FILES__")
+    );
+    assert_eq!(verify.argv[8], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+}
+
+#[test]
 fn cargo_fmt_builtin_uses_workspace_indicator() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
