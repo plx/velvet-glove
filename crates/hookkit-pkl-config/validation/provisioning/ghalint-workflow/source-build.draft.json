@@ -1,0 +1,169 @@
+{
+  "draftFormatVersion": 1,
+  "status": "isolated-draft",
+  "integrationNote": "This record is intentionally tool-local. It is not wired into recipes.json, the validation manifest, generated documentation, or the shared tool registry until serialized integration.",
+  "component": {
+    "id": "ghalint-workflow",
+    "executable": "ghalint",
+    "upstreamVersion": "1.5.6",
+    "productVersion": "1.5.6+velvet-glove.1",
+    "installationSource": "ghalint v1.5.6 source at peeled tag commit 050e825989101021ece297e4d2f726f519ba89ee, plus the checksum-pinned x/text closure patch, reproducibly built with locked Go 1.26.5",
+    "probe": {
+      "argv": ["ghalint", "--version"],
+      "match": "exact",
+      "expected": "ghalint version 1.5.6+velvet-glove.1"
+    }
+  },
+  "upstream": {
+    "repository": "https://github.com/suzuki-shunsuke/ghalint",
+    "tag": "v1.5.6",
+    "annotatedTagObject": "067760082769be9afa1fdb276539e19c9c131d17",
+    "peeledCommit": "050e825989101021ece297e4d2f726f519ba89ee",
+    "sourceArchive": {
+      "url": "https://github.com/suzuki-shunsuke/ghalint/archive/refs/tags/v1.5.6.tar.gz",
+      "sha256": "1188047b654a86390d49b776153c1a7b3eddde30ebcc0d024dfab9585785b02b",
+      "archiveFormat": "tar-gz",
+      "archiveRoot": "ghalint-1.5.6"
+    }
+  },
+  "closure": {
+    "patchPath": "crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/closure.patch",
+    "patchSha256": "5e3c2480665eefffa019adf5c57e27e1c1d05a74b9dccf2d5bc345017a17d6ed",
+    "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/go.mod",
+    "moduleManifestSha256": "ada0a9434578f54fd6a50fe8ed9ef26374afa631d5527660723062663d686f16",
+    "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/go.sum",
+    "moduleLockSha256": "53a4a1b1a7dcd2a6da2dc1cc0cc32ca4bcb5b8ea86832749e18879b8be594dbb",
+    "changes": [
+      {
+        "module": "golang.org/x/text",
+        "from": "v0.28.0",
+        "to": "v0.39.0"
+      }
+    ],
+    "upstreamGoDirective": "1.26.2",
+    "upstreamGoDirectiveUnchanged": true,
+    "officialBinaryPolicy": "Do not provision the upstream release binary: its embedded Go 1.26.2 toolchain is stale. The unchanged go 1.26.2 module language directive does not authorize that binary; this recipe builds the patched closure with locked Go 1.26.5."
+  },
+  "toolchain": {
+    "componentId": "go",
+    "version": "1.26.5",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "archive": {
+      "url": "https://dl.google.com/go/go1.26.5.darwin-arm64.tar.gz",
+      "sha256": "efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a",
+      "archiveFormat": "tar-gz",
+      "archiveRoot": "go"
+    },
+    "probe": {
+      "argv": ["go", "version"],
+      "match": "exact",
+      "expected": "go version go1.26.5 darwin/arm64"
+    }
+  },
+  "build": {
+    "sourceDateEpoch": "1777591460",
+    "sourceDate": "2026-04-30T23:24:20Z",
+    "workingDirectory": "{state}/ghalint-build-1.5.6-vg1/source",
+    "output": "{state}/ghalint-build-1.5.6-vg1/install/bin/ghalint",
+    "argv": [
+      "go",
+      "-C",
+      "{state}/ghalint-build-1.5.6-vg1/source",
+      "build",
+      "-trimpath",
+      "-buildvcs=false",
+      "-ldflags",
+      "-s -w -buildid= -X=main.version=1.5.6+velvet-glove.1",
+      "-o",
+      "{state}/ghalint-build-1.5.6-vg1/install/bin/ghalint",
+      "./cmd/ghalint"
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "local",
+      "GOFLAGS": "-mod=readonly",
+      "CGO_ENABLED": "0",
+      "GOOS": "darwin",
+      "GOARCH": "arm64",
+      "SOURCE_DATE_EPOCH": "1777591460",
+      "GOMODCACHE": "{state}/ghalint-go-mod-cache",
+      "GOCACHE": "{state}/ghalint-go-build-cache",
+      "GOPROXY": "off"
+    },
+    "bootstrap": [
+      {
+        "id": "ghalint-apply-closure",
+        "argv": [
+          "/usr/bin/patch",
+          "-p1",
+          "-i",
+          "{repository}/crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/closure.patch"
+        ],
+        "workingDirectory": "{state}/ghalint-build-1.5.6-vg1/source",
+        "network": "denied"
+      },
+      {
+        "id": "ghalint-go-mod-download",
+        "argv": [
+          "go",
+          "-C",
+          "{state}/ghalint-build-1.5.6-vg1/source",
+          "mod",
+          "download"
+        ],
+        "environment": {
+          "GOTOOLCHAIN": "local",
+          "GOFLAGS": "-mod=readonly",
+          "GOMODCACHE": "{state}/ghalint-go-mod-cache",
+          "GOCACHE": "{state}/ghalint-go-build-cache",
+          "GOPROXY": "https://proxy.golang.org",
+          "GOSUMDB": "sum.golang.org"
+        },
+        "workingDirectory": "/",
+        "network": "required"
+      },
+      {
+        "id": "ghalint-go-mod-verify",
+        "argv": [
+          "go",
+          "-C",
+          "{state}/ghalint-build-1.5.6-vg1/source",
+          "mod",
+          "verify"
+        ],
+        "environment": {
+          "GOTOOLCHAIN": "local",
+          "GOFLAGS": "-mod=readonly",
+          "GOMODCACHE": "{state}/ghalint-go-mod-cache",
+          "GOCACHE": "{state}/ghalint-go-build-cache",
+          "GOPROXY": "off"
+        },
+        "workingDirectory": "/",
+        "network": "denied"
+      }
+    ]
+  },
+  "artifact": {
+    "sha256": "03437b6c73d1332460d24f2c9fe22d3dea0fe68e4e52b0a8a534b3f2854274fa",
+    "format": "Mach-O 64-bit executable arm64",
+    "minimumOsVersion": "12.0",
+    "sdkVersion": "12.0",
+    "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"],
+    "observedDylibs": [
+      "/usr/lib/libSystem.B.dylib",
+      "/usr/lib/libresolv.9.dylib",
+      "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+      "/System/Library/Frameworks/Security.framework/Versions/A/Security"
+    ],
+    "embeddedBuildFacts": {
+      "goVersion": "go1.26.5",
+      "module": "github.com/suzuki-shunsuke/ghalint/cmd/ghalint",
+      "xText": "v0.39.0",
+      "trimpath": true,
+      "cgoEnabled": false,
+      "goos": "darwin",
+      "goarch": "arm64"
+    },
+    "reproducibility": "Two builds from the checksum-verified source archive with separate Go build caches produced this exact SHA-256."
+  }
+}
