@@ -49,12 +49,16 @@ they run. Open `/hooks` in the Codex CLI after installing the plugin.
 
 Every invocation explicitly selects its harness and event:
 
+<!-- markdownlint-disable MD013 -->
+
 | Command | Native event | Purpose |
 | --- | --- | --- |
 | `post-tool-immediate` | PostToolUse | Run applicable checks and fixes immediately. |
 | `post-tool` | PostToolUse | Quietly record file activity for deferred work. |
 | `turn-completion` | Stop/turn completion | Reconcile activity, run batched workflows, and report or block. |
 | `session-start-state` | SessionStart | Record an exact Claude/Codex session lower bound. |
+
+<!-- markdownlint-enable MD013 -->
 
 ```sh
 cargo build --release -p velvet-glove --bin velvet-glove
@@ -101,11 +105,15 @@ The three deferred commands must share the same state root. The default is
 `$TMPDIR/velvet-glove/state`; use `--state-dir PATH` on every command to
 override it.
 
+<!-- markdownlint-disable MD013 -->
+
 | Purpose | Claude Code | Codex | Antigravity |
 | --- | --- | --- | --- |
 | Session lower bound | `session-start-state` | `session-start-state` | unavailable |
 | Activity producer | `post-tool` | `post-tool` | `post-tool` |
 | Deferred consumer | `turn-completion` | `turn-completion` | `turn-completion` |
+
+<!-- markdownlint-enable MD013 -->
 
 The consumer commits command artifacts and `summary.json` before changing the
 pending window. Clean and auto-fixed work is acknowledged; manual issues,
@@ -139,9 +147,10 @@ just check
 # Apple silicon, mise 2026.5.15).
 just tool-case jq multi-file-fragments
 just tool-case astro multi-file-project
+just tool-case betterleaks multi-file
 
-# Nine behavior-rich contracts across seven environments: data formats, Node,
-# Python, Go, Rust, Ruby, and native macOS.
+# Ten behavior-rich contracts across eight environments: data formats, Node,
+# Python, Go, Rust, Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -173,6 +182,19 @@ selected files and an unselected failing third file. Exact provenance,
 integrities, repeat and no-mutation evidence, and the conservative attribution
 and side-effect limitations are in the
 [Astro contract](docs/pinned-tool-environments.md#astro-validation-contract).
+
+The security lane reproducibly builds Betterleaks
+`1.7.3+velvet-glove.1` from the checksum-pinned upstream v1.7.3 source and a
+checksum-pinned dependency-closure patch with Go 1.26.5. Its adapter scans all
+selected files in one batch, locks complete redaction and stable legacy output,
+reserves status 10 for findings, removes ambient Betterleaks and Gitleaks
+configuration variables, and accepts only non-controlled long-form configured
+arguments. The source scan has no reachable package or symbol vulnerability
+finding; the remaining `GO-2026-5932` result is a coarse module match whose
+binary expansion names an OpenPGP package absent from the source dependency
+graph. Exact source, patch, module-lock, build-artifact, command, and limitation
+details are in the
+[Betterleaks contract](docs/pinned-tool-environments.md#betterleaks-validation-contract).
 
 The Ruby lane also pins the dependency-free Asciidoctor 2.0.26 gem by SHA-256.
 Its checked command runs in safe mode through a small Ruby preflight adapter:

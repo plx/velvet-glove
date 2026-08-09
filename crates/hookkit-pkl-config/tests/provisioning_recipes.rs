@@ -58,6 +58,18 @@ struct Integrity {
     component_id: Option<String>,
     url: Option<String>,
     sha256: Option<String>,
+    patch_sha256: Option<String>,
+    module_manifest_path: Option<String>,
+    module_manifest_sha256: Option<String>,
+    module_lock_path: Option<String>,
+    module_lock_sha256: Option<String>,
+    built_artifact_sha256: Option<String>,
+    build_toolchain_component_id: Option<String>,
+    build_working_directory: Option<String>,
+    #[serde(default)]
+    build_argv: Vec<String>,
+    #[serde(default)]
+    build_environment: BTreeMap<String, String>,
     archive_format: Option<String>,
     archive_root: Option<String>,
     min_os_version: Option<String>,
@@ -238,6 +250,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "python",
             "ruby",
             "rust",
+            "security",
             "swift",
         ])
     );
@@ -349,6 +362,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         BTreeSet::from([
             "asciidoctor",
             "astro",
+            "betterleaks",
             "black",
             "go-fmt",
             "jq",
@@ -415,9 +429,138 @@ fn validate_integrity(root: &Path, integrity: &Integrity, owner: &str) {
                 | "host-program"
                 | "runtime-bundled"
                 | "sha256-archive"
+                | "go-source-build"
         ),
         "{owner}: unsupported integrity kind"
     );
+    if integrity.kind == "go-source-build" {
+        assert!(
+            integrity.component_id.is_none(),
+            "{owner}: source build has parent component"
+        );
+        assert_eq!(
+            integrity.path.as_deref(),
+            Some("crates/hookkit-pkl-config/validation/provisioning/betterleaks/closure.patch")
+        );
+        assert_eq!(
+            integrity.url.as_deref(),
+            Some("https://github.com/betterleaks/betterleaks/archive/refs/tags/v1.7.3.tar.gz")
+        );
+        assert_eq!(
+            integrity.sha256.as_deref(),
+            Some("7359ae820c62c276d31cef3d1431eb8beb6db07d5c44830bad03dbe9c0cf3850")
+        );
+        assert_eq!(
+            integrity.patch_sha256.as_deref(),
+            Some("2d57aa396d9c7f0337cf13c05fa06f661099035cb5f753a12e79ca2f46a38147")
+        );
+        assert_eq!(integrity.archive_format.as_deref(), Some("tar-gz"));
+        assert_eq!(integrity.archive_root.as_deref(), Some("betterleaks-1.7.3"));
+        assert_eq!(
+            integrity.module_manifest_path.as_deref(),
+            Some("crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.mod")
+        );
+        assert_eq!(
+            integrity.module_manifest_sha256.as_deref(),
+            Some("a669cc877c8dac1c9f3927b57e246902b81bc37665147e4a2d301104f534819e")
+        );
+        assert_eq!(
+            integrity.module_lock_path.as_deref(),
+            Some("crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.sum")
+        );
+        assert_eq!(
+            integrity.module_lock_sha256.as_deref(),
+            Some("359a55b2abc25a4fa290093fed6bc6d7d3d2923906e4c77cf4d786581a61a38d")
+        );
+        assert_eq!(
+            integrity.built_artifact_sha256.as_deref(),
+            Some("046177cad9aa9f924fe57adca4a1a8c54d0ad74ceed593147b127f5a486f8144")
+        );
+        assert_eq!(
+            integrity.build_toolchain_component_id.as_deref(),
+            Some("go")
+        );
+        assert_eq!(
+            integrity.build_working_directory.as_deref(),
+            Some("{state}/betterleaks-build-1.7.3-vg1/source")
+        );
+        assert_eq!(
+            integrity.build_argv,
+            [
+                "go",
+                "-C",
+                "{state}/betterleaks-build-1.7.3-vg1/source",
+                "build",
+                "-trimpath",
+                "-buildvcs=false",
+                "-ldflags",
+                "-s -w -buildid= -X=github.com/betterleaks/betterleaks/version.Version=1.7.3+velvet-glove.1",
+                "-o",
+                "{state}/betterleaks-build-1.7.3-vg1/install/bin/betterleaks",
+                ".",
+            ]
+        );
+        assert_eq!(
+            integrity.build_environment,
+            BTreeMap::from([
+                ("CGO_ENABLED".to_owned(), "0".to_owned()),
+                ("GOARCH".to_owned(), "arm64".to_owned()),
+                (
+                    "GOCACHE".to_owned(),
+                    "{state}/betterleaks-go-build-cache".to_owned()
+                ),
+                ("GOFLAGS".to_owned(), "-mod=readonly".to_owned()),
+                (
+                    "GOMODCACHE".to_owned(),
+                    "{state}/betterleaks-go-mod-cache".to_owned()
+                ),
+                ("GOOS".to_owned(), "darwin".to_owned()),
+                ("GOPROXY".to_owned(), "off".to_owned()),
+                ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+                ("SOURCE_DATE_EPOCH".to_owned(), "1785516069".to_owned()),
+            ])
+        );
+        assert_eq!(integrity.min_os_version.as_deref(), Some("12.0"));
+        assert_eq!(
+            integrity.allowed_dylib_prefixes,
+            ["/System/Library/", "/usr/lib/"]
+        );
+
+        let patch_path = integrity.path.as_deref().expect("source patch path");
+        let module_manifest_path = integrity
+            .module_manifest_path
+            .as_deref()
+            .expect("module manifest path");
+        let module_lock_path = integrity
+            .module_lock_path
+            .as_deref()
+            .expect("module lock path");
+        assert_file(root, patch_path);
+        assert_file(root, module_manifest_path);
+        assert_file(root, module_lock_path);
+        let patch = std::fs::read_to_string(root.join(patch_path)).expect("Betterleaks patch");
+        assert!(patch.contains("-toolchain go1.25.10\n+toolchain go1.25.12"));
+        assert!(patch.contains("-\tgithub.com/klauspost/compress v1.18.6 // indirect"));
+        assert!(patch.contains("+\tgithub.com/klauspost/compress v1.18.7 // indirect"));
+        assert!(patch.contains("-\tgolang.org/x/text v0.38.0 // indirect"));
+        assert!(patch.contains("+\tgolang.org/x/text v0.39.0 // indirect"));
+        let module_manifest =
+            std::fs::read_to_string(root.join(module_manifest_path)).expect("Betterleaks go.mod");
+        assert!(module_manifest.contains("toolchain go1.25.12"));
+        assert!(module_manifest.contains("github.com/klauspost/compress v1.18.7"));
+        assert!(module_manifest.contains("golang.org/x/text v0.39.0"));
+        let module_lock =
+            std::fs::read_to_string(root.join(module_lock_path)).expect("Betterleaks go.sum");
+        assert!(module_lock.contains(
+            "github.com/klauspost/compress v1.18.7 h1:aUyZsS4kH3QTKurYhAOwAHxllVPnOthb3vPfnF1Ehjw="
+        ));
+        assert!(
+            module_lock.contains(
+                "golang.org/x/text v0.39.0 h1:UbZz4pLOvn600D6Oh6GGEI6VAmndrEBLv8/6BEXzyus="
+            )
+        );
+        return;
+    }
     if integrity.kind == "sha256-archive" {
         assert!(integrity.path.is_none(), "{owner}: archive has lock path");
         assert!(
@@ -641,6 +784,12 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                 ));
                 assert!(section.contains("provenance = \"github-attestations\""));
             }
+            if component.id == "go" {
+                assert_eq!(component.version, "1.26.5");
+                assert!(section.contains(
+                    "checksum = \"sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a\""
+                ));
+            }
         }
         "sha256-archive" => {
             assert_eq!(component.mise_tool, None);
@@ -712,6 +861,18 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
             );
             assert_eq!(component.probe.match_kind, "exact");
             assert_eq!(component.probe.expected, component.version);
+        }
+        "go-source-build" => {
+            assert_eq!(component.id, "betterleaks");
+            assert_eq!(component.version, "1.7.3+velvet-glove.1");
+            assert_eq!(component.mise_tool, None);
+            assert!(component.runtime_component_ids.is_empty());
+            assert_eq!(component.probe.argv, ["betterleaks", "--version"]);
+            assert_eq!(component.probe.match_kind, "exact");
+            assert_eq!(
+                component.probe.expected,
+                "betterleaks version 1.7.3+velvet-glove.1"
+            );
         }
         "runtime-bundled" => {
             assert_eq!(component.mise_tool, None);

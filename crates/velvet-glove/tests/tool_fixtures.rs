@@ -25,6 +25,8 @@ use support::native_events::{PostToolUseBuilder, ProtocolSurface, canonical_proj
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::process::Stdio;
 
 const REAL_TOOL_SURFACES: &[ProtocolSurface] = &[ProtocolSurface::Claude, ProtocolSurface::Codex];
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -44,6 +46,11 @@ const NODE_PATH_ENV: &str = "NODE_PATH";
 const ASTRO_TELEMETRY_DISABLED_ENV: &str = "ASTRO_TELEMETRY_DISABLED";
 const CI_ENV: &str = "CI";
 const DEBUG_ENV: &str = "DEBUG";
+const BETTERLEAKS_CONFIG_ENV: &str = "BETTERLEAKS_CONFIG";
+const BETTERLEAKS_CONFIG_TOML_ENV: &str = "BETTERLEAKS_CONFIG_TOML";
+const GITLEAKS_CONFIG_ENV: &str = "GITLEAKS_CONFIG";
+const GITLEAKS_CONFIG_TOML_ENV: &str = "GITLEAKS_CONFIG_TOML";
+const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this";
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +84,13 @@ enum TracePlan {
     SingleNestedTrailingOptions {
         trailing: &'static [&'static str],
     },
+    SingleNestedFilesMarker {
+        nested_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        leading: &'static [&'static str],
+        before_files: &'static [&'static str],
+    },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
         validation: &'static [&'static str],
@@ -108,6 +122,25 @@ const ASTRO_TRACE_PLAN: TracePlan = TracePlan::SingleNestedTrailingOptions {
     ],
 };
 
+const BETTERLEAKS_FILES_MARKER: &str = "__VELVET_GLOVE_BETTERLEAKS_FILES__";
+const BETTERLEAKS_FIXED_ARGUMENTS: &[&str] = &[
+    "--redact=100",
+    "--verbose=true",
+    "--no-color=true",
+    "--no-banner=true",
+    "--exit-code=10",
+    "--log-level=fatal",
+    "--legacy-print=true",
+];
+const BETTERLEAKS_TRACE_PLAN: TracePlan = TracePlan::SingleNestedFilesMarker {
+    nested_program_index: 3,
+    adapter_prefix: &["-I", "-c"],
+    marker: BETTERLEAKS_FILES_MARKER,
+    leading: &["dir"],
+    before_files: BETTERLEAKS_FIXED_ARGUMENTS,
+};
+const BETTERLEAKS_FIXTURE_SECRET: &str = "VG_SECRET_AbCdEf0123456789";
+
 #[derive(Debug)]
 struct ExpectedInvocation {
     targets: &'static [&'static str],
@@ -122,6 +155,7 @@ struct RealToolContractCase {
     extra_args: &'static [&'static str],
     outcome: ExpectedOutcome,
     diagnostic_contains: &'static [&'static str],
+    diagnostic_excludes: &'static [&'static str],
     trace_plan: TracePlan,
 }
 
@@ -148,6 +182,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Clean,
             diagnostic_contains: &[],
+            diagnostic_excludes: &[],
             trace_plan: TracePlan::Direct,
         },
         ("jq", "invalid") => RealToolContractCase {
@@ -160,6 +195,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Issues,
             diagnostic_contains: &["jq: parse error:"],
+            diagnostic_excludes: &[],
             trace_plan: TracePlan::Direct,
         },
         ("jq", "operational-failure") => RealToolContractCase {
@@ -172,6 +208,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &["--indent", "9"],
             outcome: ExpectedOutcome::OperationalFailure,
             diagnostic_contains: &["jq: --indent takes a number between -1 and 7"],
+            diagnostic_excludes: &[],
             trace_plan: TracePlan::Direct,
         },
         ("jq", "multi-file-fragments") => RealToolContractCase {
@@ -191,6 +228,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Issues,
             diagnostic_contains: &["jq: parse error:"],
+            diagnostic_excludes: &[],
             trace_plan: TracePlan::Direct,
         },
         ("asciidoctor", "clean") => RealToolContractCase {
@@ -203,6 +241,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Clean,
             diagnostic_contains: &[],
+            diagnostic_excludes: &[],
             trace_plan: ASCIIDOCTOR_TRACE_PLAN,
         },
         ("asciidoctor", "missing-include") => RealToolContractCase {
@@ -215,6 +254,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Issues,
             diagnostic_contains: &["include file not found:", "does-not-exist.adoc"],
+            diagnostic_excludes: &[],
             trace_plan: ASCIIDOCTOR_TRACE_PLAN,
         },
         ("asciidoctor", "multi-file") => RealToolContractCase {
@@ -227,6 +267,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Issues,
             diagnostic_contains: &["include file not found:", "does-not-exist.adoc"],
+            diagnostic_excludes: &[],
             trace_plan: ASCIIDOCTOR_TRACE_PLAN,
         },
         ("asciidoctor", "operational-failure") => RealToolContractCase {
@@ -239,6 +280,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &["--backend=definitely-not-a-backend"],
             outcome: ExpectedOutcome::OperationalFailure,
             diagnostic_contains: &["missing converter for backend 'definitely-not-a-backend'"],
+            diagnostic_excludes: &[],
             trace_plan: ASCIIDOCTOR_TRACE_PLAN,
         },
         ("astro", "clean") => RealToolContractCase {
@@ -251,6 +293,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &[],
             outcome: ExpectedOutcome::Clean,
             diagnostic_contains: &[],
+            diagnostic_excludes: &[],
             trace_plan: ASTRO_TRACE_PLAN,
         },
         ("astro", "type-error") => RealToolContractCase {
@@ -266,6 +309,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
                 "ts(2322):",
                 "Type 'string' is not assignable to type 'number'.",
             ],
+            diagnostic_excludes: &[],
             trace_plan: ASTRO_TRACE_PLAN,
         },
         ("astro", "multi-file-project") => RealToolContractCase {
@@ -285,6 +329,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
                 "Type 'string' is not assignable to type 'number'.",
                 "Result (3 files):",
             ],
+            diagnostic_excludes: &[],
             trace_plan: ASTRO_TRACE_PLAN,
         },
         ("astro", "operational-failure") => RealToolContractCase {
@@ -297,9 +342,74 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             extra_args: &["--tsconfig", "does-not-exist.json"],
             outcome: ExpectedOutcome::OperationalFailure,
             diagnostic_contains: &["does-not-exist.json"],
+            diagnostic_excludes: &[],
             trace_plan: ASTRO_TRACE_PLAN,
         },
-        ("jq" | "asciidoctor" | "astro", other) => {
+        ("betterleaks", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.txt"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &["--config=.betterleaks.toml"],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: BETTERLEAKS_TRACE_PLAN,
+        },
+        ("betterleaks", "finding") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.txt"],
+                exit_code: 10,
+                trace_exit_codes: &[10],
+            }],
+            extra_args: &["--config=.betterleaks.toml"],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "Secret:      REDACTED",
+                "RuleID:      fixture-secret",
+                "example.txt:fixture-secret:1",
+            ],
+            diagnostic_excludes: &[BETTERLEAKS_FIXTURE_SECRET],
+            trace_plan: BETTERLEAKS_TRACE_PLAN,
+        },
+        ("betterleaks", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.secret.txt", "src/selected-clean.txt"],
+                exit_code: 10,
+                trace_exit_codes: &[10],
+            }],
+            extra_args: &["--config=.betterleaks.toml"],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "Secret:      REDACTED",
+                "RuleID:      fixture-secret",
+                "example.secret.txt:fixture-secret:1",
+            ],
+            diagnostic_excludes: &[BETTERLEAKS_FIXTURE_SECRET],
+            trace_plan: BETTERLEAKS_TRACE_PLAN,
+        },
+        ("betterleaks", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.txt"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &["--config=does-not-exist.toml"],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "FTL unable to load config",
+                "does-not-exist.toml",
+                "no such file or directory",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: BETTERLEAKS_TRACE_PLAN,
+        },
+        ("jq" | "asciidoctor" | "astro" | "betterleaks", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no real-tool contract declaration",
                 case.tool
@@ -692,6 +802,34 @@ fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
     assert_eq!(astro_failure.invocations[0].exit_code, 2);
     assert_eq!(astro_failure.invocations[0].trace_exit_codes, &[1]);
     assert_eq!(astro_failure.outcome, ExpectedOutcome::OperationalFailure);
+
+    let betterleaks_multi =
+        real_tool_contract_case(&named_fixture_case("betterleaks", "multi-file"))
+            .expect("Betterleaks contract lookup")
+            .expect("Betterleaks contract");
+    assert_eq!(betterleaks_multi.invocations.len(), 1);
+    assert_eq!(betterleaks_multi.invocations[0].targets.len(), 2);
+    assert_eq!(betterleaks_multi.invocations[0].trace_exit_codes, &[10]);
+    assert_eq!(
+        betterleaks_multi.extra_args,
+        &["--config=.betterleaks.toml"]
+    );
+    assert_eq!(betterleaks_multi.trace_plan, BETTERLEAKS_TRACE_PLAN);
+
+    let betterleaks_failure =
+        real_tool_contract_case(&named_fixture_case("betterleaks", "operational-failure"))
+            .expect("Betterleaks failure contract lookup")
+            .expect("Betterleaks failure contract");
+    assert_eq!(
+        betterleaks_failure.extra_args,
+        &["--config=does-not-exist.toml"]
+    );
+    assert_eq!(betterleaks_failure.invocations[0].exit_code, 1);
+    assert_eq!(betterleaks_failure.invocations[0].trace_exit_codes, &[1]);
+    assert_eq!(
+        betterleaks_failure.outcome,
+        ExpectedOutcome::OperationalFailure
+    );
 }
 
 #[test]
@@ -758,6 +896,114 @@ fn single_child_trace_plan_rejects_ambiguous_shapes() {
     )
     .expect_err("single-child trace with two statuses must fail");
     assert!(error.contains("exactly one exit code"));
+}
+
+#[test]
+fn marker_delimited_trace_plan_inserts_controls_before_files() {
+    let outer_arguments = [
+        "-I",
+        "-c",
+        "adapter",
+        "betterleaks",
+        "--config=.betterleaks.toml",
+        BETTERLEAKS_FILES_MARKER,
+        "/workspace/src/example.secret.txt",
+        "/workspace/src/selected-clean.txt",
+    ]
+    .map(str::to_owned);
+    let targets = [
+        PathBuf::from("/workspace/src/example.secret.txt"),
+        PathBuf::from("/workspace/src/selected-clean.txt"),
+    ];
+
+    let (program, invocations) = resolve_trace_invocations(
+        BETTERLEAKS_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[10],
+    )
+    .expect("resolve marker-delimited trace");
+
+    assert_eq!(program, "betterleaks");
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].targets, targets);
+    assert_eq!(
+        invocations[0].arguments,
+        [
+            "dir",
+            "--config=.betterleaks.toml",
+            "--redact=100",
+            "--verbose=true",
+            "--no-color=true",
+            "--no-banner=true",
+            "--exit-code=10",
+            "--log-level=fatal",
+            "--legacy-print=true",
+            "/workspace/src/example.secret.txt",
+            "/workspace/src/selected-clean.txt",
+        ]
+    );
+    assert_eq!(invocations[0].exit_code, 10);
+}
+
+#[test]
+fn marker_delimited_trace_plan_rejects_ambiguous_shapes() {
+    let targets = [PathBuf::from("/workspace/src/example.txt")];
+    let missing_marker = [
+        "-I",
+        "-c",
+        "adapter",
+        "betterleaks",
+        "/workspace/src/example.txt",
+    ]
+    .map(str::to_owned);
+    let error = resolve_trace_invocations(
+        BETTERLEAKS_TRACE_PLAN,
+        "python",
+        &missing_marker,
+        &targets,
+        &[0],
+    )
+    .expect_err("marker-delimited trace without a marker must fail");
+    assert!(error.contains("exactly one"));
+
+    let wrong_files = [
+        "-I",
+        "-c",
+        "adapter",
+        "betterleaks",
+        BETTERLEAKS_FILES_MARKER,
+        "/workspace/src/not-selected.txt",
+    ]
+    .map(str::to_owned);
+    let error = resolve_trace_invocations(
+        BETTERLEAKS_TRACE_PLAN,
+        "python",
+        &wrong_files,
+        &targets,
+        &[0],
+    )
+    .expect_err("marker-delimited trace with a different file suffix must fail");
+    assert!(error.contains("file suffix mismatch"));
+
+    let unisolated = [
+        "-c",
+        "adapter",
+        "betterleaks",
+        BETTERLEAKS_FILES_MARKER,
+        "/workspace/src/example.txt",
+    ]
+    .map(str::to_owned);
+    let error = resolve_trace_invocations(
+        BETTERLEAKS_TRACE_PLAN,
+        "python",
+        &unisolated,
+        &targets,
+        &[0],
+    )
+    .expect_err("marker-delimited Python adapter without isolation must fail");
+    assert!(error.contains("adapter prefix"));
 }
 
 #[test]
@@ -859,6 +1105,61 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
     assert!(error.contains("escaped its pinned executable graph"));
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn betterleaks_trace_environment_rejects_inherited_config() {
+    let root = unique_temp_dir("velvet-glove-betterleaks-trace-environment");
+    let record = root.join("record");
+    std::fs::create_dir_all(&record).expect("trace record");
+    for name in [
+        BETTERLEAKS_CONFIG_ENV,
+        BETTERLEAKS_CONFIG_TOML_ENV,
+        GITLEAKS_CONFIG_ENV,
+        GITLEAKS_CONFIG_TOML_ENV,
+    ] {
+        std::fs::write(record.join(format!("env-{name}")), "\n")
+            .expect("empty Betterleaks config environment record");
+    }
+    let environment = verify_betterleaks_trace_environment(&record)
+        .expect("scrubbed Betterleaks trace environment");
+    assert!(environment.values().all(String::is_empty));
+
+    std::fs::write(
+        record.join(format!("env-{GITLEAKS_CONFIG_TOML_ENV}")),
+        format!("{BETTERLEAKS_POISON_ENV_VALUE}\n"),
+    )
+    .expect("poisoned Betterleaks config environment record");
+    let error = verify_betterleaks_trace_environment(&record)
+        .expect_err("inherited Betterleaks-compatible config must fail closed");
+    assert!(error.contains(GITLEAKS_CONFIG_TOML_ENV));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn betterleaks_output_requires_adapter_canonicalization() {
+    let suffix = "unable to load config, err: open does-not-exist.toml: no such file or directory";
+    for clock in ["8:10AM", "12:59PM"] {
+        let diagnostic = format!("{clock} FTL {suffix}");
+        let error = verify_tool_output_is_canonical("betterleaks", "synthetic stderr", &diagnostic)
+            .expect_err("raw Betterleaks console clocks must fail closed");
+        assert!(error.contains(clock));
+    }
+    verify_tool_output_is_canonical(
+        "betterleaks",
+        "synthetic stderr",
+        &format!("<time> FTL {suffix}"),
+    )
+    .expect("the adapter's canonical Betterleaks diagnostic must pass");
+    verify_tool_output_is_canonical(
+        "betterleaks",
+        "synthetic stderr",
+        "8:10AM INF completed scan",
+    )
+    .expect("unrelated Betterleaks levels must remain untouched");
+    verify_tool_output_is_canonical("jq", "synthetic stderr", &format!("8:10AM FTL {suffix}"))
+        .expect("the Betterleaks assertion must not rewrite or reject other tools");
 }
 
 #[test]
@@ -996,6 +1297,11 @@ fn run_all_tool_fixtures() {
         .required_tools
         .validate(&catalog.tool_ids())
         .unwrap_or_else(|error| panic!("{error}"));
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "betterleaks") {
+        verify_betterleaks_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("betterleaks adapter lifecycle probe: pass");
+    }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
     assert!(probe_commands > 0, "probe executed zero external commands");
@@ -1993,6 +2299,93 @@ fn resolve_trace_invocations(
                 }],
             ))
         }
+        TracePlan::SingleNestedFilesMarker {
+            nested_program_index,
+            adapter_prefix,
+            marker,
+            leading,
+            before_files,
+        } => {
+            if expected_exit_codes.len() != 1 {
+                return Err(format!(
+                    "marker-delimited single-child adapter trace for {outer_program} must declare exactly one exit code, got {expected_exit_codes:?}"
+                ));
+            }
+            if nested_program_index != adapter_prefix.len() + 1 {
+                return Err(format!(
+                    "marker-delimited single-child adapter trace plan for {outer_program} must place exactly one script between its adapter prefix and nested tool"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "marker-delimited single-child adapter {outer_program} adapter prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "marker-delimited single-child adapter {outer_program} has no adapter script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(nested_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "marker-delimited single-child adapter {outer_program} has no nested tool at argument {nested_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "marker-delimited single-child adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= nested_program_index {
+                return Err(format!(
+                    "marker-delimited single-child adapter {outer_program} places {marker:?} before its nested tool: {outer_arguments:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let rendered_files = &outer_arguments[(*marker_index + 1)..];
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "marker-delimited single-child adapter {outer_program} file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let arguments = leading
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .chain(
+                    outer_arguments[(nested_program_index + 1)..*marker_index]
+                        .iter()
+                        .cloned(),
+                )
+                .chain(before_files.iter().map(|argument| (*argument).to_owned()))
+                .chain(expected_files)
+                .collect();
+            Ok((
+                trace_program,
+                vec![ResolvedTraceInvocation {
+                    targets: targets.to_vec(),
+                    arguments,
+                    exit_code: expected_exit_codes[0],
+                }],
+            ))
+        }
         TracePlan::TrailingOptionsAdapter {
             preflight,
             validation,
@@ -2185,6 +2578,16 @@ impl ToolTraceHarness {
             .env(TOOL_REAL_PROGRAM_ENV, &self.real_program)
             .env(TOOL_LOGICAL_PROGRAM_ENV, &self.logical_program)
             .env(TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL);
+        if self.logical_program == "betterleaks" {
+            for name in [
+                BETTERLEAKS_CONFIG_ENV,
+                BETTERLEAKS_CONFIG_TOML_ENV,
+                GITLEAKS_CONFIG_ENV,
+                GITLEAKS_CONFIG_TOML_ENV,
+            ] {
+                command.env(name, BETTERLEAKS_POISON_ENV_VALUE);
+            }
+        }
         Ok(())
     }
 }
@@ -2267,6 +2670,15 @@ fn verify_tool_trace(
             );
             environment.insert(CI_ENV.to_owned(), JsonValue::String(ci));
             environment.insert(DEBUG_ENV.to_owned(), JsonValue::String(debug));
+        }
+        if contract.trace_program == "betterleaks" {
+            let scrubbed = verify_betterleaks_trace_environment(&record)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in scrubbed {
+                environment.insert(name, JsonValue::String(value));
+            }
         }
         records.push(serde_json::json!({
             "logicalProgram": contract.trace_program,
@@ -2365,6 +2777,25 @@ fn verify_astro_trace_environment(
         ci,
         debug,
     ))
+}
+
+fn verify_betterleaks_trace_environment(record: &Path) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    for name in [
+        BETTERLEAKS_CONFIG_ENV,
+        BETTERLEAKS_CONFIG_TOML_ENV,
+        GITLEAKS_CONFIG_ENV,
+        GITLEAKS_CONFIG_TOML_ENV,
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "Betterleaks trace must clear inherited configuration, got {name}={value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    Ok(environment)
 }
 
 fn read_record(record: &Path, name: &str) -> Result<String, String> {
@@ -2584,6 +3015,14 @@ fn verify_stable_diagnostics(
             ));
         }
     }
+    for forbidden in contract.diagnostic_excludes {
+        if contents.contains(forbidden) {
+            return Err(format!(
+                "{} {context} exposed forbidden diagnostic content {forbidden:?}:\n{contents}",
+                case.tool
+            ));
+        }
+    }
     if case.tool == "asciidoctor" {
         if let Some(primary) = contract.diagnostic_contains.first() {
             let occurrences = contents.matches(primary).count();
@@ -2604,11 +3043,19 @@ fn verify_repeated_output(
     second: &BoundedOutput,
     project: &Path,
 ) -> Result<(), String> {
+    let first_stdout_raw = String::from_utf8_lossy(&first.stdout);
+    let second_stdout_raw = String::from_utf8_lossy(&second.stdout);
+    let first_stderr_raw = String::from_utf8_lossy(&first.stderr);
+    let second_stderr_raw = String::from_utf8_lossy(&second.stderr);
+    verify_tool_output_is_canonical(tool, "first immediate stdout", &first_stdout_raw)?;
+    verify_tool_output_is_canonical(tool, "second immediate stdout", &second_stdout_raw)?;
+    verify_tool_output_is_canonical(tool, "first immediate stderr", &first_stderr_raw)?;
+    verify_tool_output_is_canonical(tool, "second immediate stderr", &second_stderr_raw)?;
     let aliases = workspace_path_aliases(project);
-    let first_stdout = normalize(&String::from_utf8_lossy(&first.stdout), &aliases);
-    let second_stdout = normalize(&String::from_utf8_lossy(&second.stdout), &aliases);
-    let first_stderr = normalize(&String::from_utf8_lossy(&first.stderr), &aliases);
-    let second_stderr = normalize(&String::from_utf8_lossy(&second.stderr), &aliases);
+    let first_stdout = normalize(&first_stdout_raw, &aliases);
+    let second_stdout = normalize(&second_stdout_raw, &aliases);
+    let first_stderr = normalize(&first_stderr_raw, &aliases);
+    let second_stderr = normalize(&second_stderr_raw, &aliases);
     if first.status.code() != second.status.code()
         || first_stdout != second_stdout
         || first_stderr != second_stderr
@@ -2930,6 +3377,7 @@ fn verify_deferred_summary(
                     case.tool
                 )
             })?;
+        verify_tool_output_is_canonical(&case.tool, "deferred diagnostic artifact", contents)?;
         verify_stable_diagnostics(
             case,
             contract,
@@ -3046,6 +3494,13 @@ fn verify_deferred_summary(
                     })?;
                 require_json_string(problem, "toolId", &case.tool)?;
                 require_json_string(problem, "phase", "initial-check")?;
+                if let Some(message) = problem.get("message").and_then(JsonValue::as_str) {
+                    verify_tool_output_is_canonical(
+                        &case.tool,
+                        "deferred operational problem",
+                        message,
+                    )?;
+                }
             }
         }
     }
@@ -3260,6 +3715,8 @@ fn verify_outputs(
     let actual_stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let actual_exit = output.status.code().unwrap_or(-1);
     let project_paths = workspace_path_aliases(project);
+    verify_tool_output_is_canonical(&case.tool, "protocol stdout", &actual_stdout)?;
+    verify_tool_output_is_canonical(&case.tool, "protocol stderr", &actual_stderr)?;
 
     let stdout_golden_path = case.directory.join(format!("{}.json", surface.cli_name()));
     let golden_stdout = if stdout_golden_path.exists() {
@@ -3575,6 +4032,209 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
     } else {
         Err(missing)
     }
+}
+
+fn verify_betterleaks_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        const CHILD_PID_ENV: &str = "VELVET_GLOVE_BETTERLEAKS_LIFECYCLE_CHILD_PID";
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "betterleaks lifecycle probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ..,
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "betterleaks lifecycle probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I" || command != "-c" {
+            return Err(format!(
+                "betterleaks lifecycle probe expected isolated Python -I -c, got {isolated:?} {command:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "betterleaks lifecycle probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program).ok_or_else(|| {
+            format!("betterleaks lifecycle probe cannot resolve {python_program:?}")
+        })?;
+        let python = python
+            .canonicalize()
+            .map_err(|error| format!("canonicalize lifecycle Python {python:?}: {error}"))?;
+
+        let root = unique_temp_dir("velvet-glove-betterleaks-lifecycle");
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("create Betterleaks lifecycle root {root:?}: {error}"))?;
+        let spaced_program_dir = root.join("state root with spaces");
+        std::fs::create_dir(&spaced_program_dir).map_err(|error| {
+            format!("create spaced Betterleaks lifecycle program root: {error}")
+        })?;
+        let lifecycle_python = spaced_program_dir.join("python");
+        std::os::unix::fs::symlink(&python, &lifecycle_python).map_err(|error| {
+            format!("link spaced Betterleaks lifecycle Python {lifecycle_python:?}: {error}")
+        })?;
+        let fake_tool = root.join("betterleaks-fake");
+        let child_pid_path = root.join("child.pid");
+        let target = root.join("selected.txt");
+        std::fs::write(&target, "lifecycle probe\n")
+            .map_err(|error| format!("write Betterleaks lifecycle target {target:?}: {error}"))?;
+        let fake_source = format!(
+            r#"#!/bin/sh
+set -eu
+trap 'exit 0' HUP INT TERM
+printf 'ready\n'
+printf '%s\n' "$$" > "${CHILD_PID_ENV}"
+while :; do
+    :
+done
+"#
+        );
+        std::fs::write(&fake_tool, fake_source)
+            .map_err(|error| format!("write Betterleaks lifecycle fake {fake_tool:?}: {error}"))?;
+        let mut permissions = std::fs::metadata(&fake_tool)
+            .map_err(|error| format!("stat Betterleaks lifecycle fake {fake_tool:?}: {error}"))?
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_tool, permissions)
+            .map_err(|error| format!("make Betterleaks lifecycle fake executable: {error}"))?;
+
+        let mut command = Command::new(&lifecycle_python);
+        command
+            .args(["-I", "-c", adapter])
+            .arg(&fake_tool)
+            .arg(BETTERLEAKS_FILES_MARKER)
+            .arg(&target)
+            .current_dir(&root)
+            .env(CHILD_PID_ENV, &child_pid_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut outer = command
+            .spawn()
+            .map_err(|error| format!("spawn evaluated Betterleaks lifecycle adapter: {error}"))?;
+        let outer_pid = outer.id();
+        let startup_timeout = timeout.min(Duration::from_secs(5));
+        let startup_deadline = std::time::Instant::now() + startup_timeout;
+        let child_pid = loop {
+            if let Ok(value) = std::fs::read_to_string(&child_pid_path) {
+                match value.trim().parse::<u32>() {
+                    Ok(pid) => break pid,
+                    Err(error) => {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        let _ = std::fs::remove_dir_all(&root);
+                        return Err(format!(
+                            "parse Betterleaks lifecycle child PID {value:?}: {error}"
+                        ));
+                    }
+                }
+            }
+            if let Some(status) = outer
+                .try_wait()
+                .map_err(|error| format!("poll Betterleaks lifecycle adapter: {error}"))?
+            {
+                let _ = std::fs::remove_dir_all(&root);
+                return Err(format!(
+                    "Betterleaks lifecycle adapter exited {status:?} before its child became ready"
+                ));
+            }
+            if std::time::Instant::now() >= startup_deadline {
+                let _ = signal_process(outer_pid, "KILL");
+                let _ = outer.wait();
+                let _ = std::fs::remove_dir_all(&root);
+                return Err(format!(
+                    "Betterleaks lifecycle child did not become ready within {startup_timeout:?}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        let term = signal_process(outer_pid, "TERM")?;
+        if !term.success() {
+            let _ = signal_process(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            let _ = std::fs::remove_dir_all(&root);
+            return Err(format!(
+                "send SIGTERM to Betterleaks lifecycle adapter {outer_pid}: {term:?}"
+            ));
+        }
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = sender.send(outer.wait_with_output());
+        });
+        let completion_timeout = timeout.min(Duration::from_secs(5));
+        let output = match receiver.recv_timeout(completion_timeout) {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                let _ = signal_process(child_pid, "KILL");
+                let _ = std::fs::remove_dir_all(&root);
+                return Err(format!(
+                    "wait for terminated Betterleaks lifecycle adapter: {error}"
+                ));
+            }
+            Err(error) => {
+                let _ = signal_process(child_pid, "KILL");
+                let _ = signal_process(outer_pid, "KILL");
+                let _ = receiver.recv_timeout(Duration::from_secs(2));
+                let _ = std::fs::remove_dir_all(&root);
+                return Err(format!(
+                    "Betterleaks lifecycle adapter or inherited stdout pipe remained open for {completion_timeout:?}: {error}"
+                ));
+            }
+        };
+        let child_alive = signal_process(child_pid, "0")?.success();
+        if child_alive {
+            let _ = signal_process(child_pid, "KILL");
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let result = if output.status.code() != Some(2) {
+            Err(format!(
+                "SIGTERM Betterleaks lifecycle adapter exited {:?}, expected status 2; stdout={stdout:?}; stderr={stderr:?}",
+                output.status.code()
+            ))
+        } else if child_alive {
+            Err(format!(
+                "SIGTERM Betterleaks lifecycle adapter left child {child_pid} alive"
+            ))
+        } else if stdout != "ready\n" {
+            Err(format!(
+                "Betterleaks lifecycle child stdout was not drained exactly: {stdout:?}"
+            ))
+        } else if !stderr.is_empty() {
+            Err(format!(
+                "Betterleaks lifecycle adapter emitted unexpected stderr: {stderr:?}"
+            ))
+        } else {
+            Ok(())
+        };
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn signal_process(pid: u32, signal: &str) -> Result<std::process::ExitStatus, String> {
+    Command::new("/bin/kill")
+        .arg(format!("-{signal}"))
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("run /bin/kill -{signal} {pid}: {error}"))
 }
 
 fn resolve_program(program: &str) -> Option<PathBuf> {
@@ -4124,6 +4784,46 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
         .map(|line| line.trim_end_matches([' ', '\t']))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn verify_tool_output_is_canonical(tool: &str, context: &str, text: &str) -> Result<(), String> {
+    if tool != "betterleaks" {
+        return Ok(());
+    }
+    const FATAL_SEPARATOR: &str = " FTL ";
+    for (line_index, line) in text.lines().enumerate() {
+        let Some((timestamp, _)) = line.split_once(FATAL_SEPARATOR) else {
+            continue;
+        };
+        if is_betterleaks_console_time(timestamp) {
+            return Err(format!(
+                "betterleaks {context} retained a dynamic console clock on line {} ({timestamp:?}); the adapter must emit <time> FTL before the harness captures output",
+                line_index + 1
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_betterleaks_console_time(value: &str) -> bool {
+    let Some(time) = value
+        .strip_suffix("AM")
+        .or_else(|| value.strip_suffix("PM"))
+    else {
+        return false;
+    };
+    let Some((hour, minute)) = time.split_once(':') else {
+        return false;
+    };
+    if hour.is_empty()
+        || hour.len() > 2
+        || minute.len() != 2
+        || !hour.bytes().all(|byte| byte.is_ascii_digit())
+        || !minute.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return false;
+    }
+    matches!(hour.parse::<u8>(), Ok(1..=12)) && matches!(minute.parse::<u8>(), Ok(0..=59))
 }
 
 fn node_module_path_aliases() -> Vec<String> {

@@ -43,7 +43,7 @@ export BUNDLE_FROZEN=1
 export BUNDLE_GEMFILE="$provisioning_dir/ruby/Gemfile"
 export BUNDLE_PATH__SYSTEM=true
 export BUNDLE_USER_HOME="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
-export PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
+export PATH="$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
 
 mkdir -p "$artifact_dir" "$artifact_dir/fixtures" "$CARGO_TARGET_DIR" "$TMPDIR"
 observed_file="$TMPDIR/observed-versions.jsonl"
@@ -218,13 +218,15 @@ done < <(jq -r --argjson tools "$tool_ids" '
      + [.sharedBootstrap[].lockfile]
      + [.sharedComponents[]
         | select(.integrity.kind != "host-program")
-        | .integrity.path]
+        | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)]
      + [.environments[]
         | select(.id as $id | $environmentIds | index($id))
-        | (.components[].integrity.path, .bootstrap[].lockfile)]
+        | (.components[]
+           | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)),
+          .bootstrap[].lockfile]
      + [.recipes[]
         | select(.toolId as $tool | $tools | index($tool))
-        | .integrity.path])
+        | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)])
   | map(select(. != null))
   | unique[]' "$registry")
 artifact_digests=$(jq -c --argjson tools "$tool_ids" '
@@ -234,13 +236,19 @@ artifact_digests=$(jq -c --argjson tools "$tool_ids" '
       (.environments[]
        | select(.id as $id | $environmentIds | index($id))
        | .components[]))
-     | select(.integrity.kind == "sha256-archive")
+     | select(.integrity.kind == "sha256-archive" or .integrity.kind == "go-source-build")
      | {
          componentId: .id,
          version: .version,
          url: .integrity.url,
-         sha256: .integrity.sha256
-       }]
+         sha256: .integrity.sha256,
+         patchSha256: .integrity.patchSha256,
+         moduleManifestSha256: .integrity.moduleManifestSha256,
+         moduleLockSha256: .integrity.moduleLockSha256,
+         builtArtifactSha256: .integrity.builtArtifactSha256,
+         buildToolchainComponentId: .integrity.buildToolchainComponentId
+       }
+       | with_entries(select(.value != null))]
   | unique_by(.componentId)' "$registry")
 jq -n \
   --arg schemaVersion "1" \

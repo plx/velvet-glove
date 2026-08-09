@@ -31,6 +31,10 @@ printf '%s\n' "${NODE_PATH-}" >"$record/env-NODE_PATH"
 printf '%s\n' "${ASTRO_TELEMETRY_DISABLED-}" >"$record/env-ASTRO_TELEMETRY_DISABLED"
 printf '%s\n' "${CI-}" >"$record/env-CI"
 printf '%s\n' "${DEBUG-}" >"$record/env-DEBUG"
+printf '%s\n' "${BETTERLEAKS_CONFIG-}" >"$record/env-BETTERLEAKS_CONFIG"
+printf '%s\n' "${BETTERLEAKS_CONFIG_TOML-}" >"$record/env-BETTERLEAKS_CONFIG_TOML"
+printf '%s\n' "${GITLEAKS_CONFIG-}" >"$record/env-GITLEAKS_CONFIG"
+printf '%s\n' "${GITLEAKS_CONFIG_TOML-}" >"$record/env-GITLEAKS_CONFIG_TOML"
 printf '%s\n' "$VELVET_GLOVE_TOOL_TRACE_SENTINEL" >"$record/env-VELVET_GLOVE_TOOL_TRACE_SENTINEL"
 
 argument_index=0

@@ -352,6 +352,8 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
             "The adapter rejects early-exit or diagnostic-suppression arguments, then a silent FATAL-threshold preflight maps CLI/configuration failures to exit 2 before the WARNING-threshold pass maps document diagnostics to exit 1; safe mode rejects ancestor includes, and batch inputs remain independent documents.".into()
         } else if spec.id == "astro" {
             "The adapter disables telemetry, synchronization, watch mode, and timestamped output, rejects project-control and early-exit arguments, and accepts exit 0 or 1 only when a completed positive-file Result footer proves a workspace scan; incomplete runs and output beyond the explicit 16 MiB buffer map to exit 2. Validation intentionally fails on errors, not warnings or hints, and workspace findings are conservatively attributed to every selected candidate.".into()
+        } else if spec.id == "betterleaks" {
+            "The isolated adapter preflights regular readable inputs, accepts only non-controlled long --name=value extra arguments, locks complete redaction, canonicalizes Betterleaks' fatal-log clock, reserves exit 10 for findings, and forwards cancellation with bounded child cleanup. Selected paths are scanned in one batch and conservatively share attribution; file targets require an explicit config, and the launch-time preflight cannot eliminate path replacement races.".into()
         } else if mutators.is_empty() {
             if spec.phase_invocation == InvocationGranularity::Batch {
                 "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
