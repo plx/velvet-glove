@@ -170,6 +170,8 @@ goFmtAdapter: String = #"""
       stderr_chunks = []
       total = 0
       try:
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
           process = subprocess.Popen(
               arguments,
               stdin=subprocess.DEVNULL,
@@ -178,6 +180,8 @@ goFmtAdapter: String = #"""
               env=environment,
               start_new_session=True,
           )
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
           selector = selectors.DefaultSelector()
           for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
               if stream is None:

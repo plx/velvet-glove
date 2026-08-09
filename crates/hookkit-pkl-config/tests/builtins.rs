@@ -858,6 +858,12 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     assert!(gofmt_script.contains("run_child([tool, \"-w\", *files])"));
     assert!(gofmt_script.contains("info.st_nlink != 1"));
     assert!(gofmt_script.contains("name.startswith(\"GO\")"));
+    assert!(gofmt_script.contains(
+        "try:\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        process = subprocess.Popen("
+    ));
+    assert!(gofmt_script.contains(
+        "            start_new_session=True,\n        )\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)"
+    ));
     assert_eq!(gofmt_workflow.check_scope, CheckScope::TargetFiles);
     assert_eq!(gofmt_workflow.invocation, InvocationGranularity::Batch);
     let gofmt_phase = gofmt.phases.get("format").expect("gofmt immediate phase");
