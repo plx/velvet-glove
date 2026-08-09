@@ -1,9 +1,9 @@
-// DRAFT: astro check refuses to run without a local node_modules install of
-// `@astrojs/check` + `typescript` and a full Astro project layout
-// (`src/pages/`, `astro.config.mjs`). Per-file fixturing is impractical, so
-// this spec ships as-is and validation should happen in real projects.
-
 /// astro check — Astro framework component checker.
+///
+/// `astro check` is project-scoped and ignores positional file arguments. Its
+/// CLI also uses status 1 for both completed checker findings and operational
+/// failures. A Node adapter requires a positive-file `Result` footer before it
+/// accepts statuses 0 or 1 and remaps every incomplete run to status 2.
 
 module velvet_glove.builtins.tools.Astro
 
@@ -13,7 +13,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "astro"
   displayName = "astro check"
   executable = "astro"
-  installHint = "install astro check with `npm i -g astro @astrojs/check` or add it to the project"
+  installHint = "add exact compatible versions of `astro`, `@astrojs/check`, and `typescript` to the project"
+  workspaceIndicator = "package.json"
+  phaseInvocation = "workspace"
 
   files = new Config.FileSelection {
     include = new Listing<String> {
@@ -24,14 +26,100 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
+      program = "node"
       argv = new Listing<String | Config.ArgToken> {
+        "--input-type=commonjs"
+        "-e"
+        #"""
+        const { spawnSync } = require("node:child_process");
+        const { writeSync } = require("node:fs");
+        const tool = process.argv[1];
+        if (!tool) {
+          writeSync(2, "velvet-glove-astro: missing tool executable\n");
+          process.exit(2);
+        }
+        const arguments = process.argv.slice(2);
+        if (arguments[0] !== "check") {
+          writeSync(2, "velvet-glove-astro: missing check command\n");
+          process.exit(2);
+        }
+        const controlledOptions = [
+          "--help",
+          "--version",
+          "--verbose",
+          "--no-verbose",
+          "--watch",
+          "--no-watch",
+          "--silent",
+          "--no-silent",
+          "--root",
+          "--sync",
+          "--nosync",
+          "--no-sync",
+          "--minimumseverity",
+          "--minimum-severity",
+          "--minimumfailingseverity",
+          "--minimum-failing-severity"
+        ];
+        const unsupported = arguments.slice(1).find((argument) => {
+          const lowered = argument.toLowerCase();
+          const short = lowered.startsWith("-") && !lowered.startsWith("--");
+          return argument === "--" ||
+            (short && (lowered.includes("v") || lowered.includes("w"))) ||
+            controlledOptions.some((option) => lowered === option || lowered.startsWith(`${option}=`));
+        });
+        if (unsupported) {
+          writeSync(2, `velvet-glove-astro: unsupported argument ${JSON.stringify(unsupported)} would bypass controlled project validation\n`);
+          process.exit(2);
+        }
+        const environment = {
+          ...process.env,
+          ASTRO_TELEMETRY_DISABLED: "1",
+          CI: "1",
+          CLICOLOR: "0",
+          FORCE_COLOR: "0",
+          NO_COLOR: "1"
+        };
+        delete environment.DEBUG;
+        const fixed = [
+          "--silent",
+          "--noSync",
+          "--no-watch",
+          "--root",
+          ".",
+          "--minimumSeverity=error",
+          "--minimumFailingSeverity=error"
+        ];
+        const maxBufferBytes = 16 * 1024 * 1024;
+        const child = spawnSync(tool, [...arguments, ...fixed], {
+          encoding: "utf8",
+          env: environment,
+          maxBuffer: maxBufferBytes
+        });
+        const ansi = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+        const stdout = (child.stdout || "").replace(ansi, "");
+        const stderr = (child.stderr || "").replace(ansi, "");
+        if (stdout) writeSync(1, stdout);
+        if (stderr) writeSync(2, stderr);
+        if (child.error) {
+          writeSync(2, `velvet-glove-astro: ${child.error.message}\n`);
+          process.exit(2);
+        }
+        const footer = /(?:^|\n)Result \(([1-9][0-9]*) files?\):[ \t]*\n- ([0-9]+) errors?$/.exec(`${stdout}\n${stderr}`.trimEnd());
+        const errors = footer ? Number(footer[2]) : -1;
+        if (child.status === 0 && footer && errors === 0) process.exit(0);
+        if (child.status === 1 && footer && errors > 0) process.exit(1);
+        process.exit(2);
+        """#
+        "--"
+        new Config.ToolExecutable {}
         "check"
         new Config.ExtraArgs {}
-        new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
       }
     }
   }

@@ -35,9 +35,13 @@ tests/tool-fixtures/<tool-id>/<example-name>/
   `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl` (for example,
   `ruff` or `cargo-fmt`).
 - The harness picks the entry file (the one cited in the synthesized
-  `PostToolUse` event) by looking for a top-level file whose name starts with
-  `example.`. If none exists, the first non-golden, non-`expected/` file at
-  the fixture root is used.
+  `PostToolUse` event) by first looking for a top-level file whose name starts
+  with `example.`. This preserves the established multi-file fixtures. If no
+  top-level marker exists, it recursively requires exactly one nested
+  `example.*` file so project-shaped fixtures can use conventional source
+  directories such as `src/pages/`. Ambiguous nested markers fail closed. If
+  there is no marker at either depth, the first non-golden,
+  non-`expected/` file at the fixture root is used.
 - Every non-golden, non-`expected/` file (including subdirectory contents like
   `src/main.rs` or `Cargo.toml`) is copied into the test's temp workspace at
   the same relative path.
@@ -72,6 +76,11 @@ golden files should use `<workspace>` for anything under the test project.
 The session id is fixed at `test-session`, so golden files can reference it
 directly without normalization.
 
+When `NODE_PATH` supplies a controlled pinned package graph, its raw and
+canonical roots are normalized to `<node_modules>`. This keeps operational
+stack paths reproducible without hiding which package-relative module emitted a
+diagnostic.
+
 ## Running the lanes
 
 Pkl 0.31.1 is a required prerequisite for both lanes. Run the hermetic
@@ -94,7 +103,7 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run all eight pinned representative contracts across seven environments with
+Run all nine pinned representative contracts across seven environments with
 `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -128,9 +137,13 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq and Asciidoctor contract cases are retained too.
-Their evidence includes exact pass-through program/argv/cwd/environment traces
-(including Asciidoctor's nested FATAL preflight and WARNING validation),
-complete workspace snapshots and diffs for repeated immediate runs, and two
-independent compatibility-deferred summaries plus their semantic idempotence
-comparison. Other successful case workspaces are removed.
+alongside it. Successful jq, Asciidoctor, and Astro contract cases are retained
+too. Their evidence includes exact pass-through program/argv/cwd/environment
+traces (including Asciidoctor's nested FATAL preflight and WARNING validation,
+and Astro's single nested project check), complete workspace snapshots and
+diffs for repeated immediate runs, and two independent compatibility-deferred
+summaries plus their semantic idempotence comparison. Astro traces additionally
+bind `NODE_PATH` to the same controlled `node_modules` graph as the pinned
+Astro executable, verify all three required package manifests, and record
+disabled telemetry, non-interactive CI mode, and a cleared debug channel. Other
+successful case workspaces are removed.

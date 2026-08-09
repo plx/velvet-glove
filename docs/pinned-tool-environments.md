@@ -7,7 +7,7 @@ single command:
 just tool-case jq multi-file-fragments
 ```
 
-Run all eight behavior-rich representative contracts across seven environments
+Run all nine behavior-rich representative contracts across seven environments
 with:
 
 ```sh
@@ -61,7 +61,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Environment | Runtime/tool | Integrity source | Representative |
 | --- | --- | --- | --- |
 | Data formats | jq 1.8.2 | SHA-256 + SLSA | `jq/multi-file-fragments` |
-| Node | Node 24.18.0; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `sort-package-json/unformatted` |
+| Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `sort-package-json/unformatted` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.3 | mise SHA-256 | `go-fmt/unformatted` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -103,6 +103,88 @@ The representative selector exercises the cross-file regression. Full jq
 coverage additionally runs `clean`, `invalid`, and `operational-failure`; each
 case covers both Claude and Codex immediate hooks and the
 compatibility-translated deferred lifecycle.
+
+### Astro validation contract
+
+The Node environment pins the official Node 24.18.0
+[`node-v24.18.0-darwin-arm64.tar.gz`](https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.gz)
+archive at SHA-256
+`e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1`.
+The official versioned npm publications are the upstream provenance references
+for [Astro 7.2.0](https://www.npmjs.com/package/astro/v/7.2.0),
+[`@astrojs/check` 0.9.10](https://www.npmjs.com/package/@astrojs/check/v/0.9.10),
+and [TypeScript 6.0.3](https://www.npmjs.com/package/typescript/v/6.0.3).
+Astro's official
+[`astro@7.2.0` release](https://github.com/withastro/astro/releases/tag/astro%407.2.0)
+resolves to commit `60e94329f94438c1fc9b513bd9669bf07c89b680`, and
+`@astrojs/check`'s official
+[`0.9.10` release](https://github.com/withastro/astro/releases/tag/%40astrojs/check%400.9.10)
+resolves to `112d3ea14cf997218239fd8a436707e56a3815fb`. Both npm
+artifacts were published by GitHub Actions OIDC workflows with SLSA provenance
+binding their tarballs to those commits. TypeScript's official
+[`v6.0.3` release](https://github.com/microsoft/TypeScript/releases/tag/v6.0.3)
+resolves to `050880ce59e30b356b686bd3144efe24f875ebc8`; its npm
+tarball has a registry signature but no SLSA attestation. The committed SHA-512
+integrities are therefore the uniform package-integrity guard for this graph.
+Astro and `@astrojs/check` are MIT-licensed; TypeScript is Apache-2.0-licensed.
+Their direct entries in the committed npm lock carry these exact SHA-512
+integrities, respectively:
+
+- `sha512-lLTYzx3fOvCmtwD3JVBLQcbORbIOW1/j0R+3IvJx/XKwMGrk7mFnF0BYSOeRiNw1qHUR5mdA6+hRnyvyDfqrWQ==`
+- `sha512-zgx/UQMozdjOa3bOxjgeCFdtpE3c9rRX6xHwa+2QXvy8z8Akifu2AtubHyv/zzC2znO8dl8fFWL4K+Ba9kS8HQ==`
+- `sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==`
+
+The exact Astro product probe expects three leading spaces before
+`astro  v7.2.0`.
+
+The evaluated outer phase is:
+
+```text
+node --input-type=commonjs -e <adapter> -- astro check {extra-args}
+```
+
+It launches this nested command, with controlled options appended after any
+allowed configured arguments:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+astro check {extra-args} --silent --noSync --no-watch --root . --minimumSeverity=error --minimumFailingSeverity=error
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The case environment sets `NODE_PATH` to the same pinned `node_modules` graph
+that supplies the Astro executable, and retained traces require exactly that
+one controlled root plus the Astro, checker, and TypeScript manifests. The
+adapter sets `ASTRO_TELEMETRY_DISABLED=1` and `CI=1`, removes `DEBUG`, and sets
+`CLICOLOR=0`, `FORCE_COLOR=0`, and `NO_COLOR=1`. It also strips ANSI control
+sequences before forwarding or classifying diagnostics.
+
+Astro uses child status one for both checker findings and operational errors.
+The adapter accepts child status zero only with a positive-file `Result` footer
+reporting zero errors, and child status one only with that footer reporting one
+or more errors. It maps every other outcome to outer status two, including a
+raw status-one configuration failure with no completion footer. Outer statuses
+zero, one, and two therefore mean clean, source issues, and operational failure.
+The adapter buffers the child output so it can validate the terminal footer and
+sets an explicit 16 MiB ceiling; output beyond that bounded limit fails closed
+as an operational error rather than being truncated and misclassified.
+
+The four cases are a clean component; a stable `ts(2322)` type error; a strong
+three-file workspace proof whose two selected files are clean while an
+unselected component fails; and `--tsconfig does-not-exist.json`, which must
+lack the footer and become operational. The workspace case must name the
+unselected failing file and report `Result (3 files)`. Both the immediate and
+compatibility-translated deferred surfaces repeat execution twice and prove no
+source mutation.
+
+Both severity thresholds are `error`, so warnings and hints intentionally do
+not fail this contract. Astro validation is whole-workspace, and findings are
+therefore attributed conservatively to the candidates that triggered the run,
+not to an inferred culprit. `--noSync` prevents Astro's normal generated-file
+writes, but side-effectful project configuration, checker, or plugin code is
+outside that no-mutation guarantee.
 
 ### Asciidoctor validation contract
 
@@ -188,12 +270,12 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These eight smoke contracts establish the reproducible environment substrate;
+These nine smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
-and semantic case has evidence; jq and Asciidoctor are covered only after each
-complete four-case matrix passes. Linux, Intel, and full-catalog scheduling
-remain separate follow-up work.
+and semantic case has evidence; jq, Astro, and Asciidoctor are covered only
+after each complete four-case matrix passes. Linux, Intel, and full-catalog
+scheduling remain separate follow-up work.
 
 ## Updating a pin
 

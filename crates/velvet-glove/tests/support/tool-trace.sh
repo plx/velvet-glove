@@ -27,6 +27,10 @@ printf '%s\n' "${TZ-}" >"$record/env-TZ"
 printf '%s\n' "${NO_COLOR-}" >"$record/env-NO_COLOR"
 printf '%s\n' "${CLICOLOR-}" >"$record/env-CLICOLOR"
 printf '%s\n' "${FORCE_COLOR-}" >"$record/env-FORCE_COLOR"
+printf '%s\n' "${NODE_PATH-}" >"$record/env-NODE_PATH"
+printf '%s\n' "${ASTRO_TELEMETRY_DISABLED-}" >"$record/env-ASTRO_TELEMETRY_DISABLED"
+printf '%s\n' "${CI-}" >"$record/env-CI"
+printf '%s\n' "${DEBUG-}" >"$record/env-DEBUG"
 printf '%s\n' "$VELVET_GLOVE_TOOL_TRACE_SENTINEL" >"$record/env-VELVET_GLOVE_TOOL_TRACE_SENTINEL"
 
 argument_index=0

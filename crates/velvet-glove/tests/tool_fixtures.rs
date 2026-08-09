@@ -40,6 +40,10 @@ const TOOL_REAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_REAL_PROGRAM";
 const TOOL_LOGICAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_LOGICAL_PROGRAM";
 const TOOL_TRACE_SENTINEL_ENV: &str = "VELVET_GLOVE_TOOL_TRACE_SENTINEL";
 const TOOL_TRACE_SENTINEL: &str = "real-tool-fixture";
+const NODE_PATH_ENV: &str = "NODE_PATH";
+const ASTRO_TELEMETRY_DISABLED_ENV: &str = "ASTRO_TELEMETRY_DISABLED";
+const CI_ENV: &str = "CI";
+const DEBUG_ENV: &str = "DEBUG";
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +74,9 @@ impl ExpectedOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TracePlan {
     Direct,
+    SingleNestedTrailingOptions {
+        trailing: &'static [&'static str],
+    },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
         validation: &'static [&'static str],
@@ -86,6 +93,18 @@ const ASCIIDOCTOR_TRACE_PLAN: TracePlan = TracePlan::TrailingOptionsAdapter {
         "--safe-mode=safe",
         "--failure-level=WARNING",
         "--out-file=/dev/null",
+    ],
+};
+
+const ASTRO_TRACE_PLAN: TracePlan = TracePlan::SingleNestedTrailingOptions {
+    trailing: &[
+        "--silent",
+        "--noSync",
+        "--no-watch",
+        "--root",
+        ".",
+        "--minimumSeverity=error",
+        "--minimumFailingSeverity=error",
     ],
 };
 
@@ -222,7 +241,65 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_contains: &["missing converter for backend 'definitely-not-a-backend'"],
             trace_plan: ASCIIDOCTOR_TRACE_PLAN,
         },
-        ("jq" | "asciidoctor", other) => {
+        ("astro", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/pages/example.astro"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            trace_plan: ASTRO_TRACE_PLAN,
+        },
+        ("astro", "type-error") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/pages/example.astro"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "ts(2322):",
+                "Type 'string' is not assignable to type 'number'.",
+            ],
+            trace_plan: ASTRO_TRACE_PLAN,
+        },
+        ("astro", "multi-file-project") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[
+                    "src/components/selected-clean.astro",
+                    "src/pages/example.astro",
+                ],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "src/components/broken.astro",
+                "Type 'string' is not assignable to type 'number'.",
+                "Result (3 files):",
+            ],
+            trace_plan: ASTRO_TRACE_PLAN,
+        },
+        ("astro", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/pages/example.astro"],
+                exit_code: 2,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &["--tsconfig", "does-not-exist.json"],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["does-not-exist.json"],
+            trace_plan: ASTRO_TRACE_PLAN,
+        },
+        ("jq" | "asciidoctor" | "astro", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no real-tool contract declaration",
                 case.tool
@@ -347,6 +424,40 @@ fn discovery_rejects_goldens_for_unexecuted_surfaces() {
         .expect_err("goldens outside the real fixture matrix must fail closed");
     assert!(error.contains("antigravity"));
     assert!(error.contains("not executed"));
+
+    let _ = std::fs::remove_dir_all(case);
+}
+
+#[test]
+fn entry_discovery_finds_one_nested_project_source() {
+    let case = unique_temp_dir("velvet-glove-nested-entry");
+    let pages = case.join("src/pages");
+    std::fs::create_dir_all(&pages).expect("nested fixture source directory");
+    std::fs::write(case.join("package.json"), "{}\n").expect("project manifest");
+    std::fs::write(pages.join("example.astro"), "<h1>fixture</h1>\n")
+        .expect("nested fixture source");
+
+    assert_eq!(
+        find_entry_file(&case).expect("discover nested entry"),
+        PathBuf::from("src/pages/example.astro")
+    );
+
+    let _ = std::fs::remove_dir_all(case);
+}
+
+#[test]
+fn entry_discovery_rejects_ambiguous_nested_project_sources() {
+    let case = unique_temp_dir("velvet-glove-ambiguous-nested-entry");
+    for relative in ["src/pages/example.astro", "src/components/example.astro"] {
+        let path = case.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("nested fixture directory");
+        std::fs::write(path, "<p>fixture</p>\n").expect("nested fixture source");
+    }
+
+    let error = find_entry_file(&case).expect_err("ambiguous nested entries must fail");
+    assert!(error.contains("multiple nested `example.*` entry files"));
+    assert!(error.contains("src/pages"));
+    assert!(error.contains("src/components"));
 
     let _ = std::fs::remove_dir_all(case);
 }
@@ -549,6 +660,205 @@ fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
         asciidoctor_failure.outcome,
         ExpectedOutcome::OperationalFailure
     );
+
+    let astro_multi = real_tool_contract_case(&named_fixture_case("astro", "multi-file-project"))
+        .expect("Astro contract lookup")
+        .expect("Astro contract");
+    assert_eq!(astro_multi.invocations.len(), 1);
+    assert_eq!(astro_multi.invocations[0].targets.len(), 2);
+    assert_eq!(
+        astro_multi.invocations[0].targets,
+        &[
+            "src/components/selected-clean.astro",
+            "src/pages/example.astro"
+        ]
+    );
+    assert!(
+        !astro_multi.invocations[0]
+            .targets
+            .contains(&"src/components/broken.astro")
+    );
+    assert_eq!(astro_multi.invocations[0].trace_exit_codes, &[1]);
+    assert_eq!(astro_multi.trace_plan, ASTRO_TRACE_PLAN);
+
+    let astro_failure =
+        real_tool_contract_case(&named_fixture_case("astro", "operational-failure"))
+            .expect("Astro failure contract lookup")
+            .expect("Astro failure contract");
+    assert_eq!(
+        astro_failure.extra_args,
+        &["--tsconfig", "does-not-exist.json"]
+    );
+    assert_eq!(astro_failure.invocations[0].exit_code, 2);
+    assert_eq!(astro_failure.invocations[0].trace_exit_codes, &[1]);
+    assert_eq!(astro_failure.outcome, ExpectedOutcome::OperationalFailure);
+}
+
+#[test]
+fn single_child_trace_plan_appends_controlled_trailing_options() {
+    let outer_arguments = [
+        "--eval",
+        "adapter",
+        "--",
+        "astro",
+        "check",
+        "--root",
+        "/workspace",
+    ]
+    .map(str::to_owned);
+    let targets = [PathBuf::from("/workspace/src/pages/example.astro")];
+
+    let (program, invocations) = resolve_trace_invocations(
+        TracePlan::SingleNestedTrailingOptions {
+            trailing: &["--noSync", "--minimumSeverity=error"],
+        },
+        "node",
+        &outer_arguments,
+        &targets,
+        &[1],
+    )
+    .expect("resolve single-child trace");
+
+    assert_eq!(program, "astro");
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].targets, targets);
+    assert_eq!(
+        invocations[0].arguments,
+        [
+            "check",
+            "--root",
+            "/workspace",
+            "--noSync",
+            "--minimumSeverity=error",
+        ]
+    );
+    assert_eq!(invocations[0].exit_code, 1);
+}
+
+#[test]
+fn single_child_trace_plan_rejects_ambiguous_shapes() {
+    let no_separator = ["--eval", "adapter", "astro"].map(str::to_owned);
+    let error = resolve_trace_invocations(
+        TracePlan::SingleNestedTrailingOptions { trailing: &[] },
+        "node",
+        &no_separator,
+        &[],
+        &[0],
+    )
+    .expect_err("nested trace without separator must fail");
+    assert!(error.contains("no `--` separator"));
+
+    let too_many_statuses = ["--eval", "adapter", "--", "astro"].map(str::to_owned);
+    let error = resolve_trace_invocations(
+        TracePlan::SingleNestedTrailingOptions { trailing: &[] },
+        "node",
+        &too_many_statuses,
+        &[],
+        &[0, 1],
+    )
+    .expect_err("single-child trace with two statuses must fail");
+    assert!(error.contains("exactly one exit code"));
+}
+
+#[test]
+fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
+    let root = unique_temp_dir("velvet-glove-astro-trace-environment");
+    let node_modules = root.join("node_modules");
+    let real_program = node_modules.join("astro/astro.js");
+    for path in [
+        &real_program,
+        &node_modules.join("astro/package.json"),
+        &node_modules.join("@astrojs/check/package.json"),
+        &node_modules.join("typescript/package.json"),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).expect("package directory");
+        std::fs::write(path, "{}\n").expect("package fixture");
+    }
+    let record = root.join("record");
+    std::fs::create_dir_all(&record).expect("trace record");
+    std::fs::write(
+        record.join(format!("env-{NODE_PATH_ENV}")),
+        format!("{}\n", node_modules.display()),
+    )
+    .expect("NODE_PATH record");
+    std::fs::write(
+        record.join(format!("env-{ASTRO_TELEMETRY_DISABLED_ENV}")),
+        "1\n",
+    )
+    .expect("telemetry record");
+    std::fs::write(record.join(format!("env-{CI_ENV}")), "1\n").expect("CI record");
+    std::fs::write(record.join(format!("env-{DEBUG_ENV}")), "\n").expect("DEBUG record");
+    let harness = ToolTraceHarness {
+        shim_dir: root.join("shim"),
+        trace_root: root.join("trace"),
+        logical_program: "astro".to_owned(),
+        real_program,
+    };
+
+    let (observed_root, telemetry, ci, debug) =
+        verify_astro_trace_environment(&record, &harness).expect("valid Astro trace environment");
+    assert_eq!(
+        PathBuf::from(observed_root),
+        node_modules.canonicalize().unwrap()
+    );
+    assert_eq!(telemetry, "1");
+    assert_eq!(ci, "1");
+    assert!(debug.is_empty());
+
+    std::fs::write(record.join(format!("env-{CI_ENV}")), "0\n").expect("invalid CI record");
+    let error = verify_astro_trace_environment(&record, &harness)
+        .expect_err("interactive Astro trace environment must fail closed");
+    assert!(error.contains("CI=1"));
+
+    std::fs::write(record.join(format!("env-{CI_ENV}")), "1\n").expect("restore CI record");
+    std::fs::write(record.join(format!("env-{DEBUG_ENV}")), "astro:*\n")
+        .expect("invalid DEBUG record");
+    let error = verify_astro_trace_environment(&record, &harness)
+        .expect_err("debug Astro trace environment must fail closed");
+    assert!(error.contains("clear DEBUG"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn astro_trace_environment_rejects_a_different_module_graph() {
+    let root = unique_temp_dir("velvet-glove-astro-trace-escape");
+    let controlled = root.join("controlled/node_modules");
+    let escaped = root.join("escaped/node_modules");
+    let real_program = controlled.join("astro/astro.js");
+    for path in [
+        &real_program,
+        &escaped.join("astro/package.json"),
+        &escaped.join("@astrojs/check/package.json"),
+        &escaped.join("typescript/package.json"),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).expect("package directory");
+        std::fs::write(path, "{}\n").expect("package fixture");
+    }
+    let record = root.join("record");
+    std::fs::create_dir_all(&record).expect("trace record");
+    std::fs::write(
+        record.join(format!("env-{NODE_PATH_ENV}")),
+        format!("{}\n", escaped.display()),
+    )
+    .expect("NODE_PATH record");
+    std::fs::write(
+        record.join(format!("env-{ASTRO_TELEMETRY_DISABLED_ENV}")),
+        "1\n",
+    )
+    .expect("telemetry record");
+    let harness = ToolTraceHarness {
+        shim_dir: root.join("shim"),
+        trace_root: root.join("trace"),
+        logical_program: "astro".to_owned(),
+        real_program,
+    };
+
+    let error = verify_astro_trace_environment(&record, &harness)
+        .expect_err("escaped NODE_PATH must fail closed");
+    assert!(error.contains("escaped its pinned executable graph"));
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1562,6 +1872,7 @@ fn resolve_real_tool_contract(
                 .iter()
                 .all(|invocation| invocation.targets.len() == 1) => {}
         InvocationGranularity::Batch if contract.invocations.len() == 1 => {}
+        InvocationGranularity::Workspace if contract.invocations.len() == 1 => {}
         actual => {
             return Err(format!(
                 "{} contract invocation groups do not match evaluated granularity {actual:?}",
@@ -1661,6 +1972,27 @@ fn resolve_trace_invocations(
                 }],
             ))
         }
+        TracePlan::SingleNestedTrailingOptions { trailing } => {
+            if expected_exit_codes.len() != 1 {
+                return Err(format!(
+                    "single-child adapter trace for {outer_program} must declare exactly one exit code, got {expected_exit_codes:?}"
+                ));
+            }
+            let (trace_program, base_arguments) =
+                nested_trace_command(outer_program, outer_arguments, "single-child adapter")?;
+            let arguments = base_arguments
+                .into_iter()
+                .chain(trailing.iter().map(|argument| (*argument).to_owned()))
+                .collect();
+            Ok((
+                trace_program,
+                vec![ResolvedTraceInvocation {
+                    targets: targets.to_vec(),
+                    arguments,
+                    exit_code: expected_exit_codes[0],
+                }],
+            ))
+        }
         TracePlan::TrailingOptionsAdapter {
             preflight,
             validation,
@@ -1670,29 +2002,8 @@ fn resolve_trace_invocations(
                     "failure-level adapter trace must declare one or two exit codes, got {expected_exit_codes:?}"
                 ));
             }
-            let separator = outer_arguments
-                .iter()
-                .position(|argument| argument == "--")
-                .ok_or_else(|| {
-                    format!(
-                        "failure-level adapter {outer_program} command has no `--` separator: {outer_arguments:?}"
-                    )
-                })?;
-            let trace_program = outer_arguments
-                .get(separator + 1)
-                .filter(|program| !program.is_empty())
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "failure-level adapter {outer_program} command has no nested tool executable"
-                    )
-                })?;
-            let base_arguments = outer_arguments[(separator + 2)..].to_vec();
-            if base_arguments.iter().any(|argument| argument == "--") {
-                return Err(format!(
-                    "failure-level adapter nested command rejects inner `--`: {base_arguments:?}"
-                ));
-            }
+            let (trace_program, base_arguments) =
+                nested_trace_command(outer_program, outer_arguments, "failure-level adapter")?;
             let render_nested = |trailing_options: &[&str]| {
                 base_arguments
                     .iter()
@@ -1719,6 +2030,33 @@ fn resolve_trace_invocations(
             Ok((trace_program, traces))
         }
     }
+}
+
+fn nested_trace_command(
+    outer_program: &str,
+    outer_arguments: &[String],
+    adapter: &str,
+) -> Result<(String, Vec<String>), String> {
+    let separator = outer_arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .ok_or_else(|| {
+            format!("{adapter} {outer_program} command has no `--` separator: {outer_arguments:?}")
+        })?;
+    let trace_program = outer_arguments
+        .get(separator + 1)
+        .filter(|program| !program.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            format!("{adapter} {outer_program} command has no nested tool executable")
+        })?;
+    let base_arguments = outer_arguments[(separator + 2)..].to_vec();
+    if base_arguments.iter().any(|argument| argument == "--") {
+        return Err(format!(
+            "{adapter} nested command rejects inner `--`: {base_arguments:?}"
+        ));
+    }
+    Ok((trace_program, base_arguments))
 }
 
 fn render_expected_arguments(
@@ -1907,6 +2245,29 @@ fn verify_tool_trace(
                 contract.trace_program
             ));
         }
+        let mut environment = serde_json::json!({
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            "NO_COLOR": "1",
+            "CLICOLOR": "0",
+            "FORCE_COLOR": "0",
+            TOOL_TRACE_SENTINEL_ENV: TOOL_TRACE_SENTINEL,
+        });
+        if contract.trace_program == "astro" {
+            let (node_path, telemetry_disabled, ci, debug) =
+                verify_astro_trace_environment(&record, harness)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            environment.insert(NODE_PATH_ENV.to_owned(), JsonValue::String(node_path));
+            environment.insert(
+                ASTRO_TELEMETRY_DISABLED_ENV.to_owned(),
+                JsonValue::String(telemetry_disabled),
+            );
+            environment.insert(CI_ENV.to_owned(), JsonValue::String(ci));
+            environment.insert(DEBUG_ENV.to_owned(), JsonValue::String(debug));
+        }
         records.push(serde_json::json!({
             "logicalProgram": contract.trace_program,
             "shimProgram": program,
@@ -1914,15 +2275,7 @@ fn verify_tool_trace(
             "cwd": cwd,
             "argv": expected.arguments,
             "candidateFiles": expected.targets,
-            "environment": {
-                "LANG": "C",
-                "LC_ALL": "C",
-                "TZ": "UTC",
-                "NO_COLOR": "1",
-                "CLICOLOR": "0",
-                "FORCE_COLOR": "0",
-                TOOL_TRACE_SENTINEL_ENV: TOOL_TRACE_SENTINEL,
-            },
+            "environment": environment,
             "execution": "pass-through",
             "exitCode": expected.exit_code,
         }));
@@ -1935,6 +2288,83 @@ fn verify_tool_trace(
             "invocations": records,
         }),
     )
+}
+
+fn verify_astro_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+) -> Result<(String, String, String, String), String> {
+    let node_path = read_record(record, &format!("env-{NODE_PATH_ENV}"))?;
+    if node_path.is_empty() {
+        return Err("Astro trace inherited an empty NODE_PATH".to_owned());
+    }
+    let roots = std::env::split_paths(OsStr::new(&node_path)).collect::<Vec<_>>();
+    if roots.len() != 1 {
+        return Err(format!(
+            "Astro trace requires exactly one controlled NODE_PATH root, got {roots:?}"
+        ));
+    }
+    let root = roots[0]
+        .canonicalize()
+        .map_err(|error| format!("canonicalize Astro NODE_PATH {:?}: {error}", roots[0]))?;
+    let controlled_root = harness
+        .real_program
+        .ancestors()
+        .find(|path| path.file_name() == Some(OsStr::new("node_modules")))
+        .ok_or_else(|| {
+            format!(
+                "pinned Astro executable is not inside node_modules: {:?}",
+                harness.real_program
+            )
+        })?
+        .canonicalize()
+        .map_err(|error| {
+            format!(
+                "canonicalize pinned Astro node_modules root for {:?}: {error}",
+                harness.real_program
+            )
+        })?;
+    if root != controlled_root {
+        return Err(format!(
+            "Astro NODE_PATH escaped its pinned executable graph: expected {controlled_root:?}, got {root:?}"
+        ));
+    }
+    for manifest in [
+        "astro/package.json",
+        "@astrojs/check/package.json",
+        "typescript/package.json",
+    ] {
+        let path = root.join(manifest);
+        if !path.is_file() {
+            return Err(format!(
+                "Astro NODE_PATH lacks required package manifest {path:?}"
+            ));
+        }
+    }
+    let telemetry_disabled = read_record(record, &format!("env-{ASTRO_TELEMETRY_DISABLED_ENV}"))?;
+    if telemetry_disabled != "1" {
+        return Err(format!(
+            "Astro trace must disable telemetry, got {ASTRO_TELEMETRY_DISABLED_ENV}={telemetry_disabled:?}"
+        ));
+    }
+    let ci = read_record(record, &format!("env-{CI_ENV}"))?;
+    if ci != "1" {
+        return Err(format!(
+            "Astro trace must set CI=1 to disable interactive installs, got {CI_ENV}={ci:?}"
+        ));
+    }
+    let debug = read_record(record, &format!("env-{DEBUG_ENV}"))?;
+    if !debug.is_empty() {
+        return Err(format!(
+            "Astro trace must clear DEBUG to keep diagnostics deterministic, got {DEBUG_ENV}={debug:?}"
+        ));
+    }
+    Ok((
+        root.to_string_lossy().into_owned(),
+        telemetry_disabled,
+        ci,
+        debug,
+    ))
 }
 
 fn read_record(record: &Path, name: &str) -> Result<String, String> {
@@ -3024,6 +3454,7 @@ fn copy_fixture_inputs(root: &Path, current: &Path, target: &Path) -> Result<(),
 
 fn find_entry_file(directory: &Path) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
+    let mut nested_examples = Vec::new();
     for entry in sorted_entries(directory)? {
         let path = entry.path();
         let name = entry.file_name();
@@ -3037,6 +3468,10 @@ fn find_entry_file(directory: &Path) -> Result<PathBuf, String> {
         let file_type = entry
             .file_type()
             .map_err(|error| format!("file type for {path:?}: {error}"))?;
+        if file_type.is_dir() {
+            collect_nested_example_files(directory, &path, &mut nested_examples)?;
+            continue;
+        }
         if !file_type.is_file() {
             continue;
         }
@@ -3045,10 +3480,48 @@ fn find_entry_file(directory: &Path) -> Result<PathBuf, String> {
         }
         candidates.push(PathBuf::from(name));
     }
+    nested_examples.sort();
+    match nested_examples.as_slice() {
+        [entry] => return Ok(entry.clone()),
+        [] => {}
+        entries => {
+            return Err(format!(
+                "multiple nested `example.*` entry files in {directory:?}: {entries:?}; keep exactly one nested entry marker"
+            ));
+        }
+    }
     candidates.sort();
     candidates.into_iter().next().ok_or_else(|| {
         format!("no entry file in {directory:?}; add an `example.<ext>` at the case root")
     })
+}
+
+fn collect_nested_example_files(
+    root: &Path,
+    current: &Path,
+    examples: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    for entry in sorted_entries(current)? {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("file type for {path:?}: {error}"))?;
+        if file_type.is_dir() {
+            collect_nested_example_files(root, &path, examples)?;
+        } else if file_type.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("example."))
+        {
+            examples.push(
+                path.strip_prefix(root)
+                    .map_err(|error| format!("strip fixture prefix from {path:?}: {error}"))?
+                    .to_path_buf(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn is_golden_output(name: &str) -> bool {
@@ -3641,7 +4114,36 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
     for alias in aliases {
         output = output.replace(alias, "<workspace>");
     }
+    let mut node_module_aliases = node_module_path_aliases();
+    node_module_aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
+    for alias in node_module_aliases {
+        output = output.replace(&alias, "<node_modules>");
+    }
     output
+        .split('\n')
+        .map(|line| line.trim_end_matches([' ', '\t']))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn node_module_path_aliases() -> Vec<String> {
+    let mut aliases = Vec::new();
+    for path in std::env::var_os(NODE_PATH_ENV)
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+    {
+        let path = path.to_string_lossy().into_owned();
+        if !path.is_empty() && !aliases.contains(&path) {
+            aliases.push(path.clone());
+        }
+        if let Ok(canonical) = Path::new(&path).canonicalize() {
+            let canonical = canonical.to_string_lossy().into_owned();
+            if !aliases.contains(&canonical) {
+                aliases.push(canonical);
+            }
+        }
+    }
+    aliases
 }
 
 fn workspace_path_aliases(project: &Path) -> Vec<String> {
