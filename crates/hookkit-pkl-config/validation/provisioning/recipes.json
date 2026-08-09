@@ -1032,7 +1032,7 @@
       "toolId": "prettier",
       "environmentId": "macos-arm64-prettier",
       "version": "3.9.6",
-      "installationSource": "Prettier 3.9.6 from the exact one-package npm dependency graph with registry SHA-512 integrity in validation/provisioning/prettier/package-lock.json, executed only by the checksum-pinned Node.js 24.19.0 runtime",
+      "installationSource": "official Prettier 3.9.6 release/tag commit 8f0c95057cc91d5836409466cd9d9af3bb901e84 and the exact one-package npm graph with registry SHA-512 integrity in validation/provisioning/prettier/package-lock.json, executed only by the official Node.js 24.19.0 Darwin arm64 archive pinned at SHA-256 8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d with bundled npm 11.17.0",
       "integrity": {
         "kind": "npm-lock",
         "path": "crates/hookkit-pkl-config/validation/provisioning/prettier/package-lock.json"

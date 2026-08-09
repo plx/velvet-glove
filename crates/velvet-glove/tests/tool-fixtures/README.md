@@ -116,8 +116,8 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run the pinned representative contracts across their controlled environments
-with `just tool-representatives`. See the
+Run the fifteen pinned representative contracts across eleven controlled
+environments with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
 denial, and evidence output.
@@ -150,8 +150,9 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, Buf
-Format, and gofmt contract cases are retained too. Their evidence includes
+alongside it. Successful jq, Asciidoctor, Astro, Betterleaks, Biome, Prettier,
+Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract cases are retained too.
+Their evidence includes
 exact pass-through program/argv/cwd/environment traces (including
 Asciidoctor's nested FATAL preflight and WARNING validation, Astro's single
 nested project check, and
@@ -172,6 +173,22 @@ bind `NODE_PATH` to the same controlled `node_modules` graph as the pinned
 Astro executable, verify all three required package manifests, and record
 disabled telemetry, non-interactive CI mode, and a cleared debug channel. Other
 successful case workspaces are removed.
+
+Prettier traces bind a dedicated Node 24.19.0 executable and Prettier 3.9.6 CLI
+from one case-only root rather than the shared Node graph. Every native child
+receives the controlled config (`/dev/null` or a validated private JSON copy),
+fixed no-discovery controls, a minimal locale/color environment, and either one
+read-only `--list-different` batch or one write batch after a successful
+read-only format preflight. The four cases distinguish clean completion, stable
+dirty attribution, invalid configuration as operational failure, and exact
+two-file batch selection with
+an untouched sentinel. The hostile lifecycle probe proves raw private paths
+are normalized, private config is removed across child failure and active or
+cleanup-window signals, normally exiting same-process-group descendants are
+swept and rejected, and a mixed dirty-valid/parse-invalid format attempt never
+reaches the write command. It does not claim protection from concurrent target
+replacement after validation, a target change after format preflight, an
+escaped process group, or partial writes after a late native failure.
 
 gofmt traces bind the pinned executable behind an isolated Python adapter and
 record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain

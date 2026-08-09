@@ -8,12 +8,13 @@ just tool-case jq multi-file-fragments
 just tool-case buf-format multi-file
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
+just tool-case prettier multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all fourteen behavior-rich representative contracts across ten environments
+Run all fifteen behavior-rich representative contracts across eleven environments
 with:
 
 ```sh
@@ -73,6 +74,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Data formats | jq 1.8.2 | SHA-256 + SLSA | `jq/multi-file-fragments` |
 | Buf data formats | Buf 1.72.0; Python 3.14.5; Apple diff | mise SHA-256; signed upstream checksum manifest; exact host-program probe | `buf-format/multi-file` |
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
+| Prettier | Node 24.19.0; npm 11.17.0; Prettier 3.9.6; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `prettier/multi-file` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -610,6 +612,93 @@ rejects reporter overrides, so that parser is not reachable through the
 validated command. This is a narrow reachability argument, not a claim that
 the upstream artifact is vulnerability-free or exempt from future advisories.
 
+### Prettier validation contract
+
+The dedicated Prettier environment pins the official Node.js
+[`node-v24.19.0-darwin-arm64.tar.gz`](https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz)
+archive at SHA-256
+`8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d`.
+That archive supplies Node `v24.19.0` and npm `11.17.0`. npm installs exactly
+one runtime dependency with scripts, audit, and funding calls disabled:
+[`prettier` 3.9.6](https://www.npmjs.com/package/prettier/v/3.9.6), whose locked
+registry integrity is
+`sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g==`.
+The official 3.9.6 release/tag resolves to commit
+[`8f0c95057cc91d5836409466cd9d9af3bb901e84`](https://github.com/prettier/prettier/commit/8f0c95057cc91d5836409466cd9d9af3bb901e84).
+The tag is unsigned, so the committed npm integrity and Node archive checksum
+are the executable trust boundary. The exact product probe is `3.9.6`.
+
+Both phases run the evaluated adapter through pinned Python 3.14.5 in isolated
+mode and bind the dedicated Node and Prettier paths from the same case-only
+root:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> node prettier format {extra-args} __VELVET_GLOVE_PRETTIER_FILES__ {files}
+python -I -c <adapter> node prettier verify {extra-args} __VELVET_GLOVE_PRETTIER_FILES__ {files}
+```
+
+The read-only native command is:
+
+```text
+node prettier.cjs --config=<private-json-or-/dev/null> --list-different --log-level=log {safe-extra-args} --no-editorconfig --ignore-path=/dev/null --with-node-modules --no-color -- {files}
+```
+
+After that complete batch preflight succeeds, format mode may run:
+
+```text
+node prettier.cjs --config=<private-json-or-/dev/null> --write --log-level=error {safe-extra-args} --no-editorconfig --ignore-path=/dev/null --with-node-modules --no-color -- {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The adapter rejects links, aliases, nonregular selected files, early-exit and
+scope-changing options, plugins, executable configuration, configuration
+overrides, and implicit config, ignore, EditorConfig, cache, and pragma
+discovery. An explicit `.prettierrc` or JSON file is opened without following
+links, bounded to 1 MiB, decoded as UTF-8 JSON data, restricted to a reviewed
+formatting-option allowlist, canonicalized, and copied mode 0600 to a private
+directory outside the project. Node receives only fixed locale, timezone,
+terminal, CI, color, and trace values; Node, Prettier, loader, and debug
+injection variables are removed. Private paths in native output and adapter
+errors are normalized before evidence is emitted.
+
+Native status zero is accepted only with empty output. Status one is a source
+issue only when read-only stdout is a newline-terminated, duplicate-free subset
+of the exact selected absolute paths and stderr is empty. Every other outcome,
+including malformed evidence, configuration diagnostics, status two, excess
+output, signals, or a normally exiting child that leaves a same-process-group
+descendant, becomes operational status two. HUP, INT, and TERM are forwarded
+to an active child group; cleanup retains those handlers through private-config
+removal, then blocks and drains them at a documented process-exit cutoff before
+restoring handlers while leaving the signals blocked.
+
+The four cases cover clean input, one unformatted source, an invalid numeric
+option that upstream reports with status one but the adapter classifies as
+operational, and a multi-file batch containing one dirty and one selected-clean
+file plus an untouched unselected sentinel. Immediate execution proves the
+read-only format preflight, exact mutation, authoritative verify, complete
+workspace diff, and a clean idempotent repeat. The compatibility-deferred path
+starts from an independent pristine copy and proves initial issue detection,
+one conditional remedy, final verification, exact changed-file evidence, and
+a clean fixed-state repeat. Both Claude and Codex surfaces execute every case;
+the representative is `prettier/multi-file`.
+
+The hostile evaluated-adapter probe additionally proves that a source config
+replaced after validation cannot affect the private data copy, random private
+paths are normalized on child and unwritable-temporary-root failures, private
+state is removed after ordinary failures and signals during both active-child
+and cleanup windows, a closed-stdio same-group orphan is killed and rejected,
+and a mixed dirty-valid plus parse-invalid batch never reaches `--write`.
+These controls do not eliminate concurrent selected-file replacement or
+content changes after the launch-time check, a target change after the format
+preflight, or partial writes from a late native write failure; unsafe rollback
+is deliberately not attempted. A descendant that deliberately escapes into a
+new session or process group is outside adapter containment. Disabling plugins
+and executable configuration sharply narrows child behavior, but Prettier and
+its parser still process untrusted project bytes and are not a code sandbox.
+
 ### Cargo Clippy validation contract
 
 The dedicated Cargo Clippy environment installs selected components from the
@@ -916,9 +1005,10 @@ status model and is therefore conservatively classified as operational.
 The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
-recipe registry. Node, Python, and Ruby package closures live beside it under
-`node/`, `python/`, and `ruby/`; the Betterleaks dependency closure and patch
-live under `betterleaks/`. Runtime components, auxiliary programs, bootstrap
+recipe registry. Shared Node, dedicated Prettier, Python, and Ruby package
+closures live beside it under `node/`, `prettier/`, `python/`, and `ruby/`; the
+Betterleaks dependency closure and patch live under `betterleaks/`. Runtime
+components, auxiliary programs, bootstrap
 commands, platform, architecture, minimum OS, and case-network policy are
 schema-checked there as well. The current macOS 26 floor is dictated by the
 official native Pkl 0.31.1 asset shared by the lane; the Rust, Ruby, and built
@@ -943,11 +1033,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These fourteen smoke contracts establish the reproducible environment substrate;
+These fifteen smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
-Asciidoctor, Biome, gofmt, Cargo Clippy, and Cargo Fmt
+Asciidoctor, Biome, Prettier, gofmt, Cargo Clippy, and Cargo Fmt
 are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 
