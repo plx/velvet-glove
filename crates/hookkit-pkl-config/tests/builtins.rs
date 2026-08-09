@@ -1020,10 +1020,7 @@ fn ghalint_workflow_adapter_locks_native_inventory_and_status_grammar() {
             exclude: Vec::new(),
         }
     );
-    assert_eq!(
-        ghalint.phase_invocation,
-        InvocationGranularity::Workspace
-    );
+    assert_eq!(ghalint.phase_invocation, InvocationGranularity::Workspace);
     assert_eq!(ghalint.workflow_order, vec!["verify"]);
     assert_eq!(ghalint.phase_order, vec!["verify"]);
 
@@ -1056,6 +1053,8 @@ fn ghalint_workflow_adapter_locks_native_inventory_and_status_grammar() {
         "ghalint left a same-group descendant after exit",
         "GHALINT_LOG_COLOR",
         "GHALINT_LOG_LEVEL",
+        "VELVET_GLOVE_TOOL_TRACE_DIR",
+        "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
         "read a workflow file",
         "ghalint configuration is invalid",
         "ghalint status one contained no source diagnostics",
@@ -1076,7 +1075,10 @@ fn ghalint_workflow_adapter_locks_native_inventory_and_status_grammar() {
     assert_eq!(check.argv[7], token(ArgToken::Files));
     assert_exit_codes(&check.exit_codes, &[0], &[1], &[2]);
 
-    let phase = ghalint.phases.get("verify").expect("immediate verify phase");
+    let phase = ghalint
+        .phases
+        .get("verify")
+        .expect("immediate verify phase");
     assert_eq!(phase.program.as_deref(), Some("python"));
     assert_eq!(phase.mode, PhaseMode::Verify);
     assert_eq!(phase.writes, WriteBehavior::None);

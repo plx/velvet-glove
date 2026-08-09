@@ -1,0 +1,9 @@
+warning: ghalint (workflow): issues remain; diagnostics: <workspace>/.velvet-glove/ghalint-workflow-agent-hook/test-session_test-turn_ghalint-workflow-tool_ghalint-workflow-tool-issues.txt
+ghalint (workflow) diagnostics:
+[verify] command: python -I -c <inline-script> ghalint <workspace> __VELVET_GLOVE_GHALINT_WORKFLOW_FILES__ <workspace>/.github/workflows/example.yml
+status: Some(1)
+classification: Some(Issues)
+stdout:
+{"issues":[{"error":"parse a workflow file as YAML: yaml: line 5: did not find expected node content","file":".github/workflows/example.yml","job":null,"kind":"parse","message":"read a workflow file","policy":null,"step":null}],"status":"issues"}
+artifact: <workspace>/.velvet-glove/ghalint-workflow-agent-hook/test-session_test-turn_ghalint-workflow-tool_ghalint-workflow-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

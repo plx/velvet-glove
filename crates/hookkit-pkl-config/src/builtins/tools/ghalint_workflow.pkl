@@ -469,7 +469,7 @@ ghalintWorkflowAdapter: String = #"""
 
 
   def child_environment(tool, private_root, temporary):
-      return {
+      environment = {
           "PATH": os.pathsep.join((os.path.dirname(tool), "/usr/bin", "/bin")),
           "HOME": private_root,
           "TMPDIR": temporary,
@@ -487,6 +487,13 @@ ghalintWorkflowAdapter: String = #"""
           "GHALINT_LOG_COLOR": "never",
           "GHALINT_LOG_LEVEL": "error",
       }
+      for name in (
+          "VELVET_GLOVE_TOOL_TRACE_DIR",
+          "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+      ):
+          if name in os.environ:
+              environment[name] = os.environ[name]
+      return environment
 
 
   def process_group_exists(pid):

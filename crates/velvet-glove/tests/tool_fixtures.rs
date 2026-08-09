@@ -384,6 +384,7 @@ impl ExpectedOutcome {
 enum TracePlan {
     Direct,
     PrivateProbeThenContextlintWorkspace,
+    PrivateConfigThenGhalintWorkspace,
     SingleNestedTrailingOptions {
         trailing: &'static [&'static str],
     },
@@ -489,6 +490,11 @@ const CONTEXTLINT_FILES_MARKER: &str = "__VELVET_GLOVE_CONTEXTLINT_FILES__";
 const CONTEXTLINT_TRACE_PLAN: TracePlan = TracePlan::PrivateProbeThenContextlintWorkspace;
 const CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER: &str = "<contextlint-private>";
 const CONTEXTLINT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-contextlint-probe-";
+
+const GHALINT_WORKFLOW_FILES_MARKER: &str = "__VELVET_GLOVE_GHALINT_WORKFLOW_FILES__";
+const GHALINT_PRIVATE_ROOT_PLACEHOLDER: &str = "<ghalint-private>";
+const GHALINT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-ghalint-workflow-";
+const GHALINT_TRACE_PLAN: TracePlan = TracePlan::PrivateConfigThenGhalintWorkspace;
 
 const BETTERLEAKS_FILES_MARKER: &str = "__VELVET_GLOVE_BETTERLEAKS_FILES__";
 const BETTERLEAKS_FIXED_ARGUMENTS: &[&str] = &[
@@ -810,6 +816,95 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
         ("contextlint", other) => {
             return Err(format!(
                 "contextlint fixture {other:?} has no real-tool contract declaration"
+            ));
+        }
+        ("ghalint-workflow", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[".github/workflows/build.yml"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: GHALINT_TRACE_PLAN,
+        },
+        ("ghalint-workflow", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[".github/workflows/example.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"policy\":\"job_permissions\"",
+                "\"policy\":\"job_timeout_minutes_is_required\"",
+                "\"file\":\".github/workflows/example.yml\"",
+            ],
+            diagnostic_excludes: &["Aug ", "reference="],
+            trace_plan: GHALINT_TRACE_PLAN,
+        },
+        ("ghalint-workflow", "multi-workflow") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[
+                    ".github/workflows/example.yml",
+                    ".github/workflows/selected.yaml",
+                ],
+                exit_code: 1,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"policy\":\"job_permissions\"",
+                "\"file\":\".github/workflows/example.yml\"",
+            ],
+            diagnostic_excludes: &[
+                "nested/ignored.yml",
+                "\"file\":\".github/workflows/selected.yaml\"",
+            ],
+            trace_plan: GHALINT_TRACE_PLAN,
+        },
+        ("ghalint-workflow", "config-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[".github/workflows/example.yml"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "velvet-glove-ghalint-workflow: ghalint configuration is invalid",
+            ],
+            diagnostic_excludes: &["\"status\":\"issues\"", "Aug "],
+            trace_plan: GHALINT_TRACE_PLAN,
+        },
+        ("ghalint-workflow", "malformed") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[".github/workflows/example.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"kind\":\"parse\"",
+                "parse a workflow file as YAML:",
+                "\"file\":\".github/workflows/example.yml\"",
+            ],
+            diagnostic_excludes: &["\"kind\":\"policy\"", "Aug "],
+            trace_plan: GHALINT_TRACE_PLAN,
+        },
+        ("ghalint-workflow", other) => {
+            return Err(format!(
+                "ghalint-workflow fixture {other:?} has no real-tool contract declaration"
             ));
         }
         ("jq", "clean") => RealToolContractCase {
@@ -2764,6 +2859,29 @@ fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
     assert_eq!(vacuum_failure.invocations[0].exit_code, 2);
     assert_eq!(vacuum_failure.invocations[0].trace_exit_codes, &[2]);
     assert_eq!(vacuum_failure.outcome, ExpectedOutcome::OperationalFailure);
+
+    let ghalint_multi =
+        real_tool_contract_case(&named_fixture_case("ghalint-workflow", "multi-workflow"))
+            .expect("ghalint-workflow contract lookup")
+            .expect("ghalint-workflow contract");
+    assert_eq!(ghalint_multi.invocations.len(), 1);
+    assert_eq!(
+        ghalint_multi.invocations[0].targets,
+        &[
+            ".github/workflows/example.yml",
+            ".github/workflows/selected.yaml",
+        ]
+    );
+    assert_eq!(ghalint_multi.invocations[0].trace_exit_codes, &[0, 1]);
+    assert_eq!(ghalint_multi.trace_plan, GHALINT_TRACE_PLAN);
+
+    let ghalint_config =
+        real_tool_contract_case(&named_fixture_case("ghalint-workflow", "config-failure"))
+            .expect("ghalint-workflow config contract lookup")
+            .expect("ghalint-workflow config contract");
+    assert_eq!(ghalint_config.invocations[0].exit_code, 2);
+    assert_eq!(ghalint_config.invocations[0].trace_exit_codes, &[0, 1]);
+    assert_eq!(ghalint_config.outcome, ExpectedOutcome::OperationalFailure);
 }
 
 #[test]
@@ -3134,6 +3252,74 @@ fn expected_workspace_job_rejects_split_or_missing_markers() {
     let absent = resolve_expected_workspace_job(&spec, &project, &[canonical_project(&missing)])
         .expect_err("workspace marker is required");
     assert!(absent.contains("found no"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ghalint_trace_plan_binds_version_private_config_and_top_level_inventory() {
+    let root = unique_temp_dir("velvet-glove-ghalint-trace-plan");
+    let project = root.join("project");
+    let workflows = project.join(".github/workflows");
+    std::fs::create_dir_all(&workflows).expect("workflow directory");
+    let first = workflows.join("example.yml");
+    let second = workflows.join("selected.yaml");
+    std::fs::write(&first, "name: first\n").expect("first workflow");
+    std::fs::write(&second, "name: second\n").expect("second workflow");
+    let project = canonical_project(&project);
+    let targets = [canonical_project(&first), canonical_project(&second)];
+    let outer_arguments = vec![
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "ghalint".to_owned(),
+        project.to_string_lossy().into_owned(),
+        GHALINT_WORKFLOW_FILES_MARKER.to_owned(),
+        targets[0].to_string_lossy().into_owned(),
+        targets[1].to_string_lossy().into_owned(),
+    ];
+
+    let (program, invocations) = resolve_trace_invocations(
+        GHALINT_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[0, 1],
+    )
+    .expect("resolve ghalint-workflow trace");
+
+    assert_eq!(program, "ghalint");
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[0].arguments, ["--version"]);
+    assert_eq!(invocations[0].exit_code, 0);
+    assert_eq!(
+        invocations[1].arguments,
+        [
+            "--log-color=never",
+            "--log-level=error",
+            "--config=<ghalint-private>/ghalint.yaml",
+            "run",
+        ]
+    );
+    assert_eq!(invocations[1].exit_code, 1);
+    assert_eq!(invocations[1].targets, targets);
+
+    let nested = workflows.join("nested/ignored.yml");
+    std::fs::create_dir_all(nested.parent().expect("nested parent"))
+        .expect("nested workflow directory");
+    std::fs::write(&nested, "name: ignored\n").expect("nested workflow");
+    let nested_target = canonical_project(&nested);
+    let mut nested_arguments = outer_arguments;
+    *nested_arguments.last_mut().expect("second rendered target") =
+        nested_target.to_string_lossy().into_owned();
+    let error = resolve_trace_invocations(
+        GHALINT_TRACE_PLAN,
+        "python",
+        &nested_arguments,
+        &[targets[0].clone(), nested_target],
+        &[0, 1],
+    )
+    .expect_err("nested workflow target must be rejected");
+    assert!(error.contains("outside its top-level workflow inventory"));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -4436,6 +4622,19 @@ fn contextlint_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated ghalint-workflow adapter lifecycle; requires controlled Python"]
+fn ghalint_workflow_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("ghalint-workflow")
+        .unwrap_or_else(|| panic!("builtin catalog has no ghalint-workflow spec"));
+    verify_ghalint_workflow_adapter_lifecycle(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated gofmt adapter lifecycle; requires controlled Python"]
 fn gofmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -4593,6 +4792,15 @@ fn run_all_tool_fixtures() {
         verify_contextlint_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("contextlint adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog
+        .cases
+        .iter()
+        .find(|case| case.tool == "ghalint-workflow")
+    {
+        verify_ghalint_workflow_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("ghalint-workflow adapter lifecycle probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "go-fmt") {
         verify_gofmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -5744,7 +5952,18 @@ fn build_fixture_input(
     project: &Path,
     contract: Option<&RealToolContractCase>,
 ) -> Result<support::native_events::NativePostToolInput, String> {
-    let mut builder = PostToolUseBuilder::new(surface, project, &case.entry).identity(
+    let event_entry = contract
+        .filter(|_| case.tool == "ghalint-workflow")
+        .and_then(|contract| {
+            contract
+                .invocations
+                .iter()
+                .flat_map(|invocation| invocation.targets.iter())
+                .next()
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| case.entry.clone());
+    let mut builder = PostToolUseBuilder::new(surface, project, event_entry).identity(
         "test-session",
         "test-turn",
         format!("{}-tool", case.tool),
@@ -5844,12 +6063,16 @@ fn resolve_real_tool_contract(
                 case.tool, contract.phase_id
             )
         })?;
-        if !workflow.enabled
-            || workflow.check_scope != CheckScope::TargetFiles
-            || workflow.invocation != InvocationGranularity::Batch
-        {
+        let expected_shape = if case.tool == "ghalint-workflow" {
+            workflow.check_scope == CheckScope::Workspace
+                && workflow.invocation == InvocationGranularity::Workspace
+        } else {
+            workflow.check_scope == CheckScope::TargetFiles
+                && workflow.invocation == InvocationGranularity::Batch
+        };
+        if !workflow.enabled || !expected_shape {
             return Err(format!(
-                "{} explicit workflow {:?} must be enabled, target-files scoped, and batch invoked; got enabled={} scope={:?} invocation={:?}",
+                "{} explicit workflow {:?} has the wrong enabled/scope/invocation contract; got enabled={} scope={:?} invocation={:?}",
                 case.tool,
                 contract.phase_id,
                 workflow.enabled,
@@ -6646,6 +6869,95 @@ fn resolve_trace_invocations(
                         program: node_program.clone(),
                         targets: targets.to_vec(),
                         arguments: command_arguments,
+                        exit_code: expected_exit_codes[1],
+                    },
+                ],
+            ))
+        }
+        TracePlan::PrivateConfigThenGhalintWorkspace => {
+            if expected_exit_codes.len() != 2 {
+                return Err(format!(
+                    "ghalint-workflow adapter trace for {outer_program} must declare version and workspace-run exit codes, got {expected_exit_codes:?}"
+                ));
+            }
+            let [
+                isolated,
+                command,
+                adapter,
+                tool_program,
+                project,
+                marker_and_files @ ..,
+            ] = outer_arguments
+            else {
+                return Err(format!(
+                    "ghalint-workflow adapter trace has an incomplete outer command: {outer_arguments:?}"
+                ));
+            };
+            if isolated != "-I"
+                || command != "-c"
+                || adapter.is_empty()
+                || tool_program != "ghalint"
+            {
+                return Err(format!(
+                    "ghalint-workflow adapter trace expected isolated Python plus logical ghalint, got {outer_arguments:?}"
+                ));
+            }
+            let project = PathBuf::from(project);
+            if !project.is_absolute() || !project.is_dir() {
+                return Err(format!(
+                    "ghalint-workflow adapter trace rendered an invalid project root {project:?}"
+                ));
+            }
+            let project = project.canonicalize().map_err(|error| {
+                format!("canonicalize ghalint-workflow project {project:?}: {error}")
+            })?;
+            let [marker, rendered_files @ ..] = marker_and_files else {
+                return Err("ghalint-workflow adapter trace has no file marker".to_owned());
+            };
+            if marker != GHALINT_WORKFLOW_FILES_MARKER {
+                return Err(format!(
+                    "ghalint-workflow adapter trace rejects forwarded arguments before its file marker: {marker_and_files:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "ghalint-workflow adapter trace candidate suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let workflows = project.join(".github/workflows");
+            if targets.iter().any(|target| {
+                target.parent() != Some(workflows.as_path())
+                    || !matches!(
+                        target.extension().and_then(OsStr::to_str),
+                        Some("yml" | "yaml")
+                    )
+            }) {
+                return Err(format!(
+                    "ghalint-workflow adapter trace targets are outside its top-level workflow inventory: {targets:?}"
+                ));
+            }
+            Ok((
+                tool_program.clone(),
+                vec![
+                    ResolvedTraceInvocation {
+                        program: tool_program.clone(),
+                        targets: targets.to_vec(),
+                        arguments: vec!["--version".to_owned()],
+                        exit_code: expected_exit_codes[0],
+                    },
+                    ResolvedTraceInvocation {
+                        program: tool_program.clone(),
+                        targets: targets.to_vec(),
+                        arguments: vec![
+                            "--log-color=never".to_owned(),
+                            "--log-level=error".to_owned(),
+                            format!("--config={GHALINT_PRIVATE_ROOT_PLACEHOLDER}/ghalint.yaml"),
+                            "run".to_owned(),
+                        ],
                         exit_code: expected_exit_codes[1],
                     },
                 ],
@@ -9561,6 +9873,11 @@ fn verify_tool_trace_invocations(
         } else {
             serde_json::json!({})
         };
+        let ghalint_private_root = if trace_program == "ghalint" {
+            resolve_ghalint_private_trace_root(&record, &expected.arguments)?
+        } else {
+            None
+        };
         let expected_cwd = if trace_program == "node" && harness.contextlint {
             let indices = expected
                 .arguments
@@ -9583,6 +9900,7 @@ fn verify_tool_trace_invocations(
                 &recorded_cwd,
                 contextlint_private_root.as_deref(),
                 eslint_private_root.as_deref(),
+                ghalint_private_root.as_deref(),
             )?
         } else {
             cwd.to_string_lossy().into_owned()
@@ -9606,6 +9924,7 @@ fn verify_tool_trace_invocations(
                 &recorded_cwd,
                 contextlint_private_root.as_deref(),
                 eslint_private_root.as_deref(),
+                ghalint_private_root.as_deref(),
             )?;
             if trace_program == "dclint" && argument == DCLINT_PRIVATE_CONFIG_ARGUMENT {
                 let actual = read_record(&record, &format!("argv-{index}"))?;
@@ -9998,13 +10317,73 @@ fn resolve_eslint_private_trace_root(
     Ok(candidates.into_iter().next())
 }
 
+fn resolve_ghalint_private_trace_root(
+    record: &Path,
+    expected_arguments: &[String],
+) -> Result<Option<String>, String> {
+    let mut candidates = BTreeSet::new();
+    for (index, expected) in expected_arguments.iter().enumerate() {
+        if !expected.contains(GHALINT_PRIVATE_ROOT_PLACEHOLDER) {
+            continue;
+        }
+        if expected.matches(GHALINT_PRIVATE_ROOT_PLACEHOLDER).count() != 1 {
+            return Err(format!(
+                "ghalint trace argument contains its private-root placeholder more than once: {expected:?}"
+            ));
+        }
+        let (prefix, suffix) = expected
+            .split_once(GHALINT_PRIVATE_ROOT_PLACEHOLDER)
+            .expect("placeholder presence was checked");
+        let actual = read_record(record, &format!("argv-{index}"))?;
+        let candidate = actual
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+            .ok_or_else(|| {
+                format!(
+                    "ghalint trace argument {index} cannot bind expected private path shape {expected:?} to {actual:?}"
+                )
+            })?;
+        let candidate_path = Path::new(candidate);
+        if !candidate_path.is_absolute()
+            || !candidate_path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with(GHALINT_PRIVATE_ROOT_PREFIX))
+        {
+            return Err(format!(
+                "ghalint trace argument {index} bound an invalid private root {candidate_path:?}"
+            ));
+        }
+        candidates.insert(candidate.to_owned());
+    }
+    match candidates.len() {
+        0 => Ok(None),
+        1 => Ok(candidates.into_iter().next()),
+        _ => Err(format!(
+            "ghalint trace did not bind one consistent private root: {candidates:?}"
+        )),
+    }
+}
+
 fn resolve_dynamic_trace_argument(
     argument: &str,
     recorded_cwd: &str,
     contextlint_private_root: Option<&str>,
     eslint_private_root: Option<&str>,
+    ghalint_private_root: Option<&str>,
 ) -> Result<String, String> {
     let cwd = Path::new(recorded_cwd);
+    if argument.contains(GHALINT_PRIVATE_ROOT_PLACEHOLDER) {
+        let ghalint_private_root = ghalint_private_root.ok_or_else(|| {
+            format!("ghalint dynamic trace path has no validated private root: {argument:?}")
+        })?;
+        if argument.matches(GHALINT_PRIVATE_ROOT_PLACEHOLDER).count() != 1 {
+            return Err(format!(
+                "ghalint dynamic trace argument contains its private-root placeholder more than once: {argument:?}"
+            ));
+        }
+        return Ok(argument.replacen(GHALINT_PRIVATE_ROOT_PLACEHOLDER, ghalint_private_root, 1));
+    }
     if argument.contains(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER) {
         let contextlint_private_root = contextlint_private_root.ok_or_else(|| {
             format!("Contextlint dynamic trace path has no validated private root: {argument:?}")
@@ -13400,6 +13779,287 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
         Ok(())
     } else {
         Err(missing)
+    }
+}
+
+fn verify_ghalint_workflow_adapter_lifecycle(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "ghalint-workflow lifecycle probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Token(ArgToken::ProjectRoot),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "ghalint-workflow lifecycle probe could not extract the evaluated adapter"
+                    .to_owned(),
+            );
+        };
+        if isolated != "-I" || command != "-c" || marker != GHALINT_WORKFLOW_FILES_MARKER {
+            return Err(format!(
+                "ghalint-workflow lifecycle probe expected exact isolated workspace shape, got {isolated:?} {command:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "ghalint-workflow lifecycle probe lacks Python".to_owned())?;
+        let python = resolve_program(python_program)
+            .or_else(|| {
+                (python_program == "python")
+                    .then(|| resolve_program("python3"))
+                    .flatten()
+            })
+            .ok_or_else(|| format!("cannot resolve lifecycle Python {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize lifecycle Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-ghalint-lifecycle");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize ghalint lifecycle root: {error}"))?;
+        let result = (|| {
+            let bin = root.join("bin");
+            let adapter_tmp = root.join("adapter-tmp");
+            let outer_home = root.join("outer-home");
+            for directory in [&bin, &adapter_tmp, &outer_home] {
+                std::fs::create_dir(directory).map_err(|error| {
+                    format!("create ghalint lifecycle directory {directory:?}: {error}")
+                })?;
+            }
+            let tool = bin.join("ghalint");
+            let tool_source = r#"#!/bin/sh
+set -eu
+expected_path=${0%/*}:/usr/bin:/bin
+[ "${PATH-}" = "$expected_path" ]
+[ "${LANG-}" = C ]
+[ "${LC_ALL-}" = C ]
+[ "${TZ-}" = UTC ]
+[ "${TERM-}" = dumb ]
+[ "${CI-}" = 1 ]
+[ "${NO_COLOR-}" = 1 ]
+[ "${CLICOLOR-}" = 0 ]
+[ "${FORCE_COLOR-}" = 0 ]
+[ "${GHALINT_LOG_COLOR-}" = never ]
+[ "${GHALINT_LOG_LEVEL-}" = error ]
+[ -z "${GHALINT_VELVET_GLOVE_POISON-}" ]
+[ "${HOME-}" = "${XDG_CACHE_HOME-}" ]
+[ "${HOME-}" = "${XDG_CONFIG_HOME-}" ]
+[ "${HOME-}" = "${XDG_DATA_HOME-}" ]
+[ -d "${HOME-}" ]
+[ -d "${TMPDIR-}" ]
+if [ "${1-}" = --version ]; then
+  if [ -f mode-bad-version ]; then
+    printf '%s\n' 'ghalint version 1.5.6'
+  else
+    printf '%s\n' 'ghalint version 1.5.6+velvet-glove.1'
+  fi
+  exit 0
+fi
+if [ -f mode-source ]; then
+  printf '%s\n' 'Jan  1 00:00:00.000 ERR the job violates policies program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=job_permissions reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/001.md job_name=test error="job should have permissions"' >&2
+  printf '%s\n' 'Jan  1 00:00:00.001 ERR the job violates policies program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=job_timeout_minutes_is_required reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/012.md job_name=test error="job'\''s timeout-minutes is required"' >&2
+  exit 1
+fi
+if [ -f mode-parse ]; then
+  printf '%s\n' 'Jan  1 00:00:00.000 ERR read a workflow file program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/codes/001.md error="parse a workflow file as YAML: fixture parse failure"' >&2
+  exit 1
+fi
+if [ -f mode-config ]; then
+  config=
+  for argument in "$@"; do
+    case "$argument" in
+      --config=*) config=${argument#--config=} ;;
+    esac
+  done
+  [ -n "$config" ]
+  printf 'Jan  1 00:00:00.000 ERR ghalint failed program=ghalint version=1.5.6+velvet-glove.1 config_file=%s error="read a configuration file: EOF"\n' "$config" >&2
+  exit 1
+fi
+if [ -f mode-mutate ]; then
+  printf '%s\n' '# changed' >> .github/workflows/example.yml
+  exit 0
+fi
+if [ -f mode-descendant ]; then
+  (trap '' HUP INT TERM; while :; do /bin/sleep 1; done) </dev/null >/dev/null 2>&1 &
+  exit 0
+fi
+exit 0
+"#;
+            write_executable_fixture(&tool, tool_source, "ghalint lifecycle executable")?;
+
+            let create_case = |name: &str, mode: &str, with_workflow: bool| {
+                let project = root.join(name);
+                let workflows = project.join(".github/workflows");
+                std::fs::create_dir_all(&workflows).map_err(|error| {
+                    format!("create ghalint lifecycle workflow directory: {error}")
+                })?;
+                std::fs::write(project.join(format!("mode-{mode}")), "\n")
+                    .map_err(|error| format!("write ghalint lifecycle mode: {error}"))?;
+                let workflow = workflows.join("example.yml");
+                if with_workflow {
+                    std::fs::write(
+                        &workflow,
+                        "name: fixture\non:\n  push:\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo fixture\n",
+                    )
+                    .map_err(|error| format!("write ghalint lifecycle workflow: {error}"))?;
+                }
+                let project = project
+                    .canonicalize()
+                    .map_err(|error| format!("canonicalize ghalint lifecycle project: {error}"))?;
+                Ok::<_, String>((project, workflow))
+            };
+
+            let run_case = |label: &str, project: &Path, selected: &Path| {
+                let mut process = Command::new(&python);
+                process
+                    .arg("-I")
+                    .arg("-c")
+                    .arg(adapter)
+                    .arg(&tool)
+                    .arg(project)
+                    .arg(GHALINT_WORKFLOW_FILES_MARKER)
+                    .arg(selected)
+                    .env(TMPDIR_ENV, &adapter_tmp)
+                    .env(HOME_ENV, &outer_home)
+                    .env("GHALINT_LOG_COLOR", "poison")
+                    .env("GHALINT_LOG_LEVEL", "poison")
+                    .env("GHALINT_VELVET_GLOVE_POISON", "poison");
+                run_with_timeout(
+                    &mut process,
+                    &[],
+                    timeout,
+                    &root.join("captures").join(label),
+                )
+                .map_err(|error| format!("ghalint lifecycle {label}: {error}"))
+            };
+            let assert_status = |label: &str, output: &BoundedOutput, expected: i32| {
+                let actual = output.status.code().unwrap_or(-1);
+                if actual != expected {
+                    return Err(format!(
+                        "ghalint lifecycle {label} expected {expected}, got {actual}\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr),
+                    ));
+                }
+                Ok(())
+            };
+
+            let (clean_project, clean_workflow) = create_case("clean", "clean", true)?;
+            let clean = run_case("clean", &clean_project, &clean_workflow)?;
+            assert_status("clean", &clean, 0)?;
+            if !clean.stdout.is_empty() || !clean.stderr.is_empty() {
+                return Err(format!(
+                    "ghalint clean lifecycle emitted output\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&clean.stdout),
+                    String::from_utf8_lossy(&clean.stderr),
+                ));
+            }
+
+            let (source_project, source_workflow) = create_case("source", "source", true)?;
+            let source = run_case("source", &source_project, &source_workflow)?;
+            assert_status("source", &source, 1)?;
+            let source_stdout = String::from_utf8_lossy(&source.stdout);
+            if !source_stdout.contains("\"policy\":\"job_permissions\"")
+                || !source_stdout.contains("\"policy\":\"job_timeout_minutes_is_required\"")
+                || !source.stderr.is_empty()
+            {
+                return Err(format!(
+                    "ghalint source lifecycle was not canonical: {source_stdout:?} {:?}",
+                    String::from_utf8_lossy(&source.stderr)
+                ));
+            }
+
+            let (parse_project, parse_workflow) = create_case("parse", "parse", true)?;
+            let parse = run_case("parse", &parse_project, &parse_workflow)?;
+            assert_status("parse", &parse, 1)?;
+            if !String::from_utf8_lossy(&parse.stdout).contains("\"kind\":\"parse\"")
+                || !parse.stderr.is_empty()
+            {
+                return Err("ghalint parse lifecycle was not source-classified".to_owned());
+            }
+
+            let (config_project, config_workflow) = create_case("config", "config", true)?;
+            std::fs::write(config_project.join("ghalint.yaml"), "excludes: [\n")
+                .map_err(|error| format!("write invalid ghalint lifecycle config: {error}"))?;
+            let config = run_case("config", &config_project, &config_workflow)?;
+            assert_status("config", &config, 2)?;
+            if !config.stdout.is_empty()
+                || !String::from_utf8_lossy(&config.stderr)
+                    .contains("ghalint configuration is invalid")
+            {
+                return Err("ghalint config lifecycle was not failure-classified".to_owned());
+            }
+
+            let (version_project, version_workflow) =
+                create_case("bad-version", "bad-version", true)?;
+            let version = run_case("bad-version", &version_project, &version_workflow)?;
+            assert_status("bad-version", &version, 2)?;
+            if !String::from_utf8_lossy(&version.stderr).contains("exact pinned version probe") {
+                return Err("ghalint lifecycle accepted an unpatched version".to_owned());
+            }
+
+            let (empty_project, empty_workflow) = create_case("empty", "clean", false)?;
+            let empty = run_case("empty", &empty_project, &empty_workflow)?;
+            assert_status("empty", &empty, 2)?;
+            if !String::from_utf8_lossy(&empty.stderr)
+                .contains("ghalint workflow inventory is empty")
+            {
+                return Err("ghalint lifecycle accepted an empty native inventory".to_owned());
+            }
+
+            let (symlink_project, symlink_workflow) = create_case("symlink", "clean", true)?;
+            symlink(
+                &symlink_workflow,
+                symlink_project.join("workflow-alias.yml"),
+            )
+            .map_err(|error| format!("create ghalint lifecycle symlink: {error}"))?;
+            let symlink_output = run_case("symlink", &symlink_project, &symlink_workflow)?;
+            assert_status("symlink", &symlink_output, 2)?;
+            if !String::from_utf8_lossy(&symlink_output.stderr).contains("symbolic link") {
+                return Err("ghalint lifecycle accepted a retained-project symlink".to_owned());
+            }
+
+            let (mutate_project, mutate_workflow) = create_case("mutate", "mutate", true)?;
+            let mutate = run_case("mutate", &mutate_project, &mutate_workflow)?;
+            assert_status("mutate", &mutate, 2)?;
+            if !String::from_utf8_lossy(&mutate.stderr)
+                .contains("ghalint changed retained project files")
+            {
+                return Err("ghalint lifecycle missed a project mutation".to_owned());
+            }
+
+            let (descendant_project, descendant_workflow) =
+                create_case("descendant", "descendant", true)?;
+            let descendant = run_case("descendant", &descendant_project, &descendant_workflow)?;
+            assert_status("descendant", &descendant, 2)?;
+            if !String::from_utf8_lossy(&descendant.stderr).contains("same-group descendant") {
+                return Err("ghalint lifecycle missed a same-group descendant".to_owned());
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(root);
+        result
     }
 }
 
@@ -21966,6 +22626,25 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
             .collect::<BTreeSet<_>>();
         for script in adapter_scripts {
             output = output.replace(script, "<eslint-adapter>");
+        }
+    }
+    if case.tool == "ghalint-workflow" {
+        let adapter_scripts = case
+            .spec
+            .phases
+            .values()
+            .flat_map(|phase| phase.argv.iter())
+            .filter_map(|argument| match argument {
+                ArgvElement::Literal(script)
+                    if script.contains(GHALINT_WORKFLOW_FILES_MARKER) && script.contains('\n') =>
+                {
+                    Some(script)
+                }
+                ArgvElement::Literal(_) | ArgvElement::Token(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for script in adapter_scripts {
+            output = output.replace(script, "<inline-script>");
         }
     }
     output
