@@ -2392,9 +2392,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 79
+          "status": "recorded",
+          "url": "https://github.com/psf/black",
+          "version": "26.5.1",
+          "installationSource": "Python wheel closure with SHA-256 hashes in validation/provisioning/python/requirements-macos-arm64.txt",
+          "versionCommand": ["black", "--version"]
         }
       },
       "constraints": {
@@ -14024,9 +14026,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 24
+          "status": "recorded",
+          "url": "https://go.dev/",
+          "version": "go1.26.3",
+          "installationSource": "gofmt in the Go 1.26.3 archive pinned by validation/provisioning/mise.lock",
+          "versionCommand": ["go", "version"]
         }
       },
       "constraints": {
@@ -31713,9 +31717,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 111
+          "status": "recorded",
+          "url": "https://github.com/rubocop/rubocop",
+          "version": "1.30.1",
+          "installationSource": "Pure-Ruby Bundler graph with package checksums plus runtime gems from the SHA-256-pinned Ruby archive",
+          "versionCommand": ["bundle", "exec", "rubocop", "--version"]
         }
       },
       "constraints": {
@@ -33598,9 +33604,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 114
+          "status": "recorded",
+          "url": "https://github.com/rust-lang/rustfmt",
+          "version": "rustfmt 1.8.0 (Rust 1.90.0)",
+          "installationSource": "official dated Rust 1.90.0 rustfmt archive pinned by SHA-256 in validation/provisioning/recipes.json",
+          "versionCommand": ["rustfmt", "--version"]
         }
       },
       "constraints": {
@@ -35690,9 +35698,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 118
+          "status": "recorded",
+          "url": "https://github.com/keithamus/sort-package-json",
+          "version": "3.6.1",
+          "installationSource": "npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+          "versionCommand": ["sort-package-json", "--version"]
         }
       },
       "constraints": {
@@ -38509,9 +38519,11 @@
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 70
+          "status": "recorded",
+          "url": "https://github.com/realm/SwiftLint",
+          "version": "0.65.0",
+          "installationSource": "SwiftLint release archive pinned by validation/provisioning/mise.lock",
+          "versionCommand": ["swiftlint", "version"]
         }
       },
       "constraints": {

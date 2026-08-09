@@ -28,6 +28,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const TIMEOUT_ENV: &str = "VELVET_GLOVE_FIXTURE_TIMEOUT_SECS";
 const ARTIFACT_ENV: &str = "VELVET_GLOVE_FIXTURE_ARTIFACT_DIR";
 const REQUIRED_TOOLS_ENV: &str = "VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS";
+const SELECTION_ENV: &str = "VELVET_GLOVE_FIXTURE_SELECTION";
 const REPORT_PREFIX: &str = "VELVET_GLOVE_FIXTURE_JSON=";
 const PROBE_SENTINEL_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_SENTINEL";
 const PROBE_DIR_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_DIR";
@@ -212,6 +213,7 @@ fn setup_failures_are_retained_when_requested() {
         timeout: Duration::from_secs(1),
         artifact_dir: Some(artifact_root.clone()),
         required_tools: RequiredTools::default(),
+        selection: FixtureSelection::default(),
     };
 
     let outcome = run_fixture_case(&case, ProtocolSurface::Claude, &options);
@@ -258,6 +260,56 @@ fn required_tools_reject_unknown_fixture_ids() {
         .expect_err("unknown required tools must fail closed");
     assert!(error.contains("typo-tool"));
     assert!(error.contains(REQUIRED_TOOLS_ENV));
+}
+
+#[test]
+fn fixture_selection_filters_exact_cases_and_recounts_tools() {
+    let catalog = FixtureCatalog {
+        tool_count: 2,
+        cases: vec![
+            named_fixture_case("tool-a", "clean"),
+            named_fixture_case("tool-a", "issues"),
+            named_fixture_case("tool-b", "clean"),
+        ],
+    };
+    let selection = FixtureSelection {
+        tools: BTreeSet::new(),
+        cases: BTreeSet::from([
+            ("tool-a".to_owned(), "issues".to_owned()),
+            ("tool-b".to_owned(), "clean".to_owned()),
+        ]),
+    };
+
+    let selected = selection.apply(catalog).expect("valid selection");
+    assert_eq!(selected.tool_count, 2);
+    assert_eq!(selected.cases.len(), 2);
+    assert_eq!(selected.cases[0].tool, "tool-a");
+    assert_eq!(selected.cases[0].case, "issues");
+    assert_eq!(selected.cases[1].tool, "tool-b");
+    assert_eq!(selected.cases[1].case, "clean");
+}
+
+#[test]
+fn fixture_selection_rejects_unknown_tools_and_cases() {
+    let catalog = || FixtureCatalog {
+        tool_count: 1,
+        cases: vec![named_fixture_case("tool-a", "clean")],
+    };
+    let unknown_tool = FixtureSelection {
+        tools: BTreeSet::from(["tool-b".to_owned()]),
+        cases: BTreeSet::new(),
+    }
+    .apply(catalog())
+    .expect_err("unknown tool must fail");
+    assert!(unknown_tool.contains("tool-b"));
+
+    let unknown_case = FixtureSelection {
+        tools: BTreeSet::new(),
+        cases: BTreeSet::from([("tool-a".to_owned(), "issues".to_owned())]),
+    }
+    .apply(catalog())
+    .expect_err("unknown case must fail");
+    assert!(unknown_case.contains("tool-a/issues"));
 }
 
 #[test]
@@ -338,8 +390,12 @@ fn machine_report_reconciles_totals_and_structured_skips() {
 }
 
 fn fixture_case(name: &str) -> FixtureCase {
+    named_fixture_case("fixture-tool", name)
+}
+
+fn named_fixture_case(tool: &str, name: &str) -> FixtureCase {
     FixtureCase {
-        tool: "fixture-tool".to_owned(),
+        tool: tool.to_owned(),
         case: name.to_owned(),
         directory: PathBuf::new(),
         entry: PathBuf::from("example.txt"),
@@ -356,6 +412,10 @@ fn run_all_tool_fixtures() {
     let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
     let catalog = discover_fixture_catalog(&fixtures_root(), &specs)
         .unwrap_or_else(|error| panic!("fixture discovery failed: {error}"));
+    let catalog = options
+        .selection
+        .apply(catalog)
+        .unwrap_or_else(|error| panic!("{error}"));
     options
         .required_tools
         .validate(&catalog.tool_ids())
@@ -373,7 +433,10 @@ fn run_all_tool_fixtures() {
         for surface in REAL_TOOL_SURFACES {
             match available {
                 Ok(()) => outcomes.push(run_fixture_case(case, *surface, &options)),
-                Err(programs) if options.required_tools.requires(&case.tool) => {
+                Err(programs)
+                    if options.selection.is_active()
+                        || options.required_tools.requires(&case.tool) =>
+                {
                     outcomes.push(FixtureOutcome::failed(
                         case,
                         *surface,
@@ -435,6 +498,7 @@ struct HarnessOptions {
     timeout: Duration,
     artifact_dir: Option<PathBuf>,
     required_tools: RequiredTools,
+    selection: FixtureSelection,
 }
 
 impl HarnessOptions {
@@ -443,7 +507,126 @@ impl HarnessOptions {
             timeout: configured_timeout()?,
             artifact_dir: configured_artifact_dir()?,
             required_tools: RequiredTools::from_environment()?,
+            selection: FixtureSelection::from_environment()?,
         })
+    }
+}
+
+#[derive(Debug, Default)]
+struct FixtureSelection {
+    tools: BTreeSet<String>,
+    cases: BTreeSet<(String, String)>,
+}
+
+impl FixtureSelection {
+    fn from_environment() -> Result<Self, String> {
+        let Some(value) = std::env::var_os(SELECTION_ENV) else {
+            return Ok(Self::default());
+        };
+        let value = value
+            .into_string()
+            .map_err(|_| format!("{SELECTION_ENV} must be UTF-8"))?;
+        let mut selection = Self::default();
+        for selector in value
+            .split(',')
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+        {
+            let mut parts = selector.split('/');
+            let tool = parts.next().unwrap_or_default();
+            let case = parts.next();
+            if tool.is_empty() || parts.next().is_some() || case.is_some_and(str::is_empty) {
+                return Err(format!(
+                    "{SELECTION_ENV} entries must be `tool-id` or `tool-id/case-id`; invalid entry {selector:?}"
+                ));
+            }
+            match case {
+                Some(case) => {
+                    selection.cases.insert((tool.to_owned(), case.to_owned()));
+                }
+                None => {
+                    selection.tools.insert(tool.to_owned());
+                }
+            }
+        }
+        if selection.tools.is_empty() && selection.cases.is_empty() {
+            return Err(format!(
+                "{SELECTION_ENV} must contain at least one `tool-id` or `tool-id/case-id`"
+            ));
+        }
+        let redundant = selection
+            .cases
+            .iter()
+            .filter(|(tool, _)| selection.tools.contains(tool))
+            .map(|(tool, case)| format!("{tool}/{case}"))
+            .collect::<Vec<_>>();
+        if !redundant.is_empty() {
+            return Err(format!(
+                "{SELECTION_ENV} contains case selectors already covered by a tool selector: {}",
+                redundant.join(", ")
+            ));
+        }
+        Ok(selection)
+    }
+
+    fn is_active(&self) -> bool {
+        !self.tools.is_empty() || !self.cases.is_empty()
+    }
+
+    fn apply(&self, catalog: FixtureCatalog) -> Result<FixtureCatalog, String> {
+        if !self.is_active() {
+            return Ok(catalog);
+        }
+        let available_tools = catalog.tool_ids();
+        let requested_tools = self
+            .tools
+            .iter()
+            .cloned()
+            .chain(self.cases.iter().map(|(tool, _)| tool.clone()))
+            .collect::<BTreeSet<_>>();
+        let unknown_tools = requested_tools
+            .difference(&available_tools)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown_tools.is_empty() {
+            return Err(format!(
+                "{SELECTION_ENV} names tools without fixture cases: {}",
+                unknown_tools.join(", ")
+            ));
+        }
+        let available_cases = catalog
+            .cases
+            .iter()
+            .map(|case| (case.tool.clone(), case.case.clone()))
+            .collect::<BTreeSet<_>>();
+        let unknown_cases = self
+            .cases
+            .difference(&available_cases)
+            .map(|(tool, case)| format!("{tool}/{case}"))
+            .collect::<Vec<_>>();
+        if !unknown_cases.is_empty() {
+            return Err(format!(
+                "{SELECTION_ENV} names unknown fixture cases: {}",
+                unknown_cases.join(", ")
+            ));
+        }
+        let cases = catalog
+            .cases
+            .into_iter()
+            .filter(|case| {
+                self.tools.contains(&case.tool)
+                    || self.cases.contains(&(case.tool.clone(), case.case.clone()))
+            })
+            .collect::<Vec<_>>();
+        let tool_count = cases
+            .iter()
+            .map(|case| case.tool.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        if cases.is_empty() {
+            return Err(format!("{SELECTION_ENV} selected zero fixture cases"));
+        }
+        Ok(FixtureCatalog { tool_count, cases })
     }
 }
 
@@ -829,7 +1012,7 @@ fn run_fixture_case_inner(
     timeout: Duration,
     workspace: &FixtureWorkspace,
 ) -> Result<(), String> {
-    write_pkl_config(&workspace.project, &case.tool, &case.pkl_property)?;
+    let config = write_pkl_config(&workspace.project, &case.tool, &case.pkl_property)?;
     let input = PostToolUseBuilder::new(surface, &workspace.project, &case.entry)
         .identity("test-session", "test-turn", format!("{}-tool", case.tool))
         .build()?;
@@ -838,7 +1021,10 @@ fn run_fixture_case_inner(
 
     let binary = env!("CARGO_BIN_EXE_velvet-glove");
     let mut command = Command::new(binary);
-    command.args(["--harness", surface.cli_name(), "post-tool-immediate"]);
+    command
+        .args(["--harness", surface.cli_name(), "--config"])
+        .arg(config)
+        .arg("post-tool-immediate");
     input.configure_command(&mut command);
     let output = run_with_timeout(&mut command, input.bytes(), timeout, &workspace.evidence)
         .map_err(|error| format!("run {binary} for {surface}: {error}"))?;
@@ -961,7 +1147,7 @@ fn verify_expected_tree(root: &Path, current: &Path, project: &Path) -> Result<(
     Ok(())
 }
 
-fn write_pkl_config(project: &Path, tool: &str, property: &str) -> Result<(), String> {
+fn write_pkl_config(project: &Path, tool: &str, property: &str) -> Result<PathBuf, String> {
     let config_dir = project.join(".velvet-glove");
     std::fs::create_dir_all(&config_dir)
         .map_err(|error| format!("create config directory {config_dir:?}: {error}"))?;
@@ -979,8 +1165,9 @@ tools {{
 run = new Listing<String> {{ "{tool}" }}
 "#
     );
-    std::fs::write(config_dir.join("post-tool-use.pkl"), body)
-        .map_err(|error| format!("write post-tool-use.pkl: {error}"))
+    let path = config_dir.join("post-tool-use.pkl");
+    std::fs::write(&path, body).map_err(|error| format!("write post-tool-use.pkl: {error}"))?;
+    Ok(path)
 }
 
 fn copy_fixture_inputs(root: &Path, current: &Path, target: &Path) -> Result<(), String> {
@@ -1274,7 +1461,7 @@ fn run_probe_case_inner(
         std::fs::set_permissions(&probe, permissions)
             .map_err(|error| format!("make probe executable {probe:?}: {error}"))?;
     }
-    write_probe_config(&project, &probe)?;
+    let config = write_probe_config(&project, &probe)?;
 
     let input = PostToolUseBuilder::new(surface, &project, "example.fixture")
         .identity("probe-session", "probe-turn", "probe-tool")
@@ -1284,7 +1471,10 @@ fn run_probe_case_inner(
     let sentinel = format!("surface:{}", surface.cli_name());
     let binary = env!("CARGO_BIN_EXE_velvet-glove");
     let mut command = Command::new(binary);
-    command.args(["--harness", surface.cli_name(), "post-tool-immediate"]);
+    command
+        .args(["--harness", surface.cli_name(), "--config"])
+        .arg(config)
+        .arg("post-tool-immediate");
     input.configure_command(&mut command);
     command
         .env(PROBE_DIR_ENV, &probe_dir)
@@ -1336,7 +1526,7 @@ fn run_probe_case_inner(
     Ok(1)
 }
 
-fn write_probe_config(project: &Path, probe: &Path) -> Result<(), String> {
+fn write_probe_config(project: &Path, probe: &Path) -> Result<PathBuf, String> {
     let config_dir = project.join(".velvet-glove");
     std::fs::create_dir_all(&config_dir)
         .map_err(|error| format!("create probe config directory {config_dir:?}: {error}"))?;
@@ -1367,8 +1557,9 @@ tools {{
 run = new Listing {{ "fixture-probe" }}
 "#
     );
-    std::fs::write(config_dir.join("post-tool-use.pkl"), config)
-        .map_err(|error| format!("write probe config: {error}"))
+    let path = config_dir.join("post-tool-use.pkl");
+    std::fs::write(&path, config).map_err(|error| format!("write probe config: {error}"))?;
+    Ok(path)
 }
 
 fn assert_record(record: &Path, name: &str, expected: &str) -> Result<(), String> {

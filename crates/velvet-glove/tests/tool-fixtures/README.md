@@ -85,6 +85,18 @@ Run the host-tool compatibility matrix explicitly with:
 cargo test -p velvet-glove --test tool_fixtures run_all_tool_fixtures -- --ignored --exact --nocapture
 ```
 
+Run one selected case in its pinned, controlled macOS environment with:
+
+```sh
+just tool-case black unformatted
+```
+
+Run all six pinned representative environments with `just
+tool-representatives`. See the
+[pinned environment guide](../../../../docs/pinned-tool-environments.md) for
+versions, integrity locks, platform constraints, bootstrap steps, active network
+denial, and evidence output.
+
 Discovery fails on a missing or empty root, zero tools, zero cases, filesystem
 errors, empty tool directories, and fixture directories without an enabled
 builtin owner. Missing host tool programs remain structured skips until the
@@ -92,6 +104,12 @@ pinned provisioning lane supplies them. Set
 `VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS=all` (or a comma-separated tool-id list)
 to promote unavailable selected programs to failures. Unknown or fixture-less
 tool ids are configuration errors rather than silent no-ops.
+
+`VELVET_GLOVE_FIXTURE_SELECTION` accepts a comma-separated list of `tool-id` or
+`tool-id/case-id` selectors. It rejects unknown and redundant selectors, filters
+the discovered catalog before execution, and automatically makes every selected
+tool required. The pinned driver sets this variable; direct use remains useful
+when debugging an already controlled environment.
 
 Those skips describe only the ignored host-tool compatibility lane. The
 validation manifest records unmet supported-catalog requirements as explicit

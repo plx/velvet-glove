@@ -1,0 +1,628 @@
+{
+  "$schema": "./recipes.schema.json",
+  "schemaVersion": 1,
+  "mise": {
+    "requiredVersion": "2026.5.15",
+    "config": "crates/hookkit-pkl-config/validation/provisioning/mise.toml",
+    "lock": "crates/hookkit-pkl-config/validation/provisioning/mise.lock",
+    "provisioningNetwork": "required"
+  },
+  "controlledEnvironment": {
+    "clearInherited": true,
+    "home": "neutral-system-temporary",
+    "seededVariables": [
+      "HOME",
+      "LANG",
+      "PATH",
+      "SHELL",
+      "TERM",
+      "USER"
+    ],
+    "set": {
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    }
+  },
+  "sharedComponents": [
+    {
+      "id": "jq",
+      "version": "1.8.1",
+      "miseTool": "jq@1.8.1",
+      "installationSource": "mise aqua:jqlang/jq asset locked for macos-arm64",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["jq", "--version"],
+        "match": "exact",
+        "expected": "jq-1.8.1"
+      }
+    },
+    {
+      "id": "pkl",
+      "version": "0.31.1",
+      "miseTool": "pkl@0.31.1",
+      "installationSource": "mise aqua:apple/pkl asset locked for macos-arm64",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["pkl", "--version"],
+        "match": "prefix",
+        "expected": "Pkl 0.31.1 "
+      }
+    },
+    {
+      "id": "rust",
+      "version": "1.90.0",
+      "installationSource": "official dated Rust 1.90.0 standalone archive for aarch64-apple-darwin",
+      "integrity": {
+        "kind": "sha256-archive",
+        "url": "https://static.rust-lang.org/dist/2025-09-18/rust-1.90.0-aarch64-apple-darwin.tar.xz",
+        "sha256": "9772d20d5cd736079a0ee84d00e6697cf2084f0fc4621b011e24e6f2d08d2d7f",
+        "archiveFormat": "tar-xz",
+        "archiveRoot": "rust-1.90.0-aarch64-apple-darwin",
+        "minOsVersion": "11.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["rustc", "--version"],
+        "match": "prefix",
+        "expected": "rustc 1.90.0 "
+      }
+    },
+    {
+      "id": "python",
+      "version": "3.14.5",
+      "miseTool": "python@3.14.5",
+      "installationSource": "mise core:python archive locked for macos-arm64; also provides the contract harness socket and path checks",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["python", "--version"],
+        "match": "exact",
+        "expected": "Python 3.14.5"
+      }
+    },
+    {
+      "id": "apple-clang",
+      "version": "major >=17",
+      "installationSource": "Apple developer toolchain selected by the declared macOS host",
+      "integrity": {
+        "kind": "host-program",
+        "path": "/usr/bin/cc"
+      },
+      "probe": {
+        "argv": ["/usr/bin/cc", "--version"],
+        "match": "major-at-least",
+        "expected": "17"
+      }
+    },
+    {
+      "id": "macos-sdk",
+      "version": "major >=26",
+      "installationSource": "macOS SDK selected by the Apple xcrun host shim",
+      "integrity": {
+        "kind": "host-program",
+        "path": "/usr/bin/xcrun"
+      },
+      "probe": {
+        "argv": ["/usr/bin/xcrun", "--show-sdk-version"],
+        "match": "major-at-least",
+        "expected": "26"
+      }
+    },
+    {
+      "id": "xcode",
+      "version": "major >=26",
+      "installationSource": "Apple Xcode or Command Line Tools supplied by the declared macOS host",
+      "integrity": {
+        "kind": "host-program",
+        "path": "/usr/bin/xcodebuild"
+      },
+      "probe": {
+        "argv": ["/usr/bin/xcodebuild", "-version"],
+        "match": "major-at-least",
+        "expected": "26"
+      }
+    }
+  ],
+  "sharedBootstrap": [
+    {
+      "id": "cargo-fetch",
+      "argv": ["cargo", "fetch", "--locked", "--manifest-path", "{repository}/Cargo.toml"],
+      "environment": {
+        "CARGO_HOME": "{state}/cargo-home",
+        "CARGO_TARGET_DIR": "{state}/cargo-target"
+      },
+      "workingDirectory": "/",
+      "network": "required",
+      "lockfile": "Cargo.lock"
+    }
+  ],
+  "environments": [
+    {
+      "id": "macos-arm64-node",
+      "provisioningGroup": "node",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "node",
+          "version": "24.18.0",
+          "miseTool": "node@24.18.0",
+          "installationSource": "mise core:node archive locked for macos-arm64",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+          },
+          "probe": {
+            "argv": ["node", "--version"],
+            "match": "exact",
+            "expected": "v24.18.0"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["npm"],
+      "bootstrap": [
+        {
+          "id": "npm-ci",
+          "argv": [
+            "npm",
+            "ci",
+            "--ignore-scripts",
+            "--prefix",
+            "{state}/node"
+          ],
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/node/package-lock.json"
+        }
+      ]
+    },
+    {
+      "id": "macos-arm64-python",
+      "provisioningGroup": "python",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "pip",
+          "version": "26.1.1",
+          "installationSource": "default pip package distributed with the locked Python 3.14.5 runtime",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "python"
+          },
+          "probe": {
+            "argv": ["python", "-m", "pip", "--version"],
+            "match": "prefix",
+            "expected": "pip 26.1.1 from "
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["python", "pip"],
+      "bootstrap": [
+        {
+          "id": "python-venv",
+          "argv": ["python", "-m", "venv", "--clear", "{state}/python-venv"],
+          "network": "denied",
+          "lockfile": null
+        },
+        {
+          "id": "pip-install",
+          "argv": [
+            "{state}/python-venv/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "--require-hashes",
+            "--only-binary=:all:",
+            "--requirement",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/python/requirements-macos-arm64.txt"
+          ],
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/python/requirements-macos-arm64.txt"
+        }
+      ]
+    },
+    {
+      "id": "macos-arm64-go",
+      "provisioningGroup": "go",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "go",
+          "version": "1.26.3",
+          "miseTool": "go@1.26.3",
+          "installationSource": "mise core:go archive locked for macos-arm64",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+          },
+          "probe": {
+            "argv": ["go", "version"],
+            "match": "prefix",
+            "expected": "go version go1.26.3 "
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["go"],
+      "bootstrap": []
+    },
+    {
+      "id": "macos-arm64-rust",
+      "provisioningGroup": "rust",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "rustfmt",
+          "version": "1.8.0",
+          "installationSource": "official dated Rust 1.90.0 rustfmt standalone archive for aarch64-apple-darwin",
+          "runtimeComponentIds": ["rust"],
+          "integrity": {
+            "kind": "sha256-archive",
+            "url": "https://static.rust-lang.org/dist/2025-09-18/rustfmt-1.90.0-aarch64-apple-darwin.tar.xz",
+            "sha256": "ab2c6bdac9d3742de4a52c42aea132709b4f0bf66d4f14479f27b18543c255be",
+            "archiveFormat": "tar-xz",
+            "archiveRoot": "rustfmt-1.90.0-aarch64-apple-darwin",
+            "minOsVersion": "11.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["rustfmt", "--version"],
+            "match": "prefix",
+            "expected": "rustfmt 1.8.0-stable "
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["cargo", "rustc"],
+      "bootstrap": []
+    },
+    {
+      "id": "macos-arm64-ruby",
+      "provisioningGroup": "ruby",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "ruby",
+          "version": "3.4.10",
+          "installationSource": "jdx/ruby 3.4.10-2 relocatable macOS arm64 release archive",
+          "integrity": {
+            "kind": "sha256-archive",
+            "url": "https://github.com/jdx/ruby/releases/download/3.4.10-2/ruby-3.4.10.macos.tar.gz",
+            "sha256": "5aac8b6e16b0938a14f6d23346b5487020d1fea6b5856a33392e5eb37fa1ef62",
+            "archiveFormat": "tar-gz",
+            "archiveRoot": "ruby-3.4.10",
+            "minOsVersion": "14.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["ruby", "--version"],
+            "match": "prefix",
+            "expected": "ruby 3.4.10 "
+          }
+        },
+        {
+          "id": "base64",
+          "version": "0.2.0",
+          "installationSource": "Base64 gem distributed inside the checksum-pinned Ruby 3.4.10 archive",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "ruby"
+          },
+          "probe": {
+            "argv": [
+              "ruby",
+              "-e",
+              "require 'rubygems'; print Gem::Specification.find_by_name('base64').version"
+            ],
+            "match": "exact",
+            "expected": "0.2.0"
+          }
+        },
+        {
+          "id": "benchmark",
+          "version": "0.4.0",
+          "installationSource": "RubyGems package locked with SHA-256 in Gemfile.lock",
+          "integrity": {
+            "kind": "bundler-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+          },
+          "probe": {
+            "argv": [
+              "ruby",
+              "-e",
+              "require 'rubygems'; print Gem::Specification.find_by_name('benchmark').version"
+            ],
+            "match": "exact",
+            "expected": "0.4.0"
+          }
+        },
+        {
+          "id": "bundler",
+          "version": "2.6.9",
+          "installationSource": "default Bundler package distributed with Ruby 3.4.10",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "ruby"
+          },
+          "probe": {
+            "argv": ["bundle", "--version"],
+            "match": "exact",
+            "expected": "Bundler version 2.6.9"
+          }
+        },
+        {
+          "id": "ostruct",
+          "version": "0.6.1",
+          "installationSource": "RubyGems package locked with SHA-256 in Gemfile.lock",
+          "integrity": {
+            "kind": "bundler-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+          },
+          "probe": {
+            "argv": [
+              "ruby",
+              "-e",
+              "require 'rubygems'; print Gem::Specification.find_by_name('ostruct').version"
+            ],
+            "match": "exact",
+            "expected": "0.6.1"
+          }
+        },
+        {
+          "id": "racc",
+          "version": "1.8.1",
+          "installationSource": "precompiled Racc bundled gem distributed inside the checksum-pinned Ruby 3.4.10 archive",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "ruby"
+          },
+          "probe": {
+            "argv": ["ruby", "-rracc/parser", "-e", "print Racc::VERSION"],
+            "match": "exact",
+            "expected": "1.8.1"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["bundle", "ruby"],
+      "bootstrap": [
+        {
+          "id": "ruby-gem-cache-fetch",
+          "argv": [
+            "/usr/bin/curl",
+            "--fail",
+            "--location",
+            "https://rubygems.org/downloads/{name}-{version}.gem"
+          ],
+          "environment": {
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache"
+          },
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+        },
+        {
+          "id": "bundle-install",
+          "argv": ["bundle", "install", "--local", "--jobs", "4"],
+          "environment": {
+            "BUNDLE_APP_CONFIG": "{state}/ruby-contract-1.30.1/config",
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache",
+            "BUNDLE_DEPLOYMENT": "1",
+            "BUNDLE_FROZEN": "1",
+            "BUNDLE_GEMFILE": "{repository}/crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile",
+            "BUNDLE_PATH__SYSTEM": "true",
+            "BUNDLE_USER_HOME": "{state}/ruby-contract-1.30.1/user"
+          },
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+        },
+        {
+          "id": "bundle-lock-conformance",
+          "argv": ["bundle", "lock", "--local"],
+          "environment": {
+            "BUNDLE_APP_CONFIG": "{runHome}/tmp/ruby-lock-check/config",
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache",
+            "BUNDLE_GEMFILE": "{runHome}/tmp/ruby-lock-check/Gemfile",
+            "BUNDLE_PATH__SYSTEM": "true",
+            "BUNDLE_USER_HOME": "{runHome}/tmp/ruby-lock-check/user"
+          },
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+        },
+        {
+          "id": "rubocop-binstubs",
+          "argv": [
+            "bundle",
+            "binstubs",
+            "rubocop",
+            "--path",
+            "{state}/ruby-contract-1.30.1/bin",
+            "--force"
+          ],
+          "environment": {
+            "BUNDLE_APP_CONFIG": "{state}/ruby-contract-1.30.1/config",
+            "BUNDLE_CACHE_PATH": "{state}/ruby-contract-1.30.1/cache",
+            "BUNDLE_DEPLOYMENT": "1",
+            "BUNDLE_FROZEN": "1",
+            "BUNDLE_GEMFILE": "{repository}/crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile",
+            "BUNDLE_PATH__SYSTEM": "true",
+            "BUNDLE_USER_HOME": "{state}/ruby-contract-1.30.1/user"
+          },
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+        }
+      ]
+    },
+    {
+      "id": "macos-arm64-swift",
+      "provisioningGroup": "swift",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "swiftlint",
+          "version": "0.65.0",
+          "miseTool": "swiftlint@0.65.0",
+          "installationSource": "mise aqua:realm/SwiftLint asset locked for macos-arm64",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+          },
+          "probe": {
+            "argv": ["swiftlint", "version"],
+            "match": "exact",
+            "expected": "0.65.0"
+          }
+        }
+      ],
+      "auxiliaryPrograms": [],
+      "bootstrap": []
+    }
+  ],
+  "recipes": [
+    {
+      "id": "sort-package-json-macos-arm64",
+      "toolId": "sort-package-json",
+      "environmentId": "macos-arm64-node",
+      "version": "3.6.1",
+      "installationSource": "npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+      "integrity": {
+        "kind": "npm-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/node/package-lock.json"
+      },
+      "probe": {
+        "argv": ["sort-package-json", "--version"],
+        "match": "exact",
+        "expected": "sort-package-json 3.6.1"
+      },
+      "caseExecutables": ["sort-package-json"],
+      "cases": ["clean", "unformatted"],
+      "representativeCase": "unformatted"
+    },
+    {
+      "id": "black-macos-arm64",
+      "toolId": "black",
+      "environmentId": "macos-arm64-python",
+      "version": "26.5.1",
+      "installationSource": "Python wheel closure with SHA-256 hashes in validation/provisioning/python/requirements-macos-arm64.txt",
+      "integrity": {
+        "kind": "pip-requirements",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/python/requirements-macos-arm64.txt"
+      },
+      "probe": {
+        "argv": ["black", "--version"],
+        "match": "prefix",
+        "expected": "black, 26.5.1 "
+      },
+      "caseExecutables": ["black"],
+      "cases": ["clean", "unformatted"],
+      "representativeCase": "unformatted"
+    },
+    {
+      "id": "go-fmt-macos-arm64",
+      "toolId": "go-fmt",
+      "environmentId": "macos-arm64-go",
+      "version": "go1.26.3",
+      "installationSource": "gofmt in the Go 1.26.3 archive pinned by validation/provisioning/mise.lock",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["go", "version"],
+        "match": "prefix",
+        "expected": "go version go1.26.3 "
+      },
+      "caseExecutables": ["gofmt"],
+      "cases": ["unformatted"],
+      "representativeCase": "unformatted"
+    },
+    {
+      "id": "rustfmt-macos-arm64",
+      "toolId": "rustfmt",
+      "environmentId": "macos-arm64-rust",
+      "version": "rustfmt 1.8.0 (Rust 1.90.0)",
+      "installationSource": "official dated Rust 1.90.0 rustfmt archive pinned by SHA-256 in validation/provisioning/recipes.json",
+      "integrity": {
+        "kind": "sha256-archive",
+        "url": "https://static.rust-lang.org/dist/2025-09-18/rustfmt-1.90.0-aarch64-apple-darwin.tar.xz",
+        "sha256": "ab2c6bdac9d3742de4a52c42aea132709b4f0bf66d4f14479f27b18543c255be",
+        "archiveFormat": "tar-xz",
+        "archiveRoot": "rustfmt-1.90.0-aarch64-apple-darwin",
+        "minOsVersion": "11.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["rustfmt", "--version"],
+        "match": "prefix",
+        "expected": "rustfmt 1.8.0-stable "
+      },
+      "caseExecutables": ["rustfmt"],
+      "cases": ["clean", "unformatted"],
+      "representativeCase": "unformatted"
+    },
+    {
+      "id": "rubocop-macos-arm64",
+      "toolId": "rubocop",
+      "environmentId": "macos-arm64-ruby",
+      "version": "1.30.1",
+      "installationSource": "Pure-Ruby Bundler graph with package checksums plus runtime gems from the SHA-256-pinned Ruby archive",
+      "integrity": {
+        "kind": "bundler-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/ruby/Gemfile.lock"
+      },
+      "probe": {
+        "argv": ["bundle", "exec", "rubocop", "--version"],
+        "match": "exact",
+        "expected": "1.30.1"
+      },
+      "caseExecutables": ["rubocop"],
+      "cases": ["autocorrect-strings", "clean", "manual-issue"],
+      "representativeCase": "autocorrect-strings"
+    },
+    {
+      "id": "swiftlint-macos-arm64",
+      "toolId": "swiftlint",
+      "environmentId": "macos-arm64-swift",
+      "version": "0.65.0",
+      "installationSource": "SwiftLint release archive pinned by validation/provisioning/mise.lock",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["swiftlint", "version"],
+        "match": "exact",
+        "expected": "0.65.0"
+      },
+      "caseExecutables": ["swiftlint"],
+      "cases": ["clean", "manual-issue"],
+      "representativeCase": "manual-issue"
+    }
+  ]
+}

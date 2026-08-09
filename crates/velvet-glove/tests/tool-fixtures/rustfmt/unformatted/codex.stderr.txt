@@ -1,3 +1,2 @@
 rustfmt: changed example.rs
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
+hookkit: redirected user notices and diagnostics to protocol stderr

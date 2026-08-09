@@ -1,4 +1,4 @@
-warning: SwiftLint: issues remain; diagnostics: <workspace>/.velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool-issues.txt
+warning: SwiftLint: issues remain; diagnostics: <workspace>/.velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool_swiftlint-tool-issues.txt
 SwiftLint diagnostics:
 [fix] command: swiftlint --fix <workspace>/example.swift
 status: Some(0)
@@ -17,7 +17,5 @@ stderr:
 Linting Swift files at paths <workspace>/example.swift
 Linting 'example.swift' (1/1)
 Done linting! Found 1 violation, 1 serious in 1 file.
-artifact: <workspace>/.velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool-issues.txt (text/plain)
-project-relative artifact: .velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool-issues.txt
-summary: SwiftLint diagnostics
-hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr
+artifact: <workspace>/.velvet-glove/swiftlint-agent-hook/test-session_swiftlint-tool_swiftlint-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
