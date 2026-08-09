@@ -158,6 +158,38 @@
       "bootstrap": []
     },
     {
+      "id": "macos-arm64-vacuum",
+      "provisioningGroup": "data-formats",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "vacuum",
+          "version": "0.30.0",
+          "installationSource": "official Vacuum v0.30.0 Darwin arm64 release archive for source commit 328ff253522138616096eeabf1dc1c8895dac215, checksum-pinned at SHA-256 bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8, with the upstream checksums and Sigstore bundle independently audited",
+          "integrity": {
+            "kind": "sha256-archive",
+            "url": "https://github.com/daveshanley/vacuum/releases/download/v0.30.0/vacuum_0.30.0_darwin_arm64.tar.gz",
+            "sha256": "bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8",
+            "archiveFormat": "tar-gz",
+            "archiveRoot": ".",
+            "minOsVersion": "12.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["vacuum", "version"],
+            "match": "exact",
+            "expected": "0.30.0"
+          }
+        }
+      ],
+      "auxiliaryPrograms": [],
+      "bootstrap": []
+    },
+    {
       "id": "macos-arm64-buf",
       "provisioningGroup": "data-formats",
       "platform": "macos",
@@ -1063,6 +1095,30 @@
       "caseExecutables": ["jq"],
       "cases": ["clean", "invalid", "multi-file-fragments", "operational-failure"],
       "representativeCase": "multi-file-fragments"
+    },
+    {
+      "id": "vacuum-macos-arm64",
+      "toolId": "vacuum",
+      "environmentId": "macos-arm64-vacuum",
+      "version": "0.30.0",
+      "installationSource": "official Vacuum v0.30.0 Darwin arm64 release archive for source commit 328ff253522138616096eeabf1dc1c8895dac215, checksum-pinned at SHA-256 bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8, with the upstream checksums and Sigstore bundle independently audited",
+      "integrity": {
+        "kind": "sha256-archive",
+        "url": "https://github.com/daveshanley/vacuum/releases/download/v0.30.0/vacuum_0.30.0_darwin_arm64.tar.gz",
+        "sha256": "bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8",
+        "archiveFormat": "tar-gz",
+        "archiveRoot": ".",
+        "minOsVersion": "12.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["vacuum", "version"],
+        "match": "exact",
+        "expected": "0.30.0"
+      },
+      "caseExecutables": ["vacuum", "python"],
+      "cases": ["clean", "source-issue", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
     },
     {
       "id": "buf-format-macos-arm64",

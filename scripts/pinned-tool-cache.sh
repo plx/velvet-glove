@@ -22,6 +22,50 @@ pinned_component_install_identity() {
       }' "$registry"
 }
 
+pinned_component_provenance_identity() {
+  if [[ $# -ne 5 ]]; then
+    echo "error: pinned_component_provenance_identity requires JQ REGISTRY COMPONENT_ID PROVENANCE_PATH PROVENANCE_RELATIVE_PATH" >&2
+    return 2
+  fi
+  local jq_bin=$1
+  local registry=$2
+  local component_id=$3
+  local provenance_path=$4
+  local provenance_relative_path=$5
+  local component
+  local provenance_sha256
+
+  case $component_id in
+    *[!a-z0-9-]* | '')
+      echo "error: unsafe provenance-bound component id: $component_id" >&2
+      return 2
+      ;;
+  esac
+  case $provenance_relative_path in
+    /* | *..* | *$'\n'* | '')
+      echo "error: unsafe component provenance path: $provenance_relative_path" >&2
+      return 2
+      ;;
+  esac
+  if [[ ! -f $provenance_path || -L $provenance_path ]]; then
+    echo "error: component provenance is not a regular file: $provenance_path" >&2
+    return 1
+  fi
+  component=$("$jq_bin" -ce --arg id "$component_id" '
+    first((.sharedComponents + [.environments[].components[]])[] | select(.id == $id))
+    | {id, version, integrity}' "$registry")
+  read -r provenance_sha256 _ < <(/usr/bin/shasum -a 256 "$provenance_path")
+  if [[ ! $provenance_sha256 =~ ^[0-9a-f]{64}$ ]]; then
+    echo "error: cannot hash component provenance: $provenance_path" >&2
+    return 1
+  fi
+  "$jq_bin" -cn \
+    --argjson component "$component" \
+    --arg provenancePath "$provenance_relative_path" \
+    --arg provenanceSha256 "$provenance_sha256" \
+    '{component: $component, provenance: {path: $provenancePath, sha256: $provenanceSha256}}'
+}
+
 pinned_component_cache_root() {
   if [[ $# -ne 3 ]]; then
     echo "error: pinned_component_cache_root requires STATE_DIR LABEL IDENTITY" >&2

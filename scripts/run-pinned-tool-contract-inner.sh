@@ -47,6 +47,22 @@ VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT=$(pinned_component_cache_root \
 export VELVET_GLOVE_FIXTURE_PRETTIER_ROOT="$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6"
 export VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT="$state_dir/contextlint-environment-node-24.19.0-contextlint-1.1.1"
 export VELVET_GLOVE_FIXTURE_DCLINT_ROOT="$state_dir/dclint-environment-node-24.19.0-dclint-3.1.0"
+vacuum_provenance_path="$provisioning_dir/vacuum/provenance.json"
+vacuum_identity=$(pinned_component_provenance_identity \
+  jq \
+  "$registry" \
+  vacuum \
+  "$vacuum_provenance_path" \
+  crates/hookkit-pkl-config/validation/provisioning/vacuum/provenance.json)
+vacuum_provenance_sha256=$(printf '%s\n' "$vacuum_identity" | \
+  jq -r '.provenance.sha256')
+vacuum_root=$(pinned_component_cache_root \
+  "$state_dir" vacuum-0.30.0 "$vacuum_identity")
+vacuum_bin="$vacuum_root/bin/vacuum"
+vacuum_path_prefix=
+if [[ ,$selection, == *,vacuum/* ]]; then
+  vacuum_path_prefix="$vacuum_root/bin:"
+fi
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -55,7 +71,7 @@ export BUNDLE_FROZEN=1
 export BUNDLE_GEMFILE="$provisioning_dir/ruby/Gemfile"
 export BUNDLE_PATH__SYSTEM=true
 export BUNDLE_USER_HOME="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
-export PATH="$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
+export PATH="${vacuum_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
 
 mkdir -p "$artifact_dir" "$artifact_dir/fixtures" "$CARGO_TARGET_DIR" "$TMPDIR"
 observed_file="$TMPDIR/observed-versions.jsonl"
@@ -99,6 +115,10 @@ fi
 dclint_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("dclint") != null' >/dev/null; then
   dclint_selected=true
+fi
+vacuum_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("vacuum") != null' >/dev/null; then
+  vacuum_selected=true
 fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
@@ -180,6 +200,9 @@ while IFS= read -r program; do
         fi
         ;;
     esac
+  fi
+  if [[ -z $resolved && $vacuum_selected == true && $program == vacuum ]]; then
+    resolved="$vacuum_bin"
   fi
   if [[ -z $resolved ]]; then
     resolved=$(type -P "$program" || true)
@@ -322,6 +345,9 @@ while IFS= read -r probe; do
         ;;
     esac
   fi
+  if [[ $vacuum_selected == true && $owner == vacuum ]]; then
+    probe_argv=("$vacuum_bin" "${probe_argv[@]:1}")
+  fi
   set +e
   if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
@@ -445,6 +471,13 @@ done < <(jq -r --argjson tools "$tool_ids" '
         | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)])
   | map(select(. != null))
   | unique[]' "$registry")
+if printf '%s\n' "$tool_ids" | jq -e 'index("vacuum") != null' >/dev/null; then
+  jq -cn \
+    --arg path \
+      "crates/hookkit-pkl-config/validation/provisioning/vacuum/provenance.json" \
+    --arg sha256 "$vacuum_provenance_sha256" \
+    '{path: $path, sha256: $sha256}' >>"$lock_digest_file"
+fi
 artifact_digests=$(jq -c --argjson tools "$tool_ids" '
   ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
    | unique) as $environmentIds
