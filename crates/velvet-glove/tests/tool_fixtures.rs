@@ -11833,6 +11833,13 @@ fn verify_prettier_adapter_adversarial_contract(
         cli_permissions.set_mode(0o600);
         std::fs::set_permissions(&fake_cli, cli_permissions)
             .map_err(|error| format!("make fake Prettier CLI non-executable: {error}"))?;
+        let probe = PrettierAdapterProbe {
+            python: &python,
+            adapter,
+            tool: &fake_cli,
+            root: &root,
+            timeout,
+        };
 
         let source_config = root.join("safe-config.json");
         std::fs::write(&source_config, "{\"singleQuote\":true}\n")
@@ -11888,16 +11895,11 @@ exit 1
             captured_environment = shell_probe_path(&captured_environment)?,
         );
         write_executable_probe(&success_node, &success_source)?;
-        let output = run_prettier_adapter_probe(
-            &python,
-            adapter,
+        let output = probe.run(
             &success_node,
-            &fake_cli,
             "verify",
             &["--config=safe-config.json", "--tab-width=4"],
             &[&target],
-            &root,
-            timeout,
             "safe-config-swap",
         )?;
         if output.status.code() != Some(1)
@@ -12017,18 +12019,7 @@ exit 1
             ("cursor-offset", vec!["--cursor-offset=0"]),
         ] {
             let _ = std::fs::remove_file(&reject_marker);
-            let output = run_prettier_adapter_probe(
-                &python,
-                adapter,
-                &reject_node,
-                &fake_cli,
-                "verify",
-                &arguments,
-                &[&target],
-                &root,
-                timeout,
-                label,
-            )?;
+            let output = probe.run(&reject_node, "verify", &arguments, &[&target], label)?;
             if output.status.code() != Some(2)
                 || reject_marker.exists()
                 || !String::from_utf8_lossy(&output.stderr).contains("unsupported argument")
@@ -12066,16 +12057,11 @@ exit 1
                 .map_err(|error| format!("write {label} probe config: {error}"))?;
             let _ = std::fs::remove_file(&reject_marker);
             let argument = format!("--config={name}");
-            let output = run_prettier_adapter_probe(
-                &python,
-                adapter,
+            let output = probe.run(
                 &reject_node,
-                &fake_cli,
                 "verify",
                 &[argument.as_str()],
                 &[&target],
-                &root,
-                timeout,
                 label,
             )?;
             if output.status.code() != Some(2)
@@ -12094,16 +12080,11 @@ exit 1
         std::os::unix::fs::symlink(&target, &symlink_target)
             .map_err(|error| format!("create Prettier target symlink: {error}"))?;
         let _ = std::fs::remove_file(&reject_marker);
-        let output = run_prettier_adapter_probe(
-            &python,
-            adapter,
+        let output = probe.run(
             &reject_node,
-            &fake_cli,
             "verify",
             &[],
             &[&symlink_target],
-            &root,
-            timeout,
             "symlink-target",
         )?;
         if output.status.code() != Some(2)
@@ -12116,18 +12097,7 @@ exit 1
         std::fs::hard_link(&target, &hardlink_target)
             .map_err(|error| format!("create Prettier target hardlink: {error}"))?;
         let _ = std::fs::remove_file(&reject_marker);
-        let output = run_prettier_adapter_probe(
-            &python,
-            adapter,
-            &reject_node,
-            &fake_cli,
-            "verify",
-            &[],
-            &[&target],
-            &root,
-            timeout,
-            "hardlink-target",
-        )?;
+        let output = probe.run(&reject_node, "verify", &[], &[&target], "hardlink-target")?;
         if output.status.code() != Some(2)
             || reject_marker.exists()
             || !String::from_utf8_lossy(&output.stderr).contains("unique regular file")
@@ -12147,24 +12117,24 @@ exit 1
                 r#"#!/bin/sh
 set -eu
 for argument in "$@"; do
-  case "$argument" in --config=*) printf '%s\n' "${{argument#--config=}}" > '{}' ;; esac
+  case "$argument" in
+    --config=*)
+      config=${{argument#--config=}}
+      printf '%s\n' "$config" > '{}'
+      printf 'native failure at %s\n' "$config" >&2
+      ;;
+  esac
 done
-printf 'native failure\n' >&2
 exit 2
 "#,
                 shell_probe_path(&error_config_path)?
             ),
         )?;
-        let output = run_prettier_adapter_probe(
-            &python,
-            adapter,
+        let output = probe.run(
             &error_node,
-            &fake_cli,
             "verify",
             &["--config=safe-config.json"],
             &[&target],
-            &root,
-            timeout,
             "private-config-error-cleanup",
         )?;
         let error_private_config = PathBuf::from(
@@ -12175,7 +12145,9 @@ exit 2
         if output.status.code() != Some(2)
             || error_private_config.exists()
             || error_private_config.parent().is_some_and(Path::exists)
-            || !String::from_utf8_lossy(&output.stderr).contains("native failure")
+            || !String::from_utf8_lossy(&output.stderr)
+                .contains("native failure at <prettier-private>/config.json")
+            || String::from_utf8_lossy(&output.stderr).contains("velvet-glove-prettier-config-")
         {
             return Err(format!(
                 "Prettier error path did not clean private config: status={:?} path={error_private_config:?} stderr={:?}",
@@ -12184,9 +12156,32 @@ exit 2
             ));
         }
 
+        verify_prettier_unwritable_temp_root_diagnostic(
+            &python,
+            adapter,
+            &fake_cli,
+            &source_config,
+            &target,
+            &root,
+            timeout,
+        )?;
+
         verify_prettier_mixed_parse_preflight(&python, adapter, &root, timeout)?;
 
+        verify_prettier_normal_exit_descendant_sweep(
+            &python, adapter, &fake_cli, &target, &root, timeout,
+        )?;
+
         verify_prettier_adapter_signal_cleanup(
+            &python,
+            adapter,
+            &fake_cli,
+            &source_config,
+            &target,
+            &root,
+            timeout,
+        )?;
+        verify_prettier_adapter_cleanup_cutoff(
             &python,
             adapter,
             &fake_cli,
@@ -12210,30 +12205,37 @@ fn verify_prettier_adapter_adversarial_contract(
 }
 
 #[cfg(unix)]
-fn run_prettier_adapter_probe(
-    python: &Path,
-    adapter: &str,
-    node: &Path,
-    tool: &Path,
-    phase: &str,
-    extra_args: &[&str],
-    targets: &[&Path],
-    root: &Path,
+struct PrettierAdapterProbe<'a> {
+    python: &'a Path,
+    adapter: &'a str,
+    tool: &'a Path,
+    root: &'a Path,
     timeout: Duration,
-    label: &str,
-) -> Result<BoundedOutput, String> {
-    run_prettier_adapter_probe_with_capture(
-        python,
-        adapter,
-        node,
-        tool,
-        phase,
-        extra_args,
-        targets,
-        root,
-        timeout,
-        &root.join(format!("capture-{label}")),
-    )
+}
+
+#[cfg(unix)]
+impl PrettierAdapterProbe<'_> {
+    fn run(
+        &self,
+        node: &Path,
+        phase: &str,
+        extra_args: &[&str],
+        targets: &[&Path],
+        label: &str,
+    ) -> Result<BoundedOutput, String> {
+        run_prettier_adapter_probe_with_capture(
+            self.python,
+            self.adapter,
+            node,
+            self.tool,
+            phase,
+            extra_args,
+            targets,
+            self.root,
+            self.timeout,
+            &self.root.join(format!("capture-{label}")),
+        )
+    }
 }
 
 #[cfg(unix)]
@@ -12294,6 +12296,84 @@ fn shell_probe_path(path: &Path) -> Result<String, String> {
         ));
     }
     Ok(value.into_owned())
+}
+
+#[cfg(unix)]
+fn verify_prettier_unwritable_temp_root_diagnostic(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    source_config: &Path,
+    target: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    const TEMP_ROOT_ENTRY: &str = "        temp_root = os.path.realpath(tempfile.gettempdir())\n        temp_info = os.stat(temp_root)\n";
+    if adapter.matches(TEMP_ROOT_ENTRY).count() != 1 {
+        return Err(
+            "Prettier unwritable-temp probe could not locate one temporary-root entry".to_owned(),
+        );
+    }
+    let instrumented = adapter.replacen(
+        TEMP_ROOT_ENTRY,
+        "        temp_root = os.path.realpath(tempfile.gettempdir())\n        os.chmod(temp_root, 0o500)\n        temp_info = os.stat(temp_root)\n",
+        1,
+    );
+    let temp_root = unique_temp_dir("velvet-glove-prettier-unwritable-temp");
+    std::fs::create_dir_all(&temp_root)
+        .map_err(|error| format!("create Prettier unwritable temp root: {error}"))?;
+    let node_marker = root.join("unwritable-temp-node-ran");
+    let node = root.join("paired-node-unwritable-temp");
+    write_executable_probe(
+        &node,
+        &format!(
+            "#!/bin/sh\nset -eu\n: > '{}'\nexit 0\n",
+            shell_probe_path(&node_marker)?
+        ),
+    )?;
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", &instrumented])
+        .arg(&node)
+        .arg(fake_cli)
+        .arg("verify")
+        .arg(format!(
+            "--config={}",
+            source_config.file_name().unwrap().to_string_lossy()
+        ))
+        .arg(PRETTIER_FILES_MARKER)
+        .arg(target)
+        .current_dir(root)
+        .env(TMPDIR_ENV, &temp_root);
+    let output = run_with_timeout(
+        &mut command,
+        &[],
+        timeout.min(Duration::from_secs(10)),
+        &root.join("capture-unwritable-temp-root"),
+    );
+    let mut permissions = std::fs::metadata(&temp_root)
+        .map_err(|error| format!("inspect Prettier unwritable temp root: {error}"))?
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&temp_root, permissions)
+        .map_err(|error| format!("restore Prettier temp-root permissions: {error}"))?;
+    let _ = std::fs::remove_dir_all(&temp_root);
+    let output = output.map_err(|error| format!("run Prettier unwritable-temp probe: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || node_marker.exists()
+        || stderr.contains("velvet-glove-prettier-config-")
+        || stderr != "velvet-glove-prettier: [Errno 13] Permission denied: '<prettier-private>'\n"
+    {
+        return Err(format!(
+            "Prettier unwritable temp-root diagnostic mismatch: status={:?} node_ran={} stdout={:?} stderr={stderr:?}",
+            output.status.code(),
+            node_marker.exists(),
+            String::from_utf8_lossy(&output.stdout)
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -12405,6 +12485,81 @@ exec '{real_node}' "$@"
             before.diff(&after).describe(),
             write_marker.exists(),
             String::from_utf8_lossy(&output.stdout),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_prettier_normal_exit_descendant_sweep(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    target: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let child_pid_record = root.join("normal-exit-child-pid");
+    let descendant_pid_record = root.join("normal-exit-descendant-pid");
+    let descendant_ready = root.join("normal-exit-descendant-ready");
+    let descendant_node = root.join("paired-node-normal-exit-descendant");
+    write_executable_probe(
+        &descendant_node,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+(
+  exec >/dev/null 2>&1
+  trap '' HUP INT TERM
+  : > '{descendant_ready}'
+  while :; do :; done
+) &
+descendant=$!
+while [ ! -f '{descendant_ready}' ]; do :; done
+printf '%s\n' "$$" > '{child_pid_record}'
+printf '%s\n' "$descendant" > '{descendant_pid_record}'
+exit 0
+"#,
+            descendant_ready = shell_probe_path(&descendant_ready)?,
+            child_pid_record = shell_probe_path(&child_pid_record)?,
+            descendant_pid_record = shell_probe_path(&descendant_pid_record)?,
+        ),
+    )?;
+    let output = PrettierAdapterProbe {
+        python,
+        adapter,
+        tool: fake_cli,
+        root,
+        timeout,
+    }
+    .run(
+        &descendant_node,
+        "verify",
+        &[],
+        &[target],
+        "normal-exit-descendant",
+    )?;
+    let child_pid = read_pid_file(&child_pid_record, "Prettier normal-exit child")?;
+    let descendant_pid = read_pid_file(&descendant_pid_record, "Prettier normal-exit descendant")?;
+    let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+    let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+    let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+    if child_alive || descendant_alive || group_alive {
+        let _ = signal_process_group(child_pid, "KILL");
+        return Err(format!(
+            "Prettier normal-exit sweep leaked processes: child={child_alive} descendant={descendant_alive} group={group_alive}"
+        ));
+    }
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-prettier: native Prettier left same-group descendants after child exit\n"
+    {
+        return Err(format!(
+            "Prettier normal-exit descendant sweep mismatch: status={:?} stdout={:?} stderr={:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         ));
     }
     Ok(())
@@ -12546,6 +12701,133 @@ while :; do :; done
     {
         return Err(format!(
             "Prettier signal cleanup mismatch: status={:?} stdout={:?} stderr={:?} private={private_config:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_prettier_adapter_cleanup_cutoff(
+    python: &Path,
+    adapter: &str,
+    fake_cli: &Path,
+    source_config: &Path,
+    target: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    const CLEANUP_READY_ENV: &str = "VELVET_GLOVE_PRETTIER_CLEANUP_PROBE_READY";
+    const CLEANUP_RELEASE_ENV: &str = "VELVET_GLOVE_PRETTIER_CLEANUP_PROBE_RELEASE";
+    const CLEANUP_ENTRY: &str = "finally:\n    cleaning = True\n    blocked_mask = None\n";
+    if adapter.matches(CLEANUP_ENTRY).count() != 1 {
+        return Err("Prettier cleanup-cutoff probe could not locate one cleanup entry".to_owned());
+    }
+    let instrumented_entry = format!(
+        "finally:\n    cleaning = True\n    cleanup_probe_ready = os.environ.get({CLEANUP_READY_ENV:?})\n    cleanup_probe_release = os.environ.get({CLEANUP_RELEASE_ENV:?})\n    if cleanup_probe_ready is not None and cleanup_probe_release is not None:\n        with open(cleanup_probe_ready, \"wb\"):\n            pass\n        while not os.path.exists(cleanup_probe_release):\n            time.sleep(0.01)\n    blocked_mask = None\n"
+    );
+    let instrumented = adapter.replacen(CLEANUP_ENTRY, &instrumented_entry, 1);
+
+    let private_config_record = root.join("cleanup-cutoff-private-config");
+    let cleanup_ready = root.join("cleanup-cutoff-ready");
+    let cleanup_release = root.join("cleanup-cutoff-release");
+    let cleanup_node = root.join("paired-node-cleanup-cutoff");
+    write_executable_probe(
+        &cleanup_node,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+for argument in "$@"; do
+  case "$argument" in --config=*) printf '%s\n' "${{argument#--config=}}" > '{}' ;; esac
+done
+exit 0
+"#,
+            shell_probe_path(&private_config_record)?
+        ),
+    )?;
+
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", &instrumented])
+        .arg(&cleanup_node)
+        .arg(fake_cli)
+        .arg("verify")
+        .arg(format!(
+            "--config={}",
+            source_config.file_name().unwrap().to_string_lossy()
+        ))
+        .arg(PRETTIER_FILES_MARKER)
+        .arg(target)
+        .current_dir(root)
+        .env(CLEANUP_READY_ENV, &cleanup_ready)
+        .env(CLEANUP_RELEASE_ENV, &cleanup_release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn Prettier cleanup-cutoff adapter: {error}"))?;
+    let outer_pid = outer.id();
+    let startup_timeout = timeout.min(Duration::from_secs(5));
+    let deadline = std::time::Instant::now() + startup_timeout;
+    while !(cleanup_ready.is_file() && private_config_record.is_file()) {
+        if let Some(status) = outer
+            .try_wait()
+            .map_err(|error| format!("poll Prettier cleanup-cutoff adapter: {error}"))?
+        {
+            return Err(format!(
+                "Prettier cleanup-cutoff adapter exited {status:?} before the cleanup barrier"
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(format!(
+                "Prettier cleanup-cutoff adapter did not reach its barrier within {startup_timeout:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let private_config = PathBuf::from(
+        std::fs::read_to_string(&private_config_record)
+            .map_err(|error| format!("read cleanup-cutoff private config: {error}"))?
+            .trim(),
+    );
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "send cleanup-window SIGTERM to Prettier adapter {outer_pid}: {term:?}"
+        ));
+    }
+    std::fs::write(&cleanup_release, b"release\n")
+        .map_err(|error| format!("release Prettier cleanup-cutoff barrier: {error}"))?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(outer.wait_with_output());
+    });
+    let output = match receiver.recv_timeout(timeout.min(Duration::from_secs(5))) {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            return Err(format!("wait for Prettier cleanup-cutoff adapter: {error}"));
+        }
+        Err(error) => {
+            let _ = signal_process(outer_pid, "KILL");
+            return Err(format!(
+                "Prettier cleanup-cutoff adapter did not finish: {error}"
+            ));
+        }
+    };
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr) != "velvet-glove-prettier: received signal 15\n"
+        || private_config.exists()
+        || private_config.parent().is_some_and(Path::exists)
+    {
+        return Err(format!(
+            "Prettier cleanup cutoff mismatch: status={:?} stdout={:?} stderr={:?} private={private_config:?}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)

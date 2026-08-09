@@ -6,10 +6,13 @@
 /// disables implicit config, ignore, EditorConfig, cache, plugin, and pragma
 /// discovery; an explicitly requested override-free JSON config is validated
 /// as data and copied outside the project before Prettier loads it.
+/// Replacing that source config after its validated read cannot affect the
+/// private copy. Selected files can still be replaced or changed after the
+/// adapter validates them, and a late native write failure can leave partial
+/// writes; the adapter deliberately does not attempt unsafe rollback.
 /// Format first runs that same read-only check across the complete batch so a
 /// known parse/config failure cannot mutate an earlier file. A file changed
-/// after preflight or a late native write failure can still leave partial
-/// writes; the adapter deliberately does not attempt unsafe rollback.
+/// after that preflight is likewise outside the completed read-only evidence.
 
 module velvet_glove.builtins.tools.Prettier
 
@@ -25,6 +28,7 @@ prettierAdapter: String = #"""
   import subprocess
   import sys
   import tempfile
+  import time
 
   MARKER = "__VELVET_GLOVE_PRETTIER_FILES__"
   LIMIT = 16 * 1024 * 1024
@@ -259,7 +263,9 @@ prettierAdapter: String = #"""
 
   process = None
   pending_signal = None
+  reported_signal = None
   cleaning = False
+  handled_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
   class AdapterSignal(BaseException):
@@ -275,6 +281,30 @@ prettierAdapter: String = #"""
           os.killpg(process.pid, signum)
       except (OSError, ValueError):
           pass
+
+
+  def process_group_exists():
+      if process is None:
+          return False
+      try:
+          os.killpg(process.pid, 0)
+          return True
+      except ProcessLookupError:
+          return False
+      except PermissionError:
+          return True
+
+
+  def sweep_process_group():
+      if not process_group_exists():
+          return False
+      signal_group(signal.SIGKILL)
+      deadline = time.monotonic() + 1
+      while process_group_exists() and time.monotonic() < deadline:
+          time.sleep(0.01)
+      if process_group_exists():
+          raise ValueError("cannot reap same-group descendants after child exit")
+      return True
 
 
   def stop_child(initial_signal=None):
@@ -313,6 +343,32 @@ prettierAdapter: String = #"""
           raise AdapterSignal(signum)
 
 
+  def append_adapter_error(primary, secondary):
+      if primary is None:
+          return secondary
+      return ValueError(f"{primary}; {secondary}")
+
+
+  def apply_pending_signal(primary):
+      global reported_signal
+      if pending_signal is None or pending_signal == reported_signal:
+          return primary
+      reported_signal = pending_signal
+      return append_adapter_error(primary, AdapterSignal(pending_signal))
+
+
+  def drain_blocked_signals(primary):
+      global pending_signal
+      drained = False
+      while True:
+          queued = sorted(set(signal.sigpending()).intersection(handled_signals), key=int)
+          if not queued:
+              return primary, drained
+          pending_signal = int(signal.sigwait({queued[0]}))
+          primary = apply_pending_signal(primary)
+          drained = True
+
+
   previous_handlers = {}
   total = 0
   adapter_error = None
@@ -321,6 +377,27 @@ prettierAdapter: String = #"""
   stdout_bytes = b""
   stderr_bytes = b""
   returncode = 2
+
+
+  def sanitize_private_error(error):
+      message = str(error)
+      if private_config_dir is not None:
+          message = message.replace(private_config_dir, "<prettier-private>")
+      elif isinstance(error, OSError) and error.filename is not None:
+          filename = os.fsdecode(error.filename)
+          candidate = os.path.abspath(filename)
+          parent = os.path.dirname(candidate)
+          if os.path.basename(candidate).startswith("velvet-glove-prettier-config-"):
+              message = message.replace(candidate, "<prettier-private>")
+          elif os.path.basename(parent).startswith("velvet-glove-prettier-config-"):
+              message = message.replace(parent, "<prettier-private>")
+      return message
+
+
+  def sanitize_private_output(output):
+      if private_config_dir is None:
+          return output
+      return output.replace(os.fsencode(private_config_dir), b"<prettier-private>")
 
 
   class EvidenceError(Exception):
@@ -422,6 +499,8 @@ prettierAdapter: String = #"""
                       selector.unregister(key.fileobj)
                       key.fileobj.close()
           native_status = process.wait()
+          if sweep_process_group():
+              raise EvidenceError("native Prettier left same-group descendants after child exit")
       finally:
           selector.close()
       process = None
@@ -429,7 +508,7 @@ prettierAdapter: String = #"""
 
 
   try:
-      for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+      for signum in handled_signals:
           previous_handlers[signum] = signal.signal(signum, forward_signal)
       if pending_signal is not None:
           raise AdapterSignal(pending_signal)
@@ -487,6 +566,7 @@ prettierAdapter: String = #"""
   except AdapterSignal as error:
       stop_child(error.signum)
       adapter_error = error
+      reported_signal = error.signum
       returncode = 2
   except BaseException as error:
       stop_child()
@@ -494,47 +574,63 @@ prettierAdapter: String = #"""
       returncode = 2
   finally:
       cleaning = True
+      blocked_mask = None
       try:
-          for signum, handler in previous_handlers.items():
+          if private_config_path is not None:
               try:
-                  signal.signal(signum, handler)
-              except (OSError, ValueError):
+                  os.unlink(private_config_path)
+              except FileNotFoundError:
                   pass
+              except OSError as error:
+                  adapter_error = append_adapter_error(adapter_error, error)
+                  returncode = 2
+          if private_config_dir is not None:
+              try:
+                  os.rmdir(private_config_dir)
+              except FileNotFoundError:
+                  pass
+              except OSError as error:
+                  adapter_error = append_adapter_error(adapter_error, error)
+                  returncode = 2
+          try:
+              blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+          except (OSError, ValueError) as error:
+              adapter_error = append_adapter_error(
+                  adapter_error, ValueError(f"cannot block cleanup signals: {error}")
+              )
+              returncode = 2
+          adapter_error = apply_pending_signal(adapter_error)
+          if blocked_mask is not None:
+              while True:
+                  adapter_error, drained = drain_blocked_signals(adapter_error)
+                  if not drained:
+                      break
+          if adapter_error is not None:
+              returncode = 2
       finally:
-          cleaning = False
-      if private_config_path is not None:
+          # Keep handled signals blocked through diagnostics and process exit.
+          # Unblocking after restoring default handlers would reopen the
+          # post-cleanup termination window that this cutoff closes.
           try:
-              os.unlink(private_config_path)
-          except FileNotFoundError:
-              pass
-          except OSError as error:
-              if adapter_error is None:
-                  adapter_error = error
-                  returncode = 2
-      if private_config_dir is not None:
-          try:
-              os.rmdir(private_config_dir)
-          except FileNotFoundError:
-              pass
-          except OSError as error:
-              if adapter_error is None:
-                  adapter_error = error
-                  returncode = 2
-      if pending_signal is not None and adapter_error is None:
-          adapter_error = AdapterSignal(pending_signal)
-          returncode = 2
+              for signum, handler in previous_handlers.items():
+                  try:
+                      signal.signal(signum, handler)
+                  except (OSError, ValueError):
+                      pass
+          finally:
+              cleaning = False
   process = None
 
   def forward_raw():
       if stdout_bytes:
-          sys.stdout.buffer.write(stdout_bytes)
+          sys.stdout.buffer.write(sanitize_private_output(stdout_bytes))
       if stderr_bytes:
-          sys.stderr.buffer.write(stderr_bytes)
+          sys.stderr.buffer.write(sanitize_private_output(stderr_bytes))
 
 
   if adapter_error is not None:
       forward_raw()
-      fail(str(adapter_error))
+      fail(sanitize_private_error(adapter_error))
 
   if returncode == 0 and not stdout_bytes and not stderr_bytes:
       raise SystemExit(0)

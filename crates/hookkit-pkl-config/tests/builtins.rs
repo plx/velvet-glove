@@ -508,6 +508,16 @@ fn prettier_adapter_locks_completion_config_and_target_scope() {
         "class AdapterSignal(BaseException)",
         "os.killpg(process.pid, signum)",
         "signal.SIGKILL",
+        "def process_group_exists",
+        "def sweep_process_group",
+        "native Prettier left same-group descendants after child exit",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "def drain_blocked_signals",
+        "sanitize_private_output(stdout_bytes)",
+        "sanitize_private_output(stderr_bytes)",
+        "sanitize_private_error(adapter_error)",
+        "os.path.basename(candidate).startswith(\"velvet-glove-prettier-config-\")",
+        "Keep handled signals blocked through diagnostics and process exit",
         "combined output exceeded",
         "def validated_list_different",
         "native_status == 0",
@@ -534,6 +544,21 @@ fn prettier_adapter_locks_completion_config_and_target_scope() {
                 .find("child_arguments(config_for_child, \"write\")")
                 .expect("format write invocation"),
         "Prettier format must finish its read-only list-different preflight before write"
+    );
+    assert!(
+        adapter
+            .find("os.unlink(private_config_path)")
+            .expect("private config cleanup")
+            < adapter
+                .find("signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)")
+                .expect("cleanup signal cutoff")
+            && adapter
+                .find("signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)")
+                .expect("cleanup signal cutoff")
+                < adapter
+                    .find("for signum, handler in previous_handlers.items()")
+                    .expect("signal handler restoration"),
+        "Prettier must retain handlers through private cleanup and establish a signal cutoff before restoring them"
     );
     assert!(!adapter.contains("os.environ.copy"));
     assert_eq!(format.argv[3], literal("node"));
