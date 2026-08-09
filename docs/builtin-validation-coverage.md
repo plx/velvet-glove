@@ -4,13 +4,13 @@
 
 Generated from the evaluated Pkl catalog, the validation manifest, and the declared fixture inventory. Fixture presence is inventory only: it does not establish rendered-command or pinned-real-tool evidence. `gap` is an explicit missing claim, never a successful skip. The per-tool gap count includes evidence records and missing upstream provenance. Disabled drafts remain in the complete catalog count but are not required in execution-evidence denominators.
 
-Catalog: **134 total** (**122 enabled**, **12 disabled**). Fixture inventory: **117 tools**, **233 cases**.
+Catalog: **134 total** (**122 enabled**, **12 disabled**). Fixture inventory: **117 tools**, **238 cases**.
 
 | Evidence tier | Covered | Gap | Exception | Not required |
 | --- | ---: | ---: | ---: | ---: |
 | Schema | 134 | 0 | 0 | 0 |
-| Rendered command | 14 | 108 | 0 | 12 |
-| Pinned real tool | 14 | 108 | 0 | 12 |
+| Rendered command | 15 | 107 | 0 | 12 |
+| Pinned real tool | 15 | 107 | 0 | 12 |
 
 | Built-in | Tool ID | Support | Immediate contract | Deferred contract | Fixture cases | Schema | Rendered immediate | Rendered deferred | Pinned immediate | Pinned deferred | Gaps | Exceptions |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: |

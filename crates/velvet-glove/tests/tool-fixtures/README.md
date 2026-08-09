@@ -116,7 +116,7 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run the nineteen pinned representative contracts across fifteen controlled
+Run the twenty pinned representative contracts across sixteen controlled
 environments with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -276,8 +276,8 @@ ghalint Workflow traces bind the reproducibly built
 Every validation inventories the complete physical top-level
 `.github/workflows/*.yml`-then-`*.yaml` set, validates the marker-delimited
 nonempty selected candidate subset, and records the exact version probe plus
-one native workspace-wide `ghalint run` child. The source, module closure patch, patched
-`go.mod`/`go.sum`, locked Go 1.26.5 build, arm64 artifact digest, embedded
+one native workspace-wide `ghalint run` child. The source, module closure patch,
+patched `go.mod`/`go.sum`, locked Go 1.26.5 build, arm64 artifact digest, embedded
 module metadata, and system-only Mach-O closure are bound by the dedicated
 pinned environment.
 
@@ -292,8 +292,11 @@ Immediate and explicit deferred runs use independent pristine baselines, prove
 no retained-project mutation, and conservatively attribute workspace findings
 to every selected workflow. The evaluated lifecycle probe additionally covers
 the alternate configuration policy-name record, config and target aliases,
-zero or out-of-inventory candidates, executable/config/source replacement, output bounds,
-signals, invalid temporary roots, and same-group descendant cleanup. Physical
+zero or out-of-inventory candidates, executable/config/source replacement,
+unexpected-exception normalization, output bounds and per-child buffer reset,
+unwritable temporary roots without a child, private-path redaction, composed
+cleanup failures, signals before cleanup and after the blocked cutoff, and
+bounded inherited-pipe and closed-stdio same-group descendant cleanup. Physical
 fixed skipped subtrees, nested workflows, concurrent replacement races, and a
 descendant that deliberately escapes the owned session/process group remain
 outside the claim.

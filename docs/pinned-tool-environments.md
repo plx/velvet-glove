@@ -1353,8 +1353,10 @@ and the explicit deferred lifecycle from independent
 pristine baselines. Focused lifecycle probes additionally cover the alternate
 configuration `policy_name` shape, every grammar contradiction, selection and
 config aliases, source/config/executable replacement, retained-project
-mutation, bounded output, invalid temporary roots, signals, and same-group
-descendants.
+mutation, unexpected-exception normalization, per-child output reset, private
+path redaction, unwritable temporary roots without a child, composed cleanup
+failures, pre-cleanup and post-block signals, and bounded inherited-pipe and
+closed-stdio same-group descendants with final SIGKILL-survival confirmation.
 
 Physical fixed skipped subtrees and nested workflows remain outside the
 retained/native scope. Concurrent project, workflow, config, or executable
