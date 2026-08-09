@@ -1,17 +1,320 @@
 /// gofmt — Go's standard formatter.
 ///
-/// `gofmt -l` is non-mutating and lists unformatted files on stdout while
-/// retaining exit status zero; the deferred workflow classifies that output.
+/// Native `gofmt -l` reports formatting differences on stdout with status 0,
+/// while parse and I/O failures use status 2. The isolated adapter validates
+/// that stdout contract, locks file scope, and performs a read-only `-l`
+/// preflight before every `-w` invocation so a later parse failure cannot leave
+/// a partially formatted batch.
 
 module velvet_glove.builtins.tools.GoFmt
 
 import "../Config.pkl" as Config
 
+goFmtAdapter: String = #"""
+  import os
+  import selectors
+  import shutil
+  import signal
+  import stat
+  import subprocess
+  import sys
+
+  MARKER = "__VELVET_GLOVE_GOFMT_FILES__"
+  LIMIT = 64 * 1024 * 1024
+
+
+  def fail(message):
+      print(f"velvet-glove-gofmt: {message}", file=sys.stderr)
+      raise SystemExit(2)
+
+
+  if len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:
+      fail("invalid adapter arguments")
+
+  requested_tool = sys.argv[1]
+  mode = sys.argv[2]
+  payload = sys.argv[3:]
+  marker_index = payload.index(MARKER)
+  extra_args = payload[:marker_index]
+  files = payload[marker_index + 1 :]
+  if mode not in ("verify", "write") or not files:
+      fail("invalid mode or empty file selection")
+  if extra_args:
+      fail("extra arguments are unsupported because gofmt flags change the controlled contract")
+
+  normalized_files = []
+  seen_paths = set()
+  seen_identities = set()
+  for requested_path in files:
+      if "\n" in requested_path or "\r" in requested_path or "\0" in requested_path:
+          fail(f"selected path contains a control character: {requested_path!r}")
+      if not os.path.isabs(requested_path) or os.path.normpath(requested_path) != requested_path:
+          fail(f"selected path is not normalized and absolute: {requested_path}")
+      if os.path.realpath(requested_path) != requested_path:
+          fail(f"selected path traverses a symlink: {requested_path}")
+      try:
+          requested_path.encode("utf-8")
+          info = os.lstat(requested_path)
+      except (OSError, UnicodeError) as error:
+          fail(f"cannot inspect {requested_path}: {error}")
+      identity = (info.st_dev, info.st_ino)
+      if (
+          requested_path in seen_paths
+          or identity in seen_identities
+          or not stat.S_ISREG(info.st_mode)
+          or info.st_nlink != 1
+      ):
+          fail(f"selected path is not a unique regular file: {requested_path}")
+      seen_paths.add(requested_path)
+      seen_identities.add(identity)
+      normalized_files.append(requested_path)
+  files = normalized_files
+
+  tool = shutil.which(requested_tool)
+  if tool is None:
+      fail(f"cannot resolve tool executable {requested_tool!r}")
+  tool = os.path.abspath(tool)
+  try:
+      tool_info = os.stat(tool)
+  except OSError as error:
+      fail(f"cannot inspect resolved tool {tool}: {error}")
+  if not stat.S_ISREG(tool_info.st_mode) or not os.access(tool, os.X_OK):
+      fail(f"resolved tool is not an executable regular file: {tool}")
+
+  environment = os.environ.copy()
+  for name in tuple(environment):
+      if (
+          name.startswith("GO")
+          or name.startswith("DYLD_")
+          or name.startswith("LD_")
+          or name == "DEBUG"
+      ):
+          environment.pop(name, None)
+  environment.update(
+      {
+          "PATH": "/usr/bin:/bin",
+          "LANG": "C",
+          "LC_ALL": "C",
+          "TZ": "UTC",
+          "TERM": "dumb",
+          "NO_COLOR": "1",
+          "CLICOLOR": "0",
+          "FORCE_COLOR": "0",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOMAXPROCS": "1",
+          "GOTELEMETRY": "off",
+          "GOTOOLCHAIN": "local",
+      }
+  )
+
+  process = None
+  pending_signal = None
+  cleaning = False
+
+
+  class AdapterSignal(BaseException):
+      def __init__(self, signum):
+          super().__init__(f"received signal {signum}")
+          self.signum = signum
+
+
+  def signal_group(signum):
+      if process is None:
+          return
+      try:
+          os.killpg(process.pid, signum)
+      except (OSError, ValueError):
+          pass
+
+
+  def stop_child(initial_signal=None):
+      global process
+      global cleaning
+      child = process
+      if child is None:
+          return
+      cleaning = True
+      try:
+          try:
+              running = child.poll() is None
+          except (OSError, ValueError):
+              running = True
+          if running:
+              signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)
+              try:
+                  child.wait(timeout=1)
+              except (OSError, ValueError, subprocess.TimeoutExpired):
+                  pass
+          signal_group(signal.SIGKILL)
+          try:
+              child.wait(timeout=1)
+          except (OSError, ValueError, subprocess.TimeoutExpired):
+              pass
+      finally:
+          process = None
+          cleaning = False
+
+
+  def forward_signal(signum, _frame):
+      global pending_signal
+      pending_signal = signum
+      if process is not None and not cleaning:
+          signal_group(signum)
+          raise AdapterSignal(signum)
+
+
+  def run_child(arguments):
+      global process
+      stdout_chunks = []
+      stderr_chunks = []
+      total = 0
+      try:
+          process = subprocess.Popen(
+              arguments,
+              stdin=subprocess.DEVNULL,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              env=environment,
+              start_new_session=True,
+          )
+          selector = selectors.DefaultSelector()
+          for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
+              if stream is None:
+                  raise OSError("failed to capture tool output")
+              os.set_blocking(stream.fileno(), False)
+              selector.register(stream, selectors.EVENT_READ, target)
+          while selector.get_map():
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
+              for key, _ in selector.select(timeout=0.1):
+                  chunk = os.read(key.fileobj.fileno(), 65536)
+                  if chunk:
+                      total += len(chunk)
+                      if total > LIMIT:
+                          raise BufferError(f"combined output exceeded {LIMIT} bytes")
+                      key.data.append(chunk)
+                  else:
+                      selector.unregister(key.fileobj)
+                      key.fileobj.close()
+          status = process.wait()
+          process = None
+          return status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+      except AdapterSignal as error:
+          stop_child(error.signum)
+          raise SystemExit(2) from None
+      except BaseException as error:
+          stop_child()
+          fail(str(error))
+
+
+  def snapshot():
+      result = []
+      total = 0
+      for path in files:
+          try:
+              info = os.lstat(path)
+              if (
+                  os.path.realpath(path) != path
+                  or not stat.S_ISREG(info.st_mode)
+                  or info.st_nlink != 1
+              ):
+                  fail(f"selected path stopped being a unique regular file: {path}")
+              with open(path, "rb") as source:
+                  data = source.read(LIMIT + 1)
+          except OSError as error:
+              fail(f"cannot read {path}: {error}")
+          total += len(data)
+          if len(data) > LIMIT or total > LIMIT:
+              fail(f"selected files exceed the {LIMIT}-byte validation limit")
+          result.append((info.st_dev, info.st_ino, data))
+      return result
+
+
+  def validate_listing(stdout_bytes, stderr_bytes, status):
+      if status == 2:
+          return None
+      if status != 0:
+          if stdout_bytes:
+              sys.stdout.buffer.write(stdout_bytes)
+          if stderr_bytes:
+              sys.stderr.buffer.write(stderr_bytes)
+          fail(f"gofmt returned unsupported status {status}")
+      if stderr_bytes:
+          if stdout_bytes:
+              sys.stdout.buffer.write(stdout_bytes)
+          sys.stderr.buffer.write(stderr_bytes)
+          fail("gofmt -l wrote stderr with status 0")
+      expected = [os.fsencode(path) + b"\n" for path in files]
+      actual = stdout_bytes.splitlines(keepends=True)
+      cursor = 0
+      for line in actual:
+          while cursor < len(expected) and expected[cursor] != line:
+              cursor += 1
+          if cursor == len(expected):
+              if stdout_bytes:
+                  sys.stdout.buffer.write(stdout_bytes)
+              fail("gofmt -l listed an unselected, repeated, or out-of-order path")
+          cursor += 1
+      return actual
+
+
+  previous_handlers = {}
+  try:
+      for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+          previous_handlers[signum] = signal.signal(signum, forward_signal)
+      before = snapshot()
+      status, listed_stdout, listed_stderr = run_child([tool, "-l", *files])
+      validate_listing(listed_stdout, listed_stderr, status)
+      if status == 2:
+          if listed_stdout:
+              sys.stdout.buffer.write(listed_stdout)
+          if listed_stderr:
+              sys.stderr.buffer.write(listed_stderr)
+          raise SystemExit(2)
+      if snapshot() != before:
+          fail("gofmt -l changed a selected file during the read-only preflight")
+      if mode == "verify":
+          if listed_stdout:
+              sys.stdout.buffer.write(listed_stdout)
+          raise SystemExit(0)
+
+      status, write_stdout, write_stderr = run_child([tool, "-w", *files])
+      if status != 0 or write_stdout or write_stderr:
+          if write_stdout:
+              sys.stdout.buffer.write(write_stdout)
+          if write_stderr:
+              sys.stderr.buffer.write(write_stderr)
+          if status not in (0, 2):
+              fail(f"gofmt -w returned unsupported status {status}")
+          if status == 0:
+              fail("gofmt -w emitted output with status 0")
+          raise SystemExit(2)
+      after = snapshot()
+      if [(item[0], item[1]) for item in after] != [
+          (item[0], item[1]) for item in before
+      ]:
+          fail("gofmt -w replaced or aliased a selected file")
+  finally:
+      stop_child()
+      cleaning = True
+      try:
+          for signum, handler in previous_handlers.items():
+              try:
+                  signal.signal(signum, handler)
+              except (OSError, ValueError):
+                  pass
+      finally:
+          cleaning = False
+      if pending_signal is not None:
+          fail(f"received signal {pending_signal}")
+  """#
+
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "go-fmt"
   displayName = "gofmt"
   executable = "gofmt"
-  installHint = "install the Go toolchain (gofmt ships with it)"
+  installHint = "install Go 1.26.5 (gofmt ships with the toolchain) and a Python 3 interpreter with isolated-mode support"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*.go"; "**/*.go" }
@@ -20,9 +323,15 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   workflows = new Mapping<String, Config.Workflow> {
     ["format"] = new Config.Workflow {
       check = new Config.WorkflowCommand {
+        program = "python"
         argv = new Listing<String | Config.ArgToken> {
-          "-l"
+          "-I"
+          "-c"
+          goFmtAdapter
+          new Config.ToolExecutable {}
+          "verify"
           new Config.ExtraArgs {}
+          "__VELVET_GLOVE_GOFMT_FILES__"
           new Config.Files {}
         }
         exitCodes = new Config.ExitCodes {
@@ -32,9 +341,15 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         issuesOnStdout = true
       }
       remedy = new Config.WorkflowCommand {
+        program = "python"
         argv = new Listing<String | Config.ArgToken> {
-          "-w"
+          "-I"
+          "-c"
+          goFmtAdapter
+          new Config.ToolExecutable {}
+          "write"
           new Config.ExtraArgs {}
+          "__VELVET_GLOVE_GOFMT_FILES__"
           new Config.Files {}
         }
         exitCodes = new Config.ExitCodes {
@@ -52,9 +367,15 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["format"] = new Config.Phase {
       mode = "format"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
-        "-w"
+        "-I"
+        "-c"
+        goFmtAdapter
+        new Config.ToolExecutable {}
+        "write"
         new Config.ExtraArgs {}
+        "__VELVET_GLOVE_GOFMT_FILES__"
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
