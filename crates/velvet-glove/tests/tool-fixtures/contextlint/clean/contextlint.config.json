@@ -1,0 +1,10 @@
+{
+  "$schema": "http://127.0.0.1:9/contextlint-schema-must-not-be-fetched.json",
+  "include": ["does-not-exist/**/*.md"],
+  "rules": [
+    {
+      "rule": "sec001",
+      "options": { "sections": ["Overview"] }
+    }
+  ]
+}

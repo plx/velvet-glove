@@ -57,6 +57,7 @@ const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this
 const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
 const PRETTIER_POISON_ENV_VALUE: &str = "velvet-glove-prettier-adapter-must-clear-this";
 const PRETTIER_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_PRETTIER_ROOT";
+const CONTEXTLINT_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT";
 const PRETTIER_CHILD_PATH: &str = "/usr/bin:/bin";
 const PRETTIER_SCRUBBED_ENV: &[&str] = &[
     DEBUG_ENV,
@@ -245,6 +246,32 @@ const BIOME_SCRUBBED_ENV: &[&str] = &[
     "RUST_LIB_BACKTRACE",
     DEBUG_ENV,
 ];
+const CONTEXTLINT_POISON_ENV_VALUE: &str = "velvet-glove-contextlint-adapter-must-clear-this";
+const CONTEXTLINT_CHILD_PATH: &str = "/usr/bin:/bin";
+const CONTEXTLINT_SCRUBBED_ENV: &[&str] = &[
+    "NODE_OPTIONS",
+    NODE_PATH_ENV,
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_userconfig",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    DEBUG_ENV,
+    "CONTEXTLINT_VELVET_GLOVE_POISON",
+];
+const CONTEXTLINT_POISONED_ENV: &[&str] = &[
+    "NODE_OPTIONS",
+    NODE_PATH_ENV,
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_userconfig",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    DEBUG_ENV,
+    "CONTEXTLINT_VELVET_GLOVE_POISON",
+];
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +302,7 @@ impl ExpectedOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TracePlan {
     Direct,
+    PrivateProbeThenContextlintWorkspace,
     SingleNestedTrailingOptions {
         trailing: &'static [&'static str],
     },
@@ -365,6 +393,11 @@ const ASTRO_TRACE_PLAN: TracePlan = TracePlan::SingleNestedTrailingOptions {
         "--minimumFailingSeverity=error",
     ],
 };
+
+const CONTEXTLINT_FILES_MARKER: &str = "__VELVET_GLOVE_CONTEXTLINT_FILES__";
+const CONTEXTLINT_TRACE_PLAN: TracePlan = TracePlan::PrivateProbeThenContextlintWorkspace;
+const CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER: &str = "<contextlint-private>";
+const CONTEXTLINT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-contextlint-probe-";
 
 const BETTERLEAKS_FILES_MARKER: &str = "__VELVET_GLOVE_BETTERLEAKS_FILES__";
 const BETTERLEAKS_FIXED_ARGUMENTS: &[&str] = &[
@@ -579,6 +612,75 @@ impl RealToolContractCase {
 
 fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContractCase>, String> {
     let contract = match (case.tool.as_str(), case.case.as_str()) {
+        ("contextlint", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["docs/example.Md"],
+                exit_code: 0,
+                trace_exit_codes: &[1, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &["127.0.0.1"],
+            trace_plan: CONTEXTLINT_TRACE_PLAN,
+        },
+        ("contextlint", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["docs/example.md"],
+                exit_code: 1,
+                trace_exit_codes: &[1, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "CTX-001",
+                "Section \\\"Overview\\\" contains only placeholder \\\"TODO\\\"",
+            ],
+            diagnostic_excludes: &["127.0.0.1", "/etc/passwd"],
+            trace_plan: CONTEXTLINT_TRACE_PLAN,
+        },
+        ("contextlint", "multi-file-project") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["docs/example.md", "docs/selected-clean.md"],
+                exit_code: 1,
+                trace_exit_codes: &[1, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "(project)",
+                "STR-001",
+                "docs/unselected.md",
+                "SEC-001",
+                "docs/missing-architecture.md",
+            ],
+            diagnostic_excludes: &["127.0.0.1"],
+            trace_plan: CONTEXTLINT_TRACE_PLAN,
+        },
+        ("contextlint", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["docs/example.md"],
+                exit_code: 2,
+                trace_exit_codes: &[1, 2],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "Access to this API has been restricted",
+                "contextlint exited with operational status 2",
+            ],
+            diagnostic_excludes: &["127.0.0.1"],
+            trace_plan: CONTEXTLINT_TRACE_PLAN,
+        },
+        ("contextlint", other) => {
+            return Err(format!(
+                "contextlint fixture {other:?} has no real-tool contract declaration"
+            ));
+        }
         ("jq", "clean") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -3097,6 +3199,8 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        contextlint_toolchain: None,
+        contextlint: false,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -3158,6 +3262,8 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        contextlint_toolchain: None,
+        contextlint: false,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -3238,6 +3344,8 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        contextlint_toolchain: None,
+        contextlint: false,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -3303,6 +3411,8 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         cargo_clippy_toolchain: None,
         cargo_fmt_toolchain: None,
         prettier_toolchain: None,
+        contextlint_toolchain: None,
+        contextlint: false,
     };
 
     let environment = verify_gofmt_trace_environment(&record, &harness)
@@ -3506,6 +3616,31 @@ fn biome_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated Contextlint adapter adversarial probe; requires controlled Python"]
+fn contextlint_evaluated_adapter_noop_resistance() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("contextlint")
+        .unwrap_or_else(|| panic!("builtin catalog has no Contextlint spec"));
+    verify_contextlint_adapter_noop_resistance(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "evaluated Contextlint adapter lifecycle; requires controlled Python"]
+fn contextlint_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("contextlint")
+        .unwrap_or_else(|| panic!("builtin catalog has no Contextlint spec"));
+    verify_contextlint_adapter_lifecycle(spec, timeout).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated gofmt adapter lifecycle; requires controlled Python"]
 fn gofmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -3618,6 +3753,14 @@ fn run_all_tool_fixtures() {
         verify_biome_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("biome adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "contextlint") {
+        verify_contextlint_adapter_noop_resistance(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("contextlint adapter no-op resistance probe: pass");
+        verify_contextlint_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("contextlint adapter lifecycle probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "go-fmt") {
         verify_gofmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -5473,6 +5616,160 @@ fn resolve_trace_invocations(
                 }],
             ))
         }
+        TracePlan::PrivateProbeThenContextlintWorkspace => {
+            if expected_exit_codes.len() != 2 {
+                return Err(format!(
+                    "Contextlint adapter trace for {outer_program} must declare private-probe and project exit codes, got {expected_exit_codes:?}"
+                ));
+            }
+            let [
+                isolated,
+                command,
+                adapter,
+                node_program,
+                tool_program,
+                indicator,
+                marker_and_files @ ..,
+            ] = outer_arguments
+            else {
+                return Err(format!(
+                    "Contextlint adapter trace has an incomplete outer command: {outer_arguments:?}"
+                ));
+            };
+            if isolated != "-I" || command != "-c" || adapter.is_empty() || node_program != "node" {
+                return Err(format!(
+                    "Contextlint adapter trace expected isolated Python plus the logical node program, got {outer_arguments:?}"
+                ));
+            }
+            let rendered_cli = PathBuf::from(tool_program);
+            if !rendered_cli.is_absolute() {
+                return Err(format!(
+                    "Contextlint adapter trace expected an absolute managed CLI path, got {rendered_cli:?}"
+                ));
+            }
+            let rendered_cli = rendered_cli.canonicalize().map_err(|error| {
+                format!("canonicalize rendered Contextlint CLI path {rendered_cli:?}: {error}")
+            })?;
+            let expected_cli = resolve_contextlint_fixture_cli()?;
+            if rendered_cli != expected_cli {
+                return Err(format!(
+                    "Contextlint adapter trace rendered CLI {rendered_cli:?}, expected managed CLI {expected_cli:?}"
+                ));
+            }
+            let [marker, rendered_files @ ..] = marker_and_files else {
+                return Err("Contextlint adapter trace has no file marker".to_owned());
+            };
+            if marker != CONTEXTLINT_FILES_MARKER {
+                return Err(format!(
+                    "Contextlint adapter trace rejects forwarded arguments before its file marker: {marker_and_files:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "Contextlint adapter trace candidate suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let indicator_path = PathBuf::from(indicator);
+            if !indicator_path.is_absolute()
+                || indicator_path.file_name() != Some(OsStr::new("contextlint.config.json"))
+                || !indicator_path.is_file()
+            {
+                return Err(format!(
+                    "Contextlint adapter trace rendered an invalid workspace indicator {indicator_path:?}"
+                ));
+            }
+            let indicator_path = indicator_path.canonicalize().map_err(|error| {
+                format!("canonicalize Contextlint workspace indicator {indicator_path:?}: {error}")
+            })?;
+            let workspace = indicator_path.parent().ok_or_else(|| {
+                format!("Contextlint indicator has no workspace parent: {indicator_path:?}")
+            })?;
+            let outside_workspace = targets
+                .iter()
+                .filter(|target| !target.starts_with(workspace))
+                .collect::<Vec<_>>();
+            if !outside_workspace.is_empty() {
+                return Err(format!(
+                    "Contextlint adapter trace targets escape workspace {workspace:?}: {outside_workspace:?}"
+                ));
+            }
+            let inventory = contextlint_markdown_inventory(workspace)?;
+            let cli_entry = rendered_cli;
+            let graph = cli_entry
+                .ancestors()
+                .find(|path| path.file_name() == Some(OsStr::new("node_modules")))
+                .ok_or_else(|| {
+                    format!("pinned Contextlint executable is outside node_modules: {cli_entry:?}")
+                })?
+                .to_path_buf();
+            let expected_cli_entry = graph.join("@contextlint/cli/dist/index.js");
+            let expected_cli_entry = expected_cli_entry.canonicalize().map_err(|error| {
+                format!("canonicalize pinned Contextlint CLI entry {expected_cli_entry:?}: {error}")
+            })?;
+            if cli_entry != expected_cli_entry {
+                return Err(format!(
+                    "pinned Contextlint executable did not resolve to its CLI JS: {cli_entry:?}"
+                ));
+            }
+            let run_root = PathBuf::from(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER);
+            let probe_config = run_root.join("contextlint.config.json");
+            let project_config = run_root.join("project.config.json");
+            let probe_document = run_root.join("probe.md");
+            let render = |readable: &[&Path], config: &Path, cwd: &Path, files: &[PathBuf]| {
+                let mut arguments = vec![
+                    "--disable-proto=throw".to_owned(),
+                    "--permission".to_owned(),
+                ];
+                arguments.extend(
+                    readable
+                        .iter()
+                        .map(|root| format!("--allow-fs-read={}", root.display())),
+                );
+                arguments.extend([
+                    cli_entry.to_string_lossy().into_owned(),
+                    "lint".to_owned(),
+                    "--config".to_owned(),
+                    config.to_string_lossy().into_owned(),
+                    "--cwd".to_owned(),
+                    cwd.to_string_lossy().into_owned(),
+                    "--format".to_owned(),
+                    "json".to_owned(),
+                    "--".to_owned(),
+                ]);
+                arguments.extend(files.iter().map(|file| file.to_string_lossy().into_owned()));
+                arguments
+            };
+            let probe_files = vec![probe_document];
+            let probe_arguments =
+                render(&[&graph, &run_root], &probe_config, &run_root, &probe_files);
+            let command_arguments = render(
+                &[&graph, workspace, &run_root],
+                &project_config,
+                workspace,
+                &inventory,
+            );
+            Ok((
+                node_program.clone(),
+                vec![
+                    ResolvedTraceInvocation {
+                        program: node_program.clone(),
+                        targets: targets.to_vec(),
+                        arguments: probe_arguments,
+                        exit_code: expected_exit_codes[0],
+                    },
+                    ResolvedTraceInvocation {
+                        program: node_program.clone(),
+                        targets: targets.to_vec(),
+                        arguments: command_arguments,
+                        exit_code: expected_exit_codes[1],
+                    },
+                ],
+            ))
+        }
         TracePlan::SingleNestedTrailingOptions { trailing } => {
             if expected_exit_codes.len() != 1 {
                 return Err(format!(
@@ -6540,6 +6837,122 @@ fn nested_trace_command(
     Ok((trace_program, base_arguments))
 }
 
+fn contextlint_markdown_inventory(workspace: &Path) -> Result<Vec<PathBuf>, String> {
+    const EXCLUDED: &[&str] = &[".git", "node_modules", ".velvet-glove"];
+    const MAX_ENTRIES: usize = 100_000;
+    const MAX_FILES: usize = 4_096;
+    const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+
+    fn visit(
+        directory: &Path,
+        inventory: &mut Vec<PathBuf>,
+        seen: &mut BTreeSet<(u64, u64)>,
+        entry_count: &mut usize,
+        total_bytes: &mut u64,
+    ) -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = std::fs::symlink_metadata(directory).map_err(|error| {
+            format!("inspect Contextlint inventory directory {directory:?}: {error}")
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Contextlint inventory encountered a non-physical directory {directory:?}"
+            ));
+        }
+        for entry in sorted_entries(directory)? {
+            *entry_count += 1;
+            if *entry_count > MAX_ENTRIES {
+                return Err(format!(
+                    "Contextlint inventory exceeds {MAX_ENTRIES} entries"
+                ));
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+                format!("inspect Contextlint workspace entry {path:?}: {error}")
+            })?;
+            if metadata.file_type().is_symlink() {
+                if name.to_str().is_some_and(|name| EXCLUDED.contains(&name)) {
+                    continue;
+                }
+                return Err(format!(
+                    "Contextlint inventory rejects symbolic link {path:?}"
+                ));
+            }
+            if metadata.is_dir() {
+                if !name.to_str().is_some_and(|name| EXCLUDED.contains(&name)) {
+                    visit(&path, inventory, seen, entry_count, total_bytes)?;
+                }
+                continue;
+            }
+            let is_markdown = name
+                .to_str()
+                .map(str::to_ascii_lowercase)
+                .is_some_and(|name| name.ends_with(".md") || name.ends_with(".markdown"));
+            if !is_markdown {
+                continue;
+            }
+            if !metadata.is_file() || metadata.nlink() != 1 {
+                return Err(format!(
+                    "Contextlint inventory requires one-link regular Markdown files, got {path:?}"
+                ));
+            }
+            if metadata.len() > MAX_FILE_BYTES {
+                return Err(format!(
+                    "Contextlint Markdown file exceeds {MAX_FILE_BYTES} bytes: {path:?}"
+                ));
+            }
+            *total_bytes = total_bytes.saturating_add(metadata.len());
+            if *total_bytes > MAX_TOTAL_BYTES {
+                return Err(format!(
+                    "Contextlint inventory exceeds {MAX_TOTAL_BYTES} Markdown bytes"
+                ));
+            }
+            if !seen.insert((metadata.dev(), metadata.ino())) {
+                return Err(format!(
+                    "Contextlint inventory contains a duplicate inode at {path:?}"
+                ));
+            }
+            if inventory.len() >= MAX_FILES {
+                return Err(format!(
+                    "Contextlint inventory exceeds {MAX_FILES} Markdown files"
+                ));
+            }
+            inventory.push(path.canonicalize().map_err(|error| {
+                format!("canonicalize Contextlint Markdown file {path:?}: {error}")
+            })?);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = workspace;
+        return Err("Contextlint real-tool trace requires Unix file identities".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        let mut inventory = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut entry_count = 0;
+        let mut total_bytes = 0;
+        visit(
+            workspace,
+            &mut inventory,
+            &mut seen,
+            &mut entry_count,
+            &mut total_bytes,
+        )?;
+        inventory.sort();
+        if inventory.is_empty() {
+            return Err("Contextlint inventory found zero Markdown files".to_owned());
+        }
+        Ok(inventory)
+    }
+}
+
 fn render_expected_arguments(
     spec: &ToolSpec,
     phase: &Phase,
@@ -6801,6 +7214,114 @@ impl PrettierToolchain {
     }
 }
 
+#[derive(Clone)]
+struct ContextlintToolchain {
+    root: PathBuf,
+    node: PathBuf,
+    cli: PathBuf,
+}
+
+impl ContextlintToolchain {
+    fn resolve_if_configured() -> Result<Option<Self>, String> {
+        let Some(requested_root) = std::env::var_os(CONTEXTLINT_ROOT_ENV) else {
+            return Ok(None);
+        };
+        Self::resolve(PathBuf::from(requested_root)).map(Some)
+    }
+
+    fn resolve(requested_root: PathBuf) -> Result<Self, String> {
+        if !requested_root.is_absolute() {
+            return Err(format!(
+                "{CONTEXTLINT_ROOT_ENV} must be an absolute directory, got {requested_root:?}"
+            ));
+        }
+        let requested_metadata = std::fs::symlink_metadata(&requested_root).map_err(|error| {
+            format!("inspect {CONTEXTLINT_ROOT_ENV} root {requested_root:?}: {error}")
+        })?;
+        if !requested_metadata.is_dir() || requested_metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{CONTEXTLINT_ROOT_ENV} must name a real directory, got {requested_root:?}"
+            ));
+        }
+        let root = requested_root.canonicalize().map_err(|error| {
+            format!("canonicalize {CONTEXTLINT_ROOT_ENV} root {requested_root:?}: {error}")
+        })?;
+        let node = require_executable(&root.join("node/bin/node"), "Contextlint Node runtime")?;
+        let cli = require_readable_file(
+            &root.join("package/node_modules/@contextlint/cli/dist/index.js"),
+            "Contextlint JavaScript CLI",
+        )?;
+        for (label, path) in [("Node runtime", &node), ("Contextlint CLI", &cli)] {
+            if !path.starts_with(&root) {
+                return Err(format!(
+                    "managed Contextlint {label} escapes {CONTEXTLINT_ROOT_ENV} {root:?}: {path:?}"
+                ));
+            }
+        }
+
+        let package_path = root.join("package/package.json");
+        let lock_path = root.join("package/package-lock.json");
+        let package: JsonValue = serde_json::from_slice(
+            &std::fs::read(&package_path)
+                .map_err(|error| format!("read managed Contextlint package manifest: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed Contextlint package manifest: {error}"))?;
+        if package["engines"]["node"] != "24.19.0"
+            || package["dependencies"]["@contextlint/cli"] != "1.1.1"
+            || package["dependencies"]["@contextlint/core"] != "1.1.1"
+        {
+            return Err(format!(
+                "managed Contextlint package manifest does not pin Node 24.19.0 and the CLI/core 1.1.1 pair: {package_path:?}"
+            ));
+        }
+        let lock: JsonValue = serde_json::from_slice(
+            &std::fs::read(&lock_path)
+                .map_err(|error| format!("read managed Contextlint npm lock: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed Contextlint npm lock: {error}"))?;
+        let cli_lock = &lock["packages"]["node_modules/@contextlint/cli"];
+        let core_lock = &lock["packages"]["node_modules/@contextlint/core"];
+        if lock["lockfileVersion"] != 3
+            || lock["packages"][""]["engines"]["node"] != "24.19.0"
+            || cli_lock["version"] != "1.1.1"
+            || cli_lock["resolved"] != "https://registry.npmjs.org/@contextlint/cli/-/cli-1.1.1.tgz"
+            || cli_lock["integrity"]
+                != "sha512-QCyjqmdaoanH9L8AduX2jH7vRm2yryHpxroLai0PHHP2lijBTG96UEICCuSIHbkoQ4FXulrokQst5+eTf34v9g=="
+            || core_lock["version"] != "1.1.1"
+            || core_lock["resolved"]
+                != "https://registry.npmjs.org/@contextlint/core/-/core-1.1.1.tgz"
+            || core_lock["integrity"]
+                != "sha512-ui2ymL90ZlV260NZD8pgki6fwCUM1bX2wj1LbDy5H4u7w8JyTvxIBORxzhWlklDUmsXf1wVxIZXdbvuRYRsqfQ=="
+        {
+            return Err(format!(
+                "managed Contextlint npm lock does not contain the exact CLI/core 1.1.1 registry artifacts: {lock_path:?}"
+            ));
+        }
+
+        let identity_path = root.join(".velvet-glove-artifacts.json");
+        let identity: JsonValue = serde_json::from_slice(
+            &std::fs::read(&identity_path)
+                .map_err(|error| format!("read managed Contextlint identity: {error}"))?,
+        )
+        .map_err(|error| format!("parse managed Contextlint identity: {error}"))?;
+        if identity["node"]["id"] != "contextlint-node"
+            || identity["node"]["version"] != "24.19.0"
+            || identity["node"]["integrity"]["sha256"]
+                != "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+            || identity["npm"]["id"] != "contextlint-npm"
+            || identity["npm"]["version"] != "11.17.0"
+            || identity["contextlint"]["version"] != "1.1.1"
+            || identity["contextlint"]["cliVersion"] != "1.1.1"
+            || identity["contextlint"]["coreVersion"] != "1.1.1"
+        {
+            return Err(format!(
+                "managed Contextlint identity does not bind the declared Node/npm/CLI/core closure: {identity_path:?}"
+            ));
+        }
+        Ok(Self { root, node, cli })
+    }
+}
+
 fn require_readable_file(path: &Path, description: &str) -> Result<PathBuf, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| format!("inspect {description} {path:?}: {error}"))?;
@@ -7045,6 +7566,8 @@ struct ToolTraceHarness {
     cargo_clippy_toolchain: Option<CargoClippyToolchain>,
     cargo_fmt_toolchain: Option<CargoFmtToolchain>,
     prettier_toolchain: Option<PrettierToolchain>,
+    contextlint_toolchain: Option<ContextlintToolchain>,
+    contextlint: bool,
 }
 
 impl ToolTraceHarness {
@@ -7070,6 +7593,11 @@ impl ToolTraceHarness {
         let cargo_fmt_toolchain = cargo_fmt_toolchain.transpose()?;
         let prettier_toolchain = if case.tool == "prettier" {
             PrettierToolchain::resolve_if_configured()?
+        } else {
+            None
+        };
+        let contextlint_toolchain = if case.tool == "contextlint" {
+            ContextlintToolchain::resolve_if_configured()?
         } else {
             None
         };
@@ -7104,6 +7632,11 @@ impl ToolTraceHarness {
                 "node" if prettier_toolchain.is_some() => prettier_toolchain
                     .as_ref()
                     .expect("checked Prettier toolchain")
+                    .node
+                    .clone(),
+                "node" if contextlint_toolchain.is_some() => contextlint_toolchain
+                    .as_ref()
+                    .expect("checked Contextlint toolchain")
                     .node
                     .clone(),
                 _ => resolve_program(logical_program).ok_or_else(|| {
@@ -7144,6 +7677,19 @@ impl ToolTraceHarness {
                 })?;
             }
         }
+        let contextlint = case.tool == "contextlint";
+        if contextlint {
+            for directory in [
+                "contextlint-tmp",
+                "contextlint-outer-poison-home",
+                "contextlint-outer-poison-cache",
+            ] {
+                let path = workspace.root.join(directory);
+                std::fs::create_dir_all(&path).map_err(|error| {
+                    format!("create controlled Contextlint environment directory {path:?}: {error}")
+                })?;
+            }
+        }
         for (logical_program, real_program) in &programs {
             let shim = shim_dir.join(logical_program);
             std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
@@ -7171,6 +7717,8 @@ impl ToolTraceHarness {
             cargo_clippy_toolchain,
             cargo_fmt_toolchain,
             prettier_toolchain,
+            contextlint_toolchain,
+            contextlint,
         })
     }
 
@@ -7235,6 +7783,28 @@ impl ToolTraceHarness {
                 } else {
                     command.env(name, PRETTIER_POISON_ENV_VALUE);
                 }
+            }
+        }
+        if self.contextlint {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "Contextlint trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            command
+                .env(HOME_ENV, root.join("contextlint-outer-poison-home"))
+                .env(TMPDIR_ENV, root.join("contextlint-tmp"))
+                .env(
+                    XDG_CACHE_HOME_ENV,
+                    root.join("contextlint-outer-poison-cache"),
+                )
+                .env("TERM", CONTEXTLINT_POISON_ENV_VALUE)
+                .env(CI_ENV, CONTEXTLINT_POISON_ENV_VALUE)
+                .env("NODE_DISABLE_COLORS", CONTEXTLINT_POISON_ENV_VALUE)
+                .env("UV_THREADPOOL_SIZE", CONTEXTLINT_POISON_ENV_VALUE);
+            for name in CONTEXTLINT_POISONED_ENV {
+                command.env(name, CONTEXTLINT_POISON_ENV_VALUE);
             }
         }
         if self.programs.contains_key("buf") {
@@ -7378,18 +7948,53 @@ fn verify_tool_trace_invocations(
             real_program.to_string_lossy().as_ref(),
         )?;
         let recorded_cwd = read_record(&record, "cwd")?;
+        let contextlint_private_root = if trace_program == "node" && harness.contextlint {
+            resolve_contextlint_private_trace_root(&record, &expected.arguments, &recorded_cwd)?
+        } else {
+            None
+        };
+        let expected_cwd = if trace_program == "node" && harness.contextlint {
+            let indices = expected
+                .arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == "--cwd").then_some(index))
+                .collect::<Vec<_>>();
+            let [index] = indices.as_slice() else {
+                return Err(format!(
+                    "Contextlint {label} trace requires exactly one --cwd argument, got {indices:?}"
+                ));
+            };
+            let expected = expected
+                .arguments
+                .get(index + 1)
+                .ok_or_else(|| format!("Contextlint {label} trace has no value after --cwd"))?
+                .clone();
+            resolve_dynamic_trace_argument(
+                &expected,
+                &recorded_cwd,
+                contextlint_private_root.as_deref(),
+            )?
+        } else {
+            cwd.to_string_lossy().into_owned()
+        };
         if !matches!(
             trace_program,
             "cargo" | "cargo-clippy" | "cargo-fmt" | "rustfmt"
-        ) && recorded_cwd != cwd.to_string_lossy().trim_end()
+        ) && recorded_cwd.trim_end_matches(std::path::MAIN_SEPARATOR)
+            != expected_cwd.trim_end_matches(std::path::MAIN_SEPARATOR)
         {
             return Err(format!(
-                "{trace_program} {label} trace expected cwd {cwd:?}, got {recorded_cwd:?}"
+                "{trace_program} {label} trace expected cwd {expected_cwd:?}, got {recorded_cwd:?}"
             ));
         }
         assert_record(&record, "argc", &expected.arguments.len().to_string())?;
         for (index, argument) in expected.arguments.iter().enumerate() {
-            let argument = resolve_dynamic_trace_argument(argument, &recorded_cwd)?;
+            let argument = resolve_dynamic_trace_argument(
+                argument,
+                &recorded_cwd,
+                contextlint_private_root.as_deref(),
+            )?;
             assert_record(&record, &format!("argv-{index}"), &argument)?;
         }
         assert_record(&record, "status", &expected.exit_code.to_string())?;
@@ -7443,7 +8048,11 @@ fn verify_tool_trace_invocations(
             }
         }
         if trace_program == "node" {
-            let controlled = verify_prettier_trace_environment(&record)?;
+            let controlled = if harness.contextlint {
+                verify_contextlint_trace_environment(&record, harness)?
+            } else {
+                verify_prettier_trace_environment(&record)?
+            };
             let environment = environment
                 .as_object_mut()
                 .expect("trace environment is a JSON object");
@@ -7517,7 +8126,9 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        let prerequisites = if trace_program == "buf" {
+        let prerequisites = if trace_program == "node" && harness.contextlint {
+            contextlint_trace_prerequisites(harness, expected)?
+        } else if trace_program == "buf" {
             serde_json::json!({"diff": BUF_DIFF_PROGRAM})
         } else if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
@@ -7530,11 +8141,22 @@ fn verify_tool_trace_invocations(
         } else {
             serde_json::json!({})
         };
+        let evidence_cwd = if trace_program == "node"
+            && harness.contextlint
+            && Path::new(&recorded_cwd)
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+        {
+            CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER.to_owned()
+        } else {
+            recorded_cwd.clone()
+        };
         records.push(serde_json::json!({
             "logicalProgram": trace_program,
             "shimProgram": program,
             "realProgram": real_program,
-            "cwd": recorded_cwd,
+            "cwd": evidence_cwd,
             "argv": expected.arguments,
             "candidateFiles": expected.targets,
             "environment": environment,
@@ -7553,11 +8175,100 @@ fn verify_tool_trace_invocations(
     )
 }
 
-fn resolve_dynamic_trace_argument(argument: &str, recorded_cwd: &str) -> Result<String, String> {
+fn resolve_contextlint_private_trace_root(
+    record: &Path,
+    expected_arguments: &[String],
+    recorded_cwd: &str,
+) -> Result<Option<String>, String> {
+    if !expected_arguments
+        .iter()
+        .any(|argument| argument.contains(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER))
+    {
+        return Ok(None);
+    }
+    let mut candidates = BTreeSet::new();
+    let cwd = Path::new(recorded_cwd);
+    if cwd
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+    {
+        candidates.insert(recorded_cwd.to_owned());
+    }
+    for (index, expected) in expected_arguments.iter().enumerate() {
+        if !expected.contains(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER) {
+            continue;
+        }
+        if expected
+            .matches(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER)
+            .count()
+            != 1
+        {
+            return Err(format!(
+                "Contextlint trace argument contains its private-root placeholder more than once: {expected:?}"
+            ));
+        }
+        let (prefix, suffix) = expected
+            .split_once(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER)
+            .expect("placeholder presence was checked");
+        let actual = read_record(record, &format!("argv-{index}"))?;
+        let candidate = actual
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+            .ok_or_else(|| {
+                format!(
+                    "Contextlint trace argument {index} cannot bind expected private path shape {expected:?} to {actual:?}"
+                )
+            })?;
+        let candidate_path = Path::new(candidate);
+        if !candidate_path.is_absolute()
+            || !candidate_path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+        {
+            return Err(format!(
+                "Contextlint trace argument {index} bound an invalid private root {candidate_path:?}"
+            ));
+        }
+        candidates.insert(candidate.to_owned());
+    }
+    if candidates.len() != 1 {
+        return Err(format!(
+            "Contextlint trace did not bind one consistent private root: {candidates:?}"
+        ));
+    }
+    Ok(candidates.into_iter().next())
+}
+
+fn resolve_dynamic_trace_argument(
+    argument: &str,
+    recorded_cwd: &str,
+    contextlint_private_root: Option<&str>,
+) -> Result<String, String> {
+    let cwd = Path::new(recorded_cwd);
+    if argument.contains(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER) {
+        let contextlint_private_root = contextlint_private_root.ok_or_else(|| {
+            format!("Contextlint dynamic trace path has no validated private root: {argument:?}")
+        })?;
+        if argument
+            .matches(CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER)
+            .count()
+            != 1
+        {
+            return Err(format!(
+                "Contextlint dynamic trace argument contains its private-root placeholder more than once: {argument:?}"
+            ));
+        }
+        return Ok(argument.replacen(
+            CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER,
+            contextlint_private_root,
+            1,
+        ));
+    }
     let Some(suffix) = argument.strip_prefix(CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER) else {
         return Ok(argument.to_owned());
     };
-    let cwd = Path::new(recorded_cwd);
     if cwd.file_name() != Some(OsStr::new("invocation")) {
         return Err(format!(
             "Cargo Fmt dynamic trace path requires an invocation cwd, got {cwd:?}"
@@ -7738,6 +8449,63 @@ fn prettier_trace_prerequisites(
     }))
 }
 
+fn contextlint_trace_prerequisites(
+    harness: &ToolTraceHarness,
+    expected: &ResolvedTraceInvocation,
+) -> Result<JsonValue, String> {
+    let Some(toolchain) = &harness.contextlint_toolchain else {
+        return Ok(serde_json::json!({
+            "cli": "@contextlint/cli@1.1.1",
+            "core": "@contextlint/core@1.1.1",
+            "node": "24.19.0",
+            "permissions": {
+                "filesystemReads": "package graph, workspace, and authoritative private config/probe",
+                "filesystemWrites": false,
+                "childProcesses": false,
+                "workers": false,
+                "nativeAddons": false,
+            },
+        }));
+    };
+    let real_node = harness
+        .programs
+        .get("node")
+        .ok_or_else(|| "Contextlint trace has no managed Node binding".to_owned())?;
+    if real_node != &toolchain.node {
+        return Err(format!(
+            "Contextlint trace bound Node {:?}, expected dedicated runtime {:?}",
+            real_node, toolchain.node
+        ));
+    }
+    let cli = toolchain.cli.to_string_lossy();
+    if expected
+        .arguments
+        .iter()
+        .filter(|argument| *argument == cli.as_ref())
+        .count()
+        != 1
+    {
+        return Err(format!(
+            "Contextlint trace did not pass the dedicated managed CLI exactly once: expected {:?}, got {:?}",
+            toolchain.cli, expected.arguments
+        ));
+    }
+    Ok(serde_json::json!({
+        "root": toolchain.root,
+        "node": toolchain.node,
+        "contextlintCli": toolchain.cli,
+        "cli": "@contextlint/cli@1.1.1",
+        "core": "@contextlint/core@1.1.1",
+        "permissions": {
+            "filesystemReads": "package graph, workspace, and authoritative private config/probe",
+            "filesystemWrites": false,
+            "childProcesses": false,
+            "workers": false,
+            "nativeAddons": false,
+        },
+    }))
+}
+
 fn verify_biome_trace_environment(record: &Path) -> Result<BTreeMap<String, String>, String> {
     let mut environment = BTreeMap::new();
     let ci = read_record(record, &format!("env-{CI_ENV}"))?;
@@ -7759,6 +8527,82 @@ fn verify_biome_trace_environment(record: &Path) -> Result<BTreeMap<String, Stri
         if !value.is_empty() {
             return Err(format!(
                 "Biome trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    Ok(environment)
+}
+
+fn verify_contextlint_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+) -> Result<BTreeMap<String, String>, String> {
+    let controlled_root = harness.trace_root.parent().ok_or_else(|| {
+        format!(
+            "Contextlint trace root has no controlled environment parent: {:?}",
+            harness.trace_root
+        )
+    })?;
+    let controlled_root = controlled_root.canonicalize().map_err(|error| {
+        format!("canonicalize Contextlint controlled environment root {controlled_root:?}: {error}")
+    })?;
+    let home_value = read_record(record, &format!("env-{HOME_ENV}"))?;
+    let home = PathBuf::from(&home_value);
+    let run_root = home
+        .parent()
+        .ok_or_else(|| format!("Contextlint trace HOME has no private parent: {home_value:?}"))?;
+    if home.file_name() != Some(OsStr::new("home"))
+        || !run_root
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+        || run_root.parent() != Some(controlled_root.join("contextlint-tmp").as_path())
+    {
+        return Err(format!(
+            "Contextlint trace HOME is outside its unique controlled private root: {home_value:?}"
+        ));
+    }
+    let expected = BTreeMap::from([
+        (PATH_ENV, CONTEXTLINT_CHILD_PATH.to_owned()),
+        (
+            HOME_ENV,
+            run_root.join("home").to_string_lossy().into_owned(),
+        ),
+        (
+            TMPDIR_ENV,
+            run_root.join("tmp").to_string_lossy().into_owned(),
+        ),
+        (
+            XDG_CACHE_HOME_ENV,
+            run_root.join("xdg-cache").to_string_lossy().into_owned(),
+        ),
+        ("TERM", "dumb".to_owned()),
+        (CI_ENV, "1".to_owned()),
+        ("NODE_DISABLE_COLORS", "1".to_owned()),
+        ("UV_THREADPOOL_SIZE", "1".to_owned()),
+    ]);
+    let mut environment = BTreeMap::new();
+    for (name, expected_value) in expected {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected_value {
+            return Err(format!(
+                "Contextlint trace expected {name}={expected_value:?}, got {value:?}"
+            ));
+        }
+        environment.insert(
+            name.to_owned(),
+            value.replace(
+                run_root.to_string_lossy().as_ref(),
+                CONTEXTLINT_PRIVATE_ROOT_PLACEHOLDER,
+            ),
+        );
+    }
+    for name in CONTEXTLINT_SCRUBBED_ENV {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "Contextlint trace must scrub inherited {name}, got {name}={value:?}"
             ));
         }
         environment.insert((*name).to_owned(), value);
@@ -9984,6 +10828,17 @@ fn resolve_prettier_fixture_cli() -> Result<PathBuf, String> {
         .map_err(|error| format!("canonicalize managed Prettier CLI {requested:?}: {error}"))
 }
 
+fn resolve_contextlint_fixture_cli() -> Result<PathBuf, String> {
+    if let Some(toolchain) = ContextlintToolchain::resolve_if_configured()? {
+        return Ok(toolchain.cli);
+    }
+    let requested = resolve_program("contextlint")
+        .ok_or_else(|| "Contextlint fixture could not resolve its managed CLI".to_owned())?;
+    requested
+        .canonicalize()
+        .map_err(|error| format!("canonicalize managed Contextlint CLI {requested:?}: {error}"))
+}
+
 fn write_pkl_config(
     project: &Path,
     tool: &str,
@@ -10017,8 +10872,12 @@ fn write_pkl_config(
                 phase_id = contract.phase_id,
             )
         };
-        let executable_override = if tool == "prettier" {
-            let executable = resolve_prettier_fixture_cli()?;
+        let executable_override = if matches!(tool, "prettier" | "contextlint") {
+            let executable = if tool == "prettier" {
+                resolve_prettier_fixture_cli()?
+            } else {
+                resolve_contextlint_fixture_cli()?
+            };
             format!(
                 "    executable = \"{}\"\n",
                 pkl_string(&executable.to_string_lossy())
@@ -10209,6 +11068,20 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
         let mut missing = Vec::new();
         if !matches!(PrettierToolchain::resolve_if_configured(), Ok(Some(_))) {
             missing.push(PRETTIER_ROOT_ENV.to_owned());
+        }
+        if resolve_program("python").is_none() {
+            missing.push("python".to_owned());
+        }
+        return if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(missing)
+        };
+    }
+    if spec.id == "contextlint" && std::env::var_os(CONTEXTLINT_ROOT_ENV).is_some() {
+        let mut missing = Vec::new();
+        if !matches!(ContextlintToolchain::resolve_if_configured(), Ok(Some(_))) {
+            missing.push(CONTEXTLINT_ROOT_ENV.to_owned());
         }
         if resolve_program("python").is_none() {
             missing.push("python".to_owned());
@@ -13028,6 +13901,1545 @@ done
     }
 }
 
+fn verify_contextlint_adapter_noop_resistance(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "Contextlint adversarial probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Literal(node),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "Contextlint adversarial probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I"
+            || command != "-c"
+            || node != "node"
+            || marker != CONTEXTLINT_FILES_MARKER
+        {
+            return Err(format!(
+                "Contextlint adversarial probe observed a drifted adapter prefix/marker: {:?}",
+                phase.argv
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "Contextlint adversarial probe lacks Python".to_owned())?;
+        let python = resolve_program(python_program)
+            .or_else(|| {
+                (python_program == "python")
+                    .then(|| resolve_program("python3"))
+                    .flatten()
+            })
+            .ok_or_else(|| format!("cannot resolve {python_program:?} for Contextlint probe"))?
+            .canonicalize()
+            .map_err(|error| {
+                format!("canonicalize Contextlint probe Python {python_program:?}: {error}")
+            })?;
+
+        let root = unique_temp_dir("velvet-glove-contextlint-noop-resistance");
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("create Contextlint probe root {root:?}: {error}"))?;
+        let root = root
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Contextlint probe root: {error}"))?;
+        let result = (|| {
+            let workspace = root.join("workspace");
+            let temporary = root.join("tmp");
+            let graph = root.join("node_modules");
+            let cli_directory = graph.join("@contextlint/cli/dist");
+            let core_directory = graph.join("@contextlint/core");
+            std::fs::create_dir_all(&workspace)
+                .map_err(|error| format!("create Contextlint probe workspace: {error}"))?;
+            std::fs::create_dir_all(&temporary)
+                .map_err(|error| format!("create Contextlint probe TMPDIR: {error}"))?;
+            std::fs::create_dir_all(&cli_directory)
+                .map_err(|error| format!("create Contextlint probe CLI graph: {error}"))?;
+            std::fs::create_dir_all(&core_directory)
+                .map_err(|error| format!("create Contextlint probe core graph: {error}"))?;
+
+            let cli_entry = cli_directory.join("index.js");
+            std::fs::write(&cli_entry, "#!/usr/bin/env node\n")
+                .map_err(|error| format!("write Contextlint probe CLI entry: {error}"))?;
+            let mut cli_permissions = std::fs::metadata(&cli_entry)
+                .map_err(|error| format!("stat Contextlint probe CLI entry: {error}"))?
+                .permissions();
+            cli_permissions.set_mode(0o700);
+            std::fs::set_permissions(&cli_entry, cli_permissions)
+                .map_err(|error| format!("make Contextlint probe CLI executable: {error}"))?;
+            std::fs::write(
+                graph.join("@contextlint/cli/package.json"),
+                r#"{"name":"@contextlint/cli","version":"1.1.1","type":"module","bin":{"contextlint":"dist/index.js"},"dependencies":{"@contextlint/core":"1.1.1"}}
+"#,
+            )
+            .map_err(|error| format!("write Contextlint probe CLI manifest: {error}"))?;
+            std::fs::write(
+                core_directory.join("package.json"),
+                r#"{"name":"@contextlint/core","version":"1.1.1","type":"module"}
+"#,
+            )
+            .map_err(|error| format!("write Contextlint probe core manifest: {error}"))?;
+
+            let fake_node = root.join("node");
+            std::fs::write(
+                &fake_node,
+                "#!/bin/sh\nset -eu\n: > \"$0.invoked\"\nexit 70\n",
+            )
+            .map_err(|error| format!("write Contextlint probe fake Node: {error}"))?;
+            let mut node_permissions = std::fs::metadata(&fake_node)
+                .map_err(|error| format!("stat Contextlint probe fake Node: {error}"))?
+                .permissions();
+            node_permissions.set_mode(0o700);
+            std::fs::set_permissions(&fake_node, node_permissions)
+                .map_err(|error| format!("make Contextlint probe fake Node executable: {error}"))?;
+
+            let config = workspace.join("contextlint.config.json");
+            let document = workspace.join("example.md");
+            let config_bytes = b"{\"include\":[\"does-not-exist/**/*.md\"],\"rules\":[]}\n";
+            let document_bytes = b"# Physical Markdown sentinel\n";
+            std::fs::write(&config, config_bytes)
+                .map_err(|error| format!("write zero-rule Contextlint config: {error}"))?;
+            std::fs::write(&document, document_bytes)
+                .map_err(|error| format!("write Contextlint sentinel document: {error}"))?;
+
+            let capture = root.join("capture");
+            let mut invocation = Command::new(&python);
+            invocation
+                .args(["-I", "-c", adapter])
+                .arg(&fake_node)
+                .arg(&cli_entry)
+                .arg(&config)
+                .arg(CONTEXTLINT_FILES_MARKER)
+                .arg(&document)
+                .current_dir(&workspace)
+                .env_clear()
+                .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+                .env(TMPDIR_ENV, &temporary);
+            let output = run_with_timeout(&mut invocation, &[], timeout, &capture)
+                .map_err(|error| format!("run zero-rule Contextlint probe: {error}"))?;
+            if output.status.code() != Some(2) {
+                return Err(format!(
+                    "zero-rule Contextlint config must fail with status 2, got {:?}\nstdout:\n{}\nstderr:\n{}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ));
+            }
+            if !output.stdout.is_empty() {
+                return Err(format!(
+                    "zero-rule Contextlint probe emitted stdout: {:?}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.contains("must declare at least one rule") {
+                return Err(format!(
+                    "zero-rule Contextlint probe lacked stable rejection: {stderr:?}"
+                ));
+            }
+            if fake_node.with_file_name("node.invoked").exists() {
+                return Err(
+                    "zero-rule Contextlint config invoked Node before structural rejection"
+                        .to_owned(),
+                );
+            }
+            if sorted_entries(&temporary)?.into_iter().any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+            }) {
+                return Err(
+                    "zero-rule Contextlint rejection left a private probe directory".to_owned(),
+                );
+            }
+            if std::fs::read(&config).ok().as_deref() != Some(config_bytes)
+                || std::fs::read(&document).ok().as_deref() != Some(document_bytes)
+            {
+                return Err("zero-rule Contextlint probe mutated project inputs".to_owned());
+            }
+
+            let valid_config =
+                b"{\"rules\":[{\"rule\":\"sec001\",\"options\":{\"sections\":[\"Required\"]}}]}\n";
+            std::fs::write(&config, valid_config)
+                .map_err(|error| format!("write glob-magic Contextlint config: {error}"))?;
+            let ignored_non_markdown = workspace.join("ignored[glob-magic].txt");
+            std::fs::write(&ignored_non_markdown, b"outside Markdown inventory\n").map_err(
+                |error| format!("write Contextlint non-Markdown magic sentinel: {error}"),
+            )?;
+            let non_markdown_node_marker = root.join("contextlint-non-markdown-node-ran");
+            write_executable_probe(
+                &fake_node,
+                &contextlint_fake_node_source(&format!(
+                    ": > '{}'\nprintf '%s\\n' '[]'\nexit 0\n",
+                    shell_probe_path(&non_markdown_node_marker)?,
+                )),
+            )?;
+            let mut invocation = Command::new(&python);
+            invocation
+                .args(["-I", "-c", adapter])
+                .arg(&fake_node)
+                .arg(&cli_entry)
+                .arg(&config)
+                .arg(CONTEXTLINT_FILES_MARKER)
+                .arg(&document)
+                .current_dir(&workspace)
+                .env_clear()
+                .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+                .env(TMPDIR_ENV, &temporary);
+            let output = run_with_timeout(
+                &mut invocation,
+                &[],
+                timeout,
+                &root.join("capture-contextlint-non-markdown-glob-magic"),
+            )
+            .map_err(|error| format!("run Contextlint non-Markdown magic probe: {error}"))?;
+            if output.status.code() != Some(0)
+                || output.stdout != b"[]\n"
+                || !output.stderr.is_empty()
+                || !non_markdown_node_marker.is_file()
+            {
+                return Err(format!(
+                    "Contextlint non-Markdown glob-magic sentinel mismatch: status={:?} node_ran={} stdout={:?} stderr={:?}",
+                    output.status.code(),
+                    non_markdown_node_marker.is_file(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ));
+            }
+            if sorted_entries(&temporary)?.into_iter().any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+            }) {
+                return Err(
+                    "Contextlint non-Markdown glob-magic success left a private probe directory"
+                        .to_owned(),
+                );
+            }
+            write_executable_probe(
+                &fake_node,
+                "#!/bin/sh\nset -eu\n: > \"$0.invoked\"\nexit 70\n",
+            )?;
+            for (label, file_name, expected_magic) in [
+                ("star", "literal*.md", "'*'"),
+                ("question", "literal?.md", "'?'"),
+                ("class", "[x].md", "'[]'"),
+                ("brace", "{x,y}.md", "'{}'"),
+                ("extglob", "+(x).md", "'()'"),
+                ("escape", r"literal\name.md", r"'\\'"),
+            ] {
+                let magic_document = workspace.join(file_name);
+                std::fs::write(&magic_document, b"# Required\n\nPresent.\n").map_err(|error| {
+                    format!("write Contextlint {label} glob-magic document: {error}")
+                })?;
+                let mut invocation = Command::new(&python);
+                invocation
+                    .args(["-I", "-c", adapter])
+                    .arg(&fake_node)
+                    .arg(&cli_entry)
+                    .arg(&config)
+                    .arg(CONTEXTLINT_FILES_MARKER)
+                    .arg(&magic_document)
+                    .current_dir(&workspace)
+                    .env_clear()
+                    .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+                    .env(TMPDIR_ENV, &temporary);
+                let output = run_with_timeout(
+                    &mut invocation,
+                    &[],
+                    timeout,
+                    &root.join(format!("capture-contextlint-glob-magic-{label}")),
+                )
+                .map_err(|error| format!("run Contextlint {label} glob-magic probe: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let expected_suffix = format!(": <workspace>/{file_name}\n");
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.starts_with(
+                        "velvet-glove-contextlint: workspace inventory path contains Contextlint glob magic ",
+                    )
+                    || !stderr.contains(expected_magic)
+                    || !stderr.ends_with(&expected_suffix)
+                    || fake_node.with_file_name("node.invoked").exists()
+                {
+                    return Err(format!(
+                        "Contextlint {label} glob-magic no-op resistance mismatch: status={:?} node_ran={} stdout={:?} stderr={stderr:?}",
+                        output.status.code(),
+                        fake_node.with_file_name("node.invoked").exists(),
+                        String::from_utf8_lossy(&output.stdout),
+                    ));
+                }
+                if sorted_entries(&temporary)?.into_iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+                }) {
+                    return Err(format!(
+                        "Contextlint {label} glob-magic rejection left a private probe directory"
+                    ));
+                }
+                std::fs::remove_file(&magic_document).map_err(|error| {
+                    format!("remove Contextlint {label} glob-magic document: {error}")
+                })?;
+            }
+            let magic_workspace = root.join("ancestor[magic]");
+            std::fs::create_dir(&magic_workspace)
+                .map_err(|error| format!("create Contextlint magic ancestor: {error}"))?;
+            let magic_config = magic_workspace.join("contextlint.config.json");
+            let magic_document = magic_workspace.join("example.md");
+            std::fs::write(&magic_config, valid_config)
+                .map_err(|error| format!("write Contextlint magic-ancestor config: {error}"))?;
+            std::fs::write(&magic_document, b"# Required\n\nPresent.\n")
+                .map_err(|error| format!("write Contextlint magic-ancestor document: {error}"))?;
+            let mut invocation = Command::new(&python);
+            invocation
+                .args(["-I", "-c", adapter])
+                .arg(&fake_node)
+                .arg(&cli_entry)
+                .arg(&magic_config)
+                .arg(CONTEXTLINT_FILES_MARKER)
+                .arg(&magic_document)
+                .current_dir(&magic_workspace)
+                .env_clear()
+                .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+                .env(TMPDIR_ENV, &temporary);
+            let output = run_with_timeout(
+                &mut invocation,
+                &[],
+                timeout,
+                &root.join("capture-contextlint-glob-magic-ancestor"),
+            )
+            .map_err(|error| format!("run Contextlint magic-ancestor probe: {error}"))?;
+            if output.status.code() != Some(2)
+                || !output.stdout.is_empty()
+                || String::from_utf8_lossy(&output.stderr)
+                    != "velvet-glove-contextlint: workspace indicator contains Contextlint glob magic '[]': <workspace>/contextlint.config.json\n"
+                || fake_node.with_file_name("node.invoked").exists()
+            {
+                return Err(format!(
+                    "Contextlint magic-ancestor mismatch: status={:?} node_ran={} stdout={:?} stderr={:?}",
+                    output.status.code(),
+                    fake_node.with_file_name("node.invoked").exists(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ));
+            }
+            let external = root.join("excluded-symlink-external");
+            std::fs::create_dir(&external)
+                .map_err(|error| format!("create Contextlint symlink target: {error}"))?;
+            std::fs::write(external.join("external.md"), b"# External\n")
+                .map_err(|error| format!("write Contextlint symlink target: {error}"))?;
+            for excluded_name in [".git", "node_modules", ".velvet-glove"] {
+                let excluded_link = workspace.join(excluded_name);
+                std::os::unix::fs::symlink(&external, &excluded_link).map_err(|error| {
+                    format!("create Contextlint excluded-name symlink {excluded_name}: {error}")
+                })?;
+                std::fs::write(
+                    &document,
+                    format!("# Required\n\n[external]({excluded_name}/external.md)\n"),
+                )
+                .map_err(|error| {
+                    format!("write Contextlint excluded-name link document: {error}")
+                })?;
+                let mut invocation = Command::new(&python);
+                invocation
+                    .args(["-I", "-c", adapter])
+                    .arg(&fake_node)
+                    .arg(&cli_entry)
+                    .arg(&config)
+                    .arg(CONTEXTLINT_FILES_MARKER)
+                    .arg(&document)
+                    .current_dir(&workspace)
+                    .env_clear()
+                    .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+                    .env(TMPDIR_ENV, &temporary);
+                let capture_name = excluded_name.trim_start_matches('.').replace('.', "-");
+                let output = run_with_timeout(
+                    &mut invocation,
+                    &[],
+                    timeout,
+                    &root.join(format!(
+                        "capture-contextlint-excluded-symlink-{capture_name}"
+                    )),
+                )
+                .map_err(|error| {
+                    format!("run Contextlint excluded-name symlink {excluded_name}: {error}")
+                })?;
+                let expected_stderr = format!(
+                    "velvet-glove-contextlint: workspace inventory rejects symbolic links: <workspace>/{excluded_name}\n"
+                );
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || String::from_utf8_lossy(&output.stderr) != expected_stderr
+                    || fake_node.with_file_name("node.invoked").exists()
+                {
+                    return Err(format!(
+                        "Contextlint excluded-name symlink {excluded_name} mismatch: status={:?} node_ran={} stdout={:?} stderr={:?}",
+                        output.status.code(),
+                        fake_node.with_file_name("node.invoked").exists(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr),
+                    ));
+                }
+                if sorted_entries(&temporary)?.into_iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+                }) {
+                    return Err(format!(
+                        "Contextlint excluded-name symlink {excluded_name} left a private probe directory"
+                    ));
+                }
+                std::fs::remove_file(&excluded_link).map_err(|error| {
+                    format!("remove Contextlint excluded-name symlink {excluded_name}: {error}")
+                })?;
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+fn verify_contextlint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "Contextlint lifecycle probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Literal(node),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "Contextlint lifecycle probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I"
+            || command != "-c"
+            || node != "node"
+            || marker != CONTEXTLINT_FILES_MARKER
+        {
+            return Err(format!(
+                "Contextlint lifecycle probe observed a drifted adapter prefix/marker: {:?}",
+                phase.argv
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "Contextlint lifecycle probe lacks Python".to_owned())?;
+        let python = resolve_program(python_program)
+            .or_else(|| {
+                (python_program == "python")
+                    .then(|| resolve_program("python3"))
+                    .flatten()
+            })
+            .ok_or_else(|| format!("cannot resolve {python_program:?} for Contextlint lifecycle"))?
+            .canonicalize()
+            .map_err(|error| {
+                format!("canonicalize Contextlint lifecycle Python {python_program:?}: {error}")
+            })?;
+
+        let root = unique_temp_dir("velvet-glove-contextlint-lifecycle");
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("create Contextlint lifecycle root {root:?}: {error}"))?;
+        let root = root
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Contextlint lifecycle root: {error}"))?;
+        let result = (|| {
+            let workspace = root.join("workspace");
+            let temporary = root.join("tmp");
+            let graph = root.join("node_modules");
+            let cli_directory = graph.join("@contextlint/cli/dist");
+            let core_directory = graph.join("@contextlint/core");
+            std::fs::create_dir_all(&workspace)
+                .map_err(|error| format!("create Contextlint lifecycle workspace: {error}"))?;
+            std::fs::create_dir_all(&temporary)
+                .map_err(|error| format!("create Contextlint lifecycle TMPDIR: {error}"))?;
+            std::fs::create_dir_all(&cli_directory)
+                .map_err(|error| format!("create Contextlint lifecycle CLI graph: {error}"))?;
+            std::fs::create_dir_all(&core_directory)
+                .map_err(|error| format!("create Contextlint lifecycle core graph: {error}"))?;
+
+            let cli_entry = cli_directory.join("index.js");
+            std::fs::write(&cli_entry, "#!/usr/bin/env node\n")
+                .map_err(|error| format!("write Contextlint lifecycle CLI entry: {error}"))?;
+            let mut cli_permissions = std::fs::metadata(&cli_entry)
+                .map_err(|error| format!("stat Contextlint lifecycle CLI entry: {error}"))?
+                .permissions();
+            cli_permissions.set_mode(0o700);
+            std::fs::set_permissions(&cli_entry, cli_permissions)
+                .map_err(|error| format!("make Contextlint lifecycle CLI executable: {error}"))?;
+            std::fs::write(
+                graph.join("@contextlint/cli/package.json"),
+                r#"{"name":"@contextlint/cli","version":"1.1.1","type":"module","bin":{"contextlint":"dist/index.js"},"dependencies":{"@contextlint/core":"1.1.1"}}
+"#,
+            )
+            .map_err(|error| format!("write Contextlint lifecycle CLI manifest: {error}"))?;
+            std::fs::write(
+                core_directory.join("package.json"),
+                r#"{"name":"@contextlint/core","version":"1.1.1","type":"module"}
+"#,
+            )
+            .map_err(|error| format!("write Contextlint lifecycle core manifest: {error}"))?;
+
+            let fake_node = root.join("node");
+            std::fs::write(
+                &fake_node,
+                r#"#!/bin/sh
+set -eu
+config=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--config" ]; then
+    config=$argument
+    break
+  fi
+  previous=$argument
+done
+case "$config" in
+  */velvet-glove-contextlint-probe-*/contextlint.config.json)
+    printf '%s\n' '[{"file":"probe.md","line":0,"severity":"error","message":"Missing required section \"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"","ruleId":"SEC-001"}]'
+    exit 1
+    ;;
+esac
+: > .contextlint-lifecycle.argv
+for argument in "$@"; do
+  printf '%s\n' "$argument" >> .contextlint-lifecycle.argv
+done
+trap '' HUP INT TERM
+(
+  trap '' HUP INT TERM
+  while :; do
+    sleep 1
+  done
+) &
+printf '%s\n' "$!" > .contextlint-lifecycle-descendant.pid
+printf '%s\n' "$$" > .contextlint-lifecycle-child.pid
+: > .contextlint-lifecycle.ready
+while :; do
+  sleep 1
+done
+"#,
+            )
+            .map_err(|error| format!("write Contextlint lifecycle fake Node: {error}"))?;
+            let mut node_permissions = std::fs::metadata(&fake_node)
+                .map_err(|error| format!("stat Contextlint lifecycle fake Node: {error}"))?
+                .permissions();
+            node_permissions.set_mode(0o700);
+            std::fs::set_permissions(&fake_node, node_permissions).map_err(|error| {
+                format!("make Contextlint lifecycle fake Node executable: {error}")
+            })?;
+
+            let config = workspace.join("contextlint.config.json");
+            let document = workspace.join("example.md");
+            std::fs::write(
+                &config,
+                b"{\"include\":[\"does-not-exist/**/*.md\"],\"rules\":[{\"rule\":\"sec001\",\"options\":{\"sections\":[\"Overview\"]}}]}\n",
+            )
+            .map_err(|error| format!("write Contextlint lifecycle config: {error}"))?;
+            std::fs::write(&document, b"# Overview\n\nComplete.\n")
+                .map_err(|error| format!("write Contextlint lifecycle document: {error}"))?;
+
+            run_contextlint_adapter_lifecycle_scenario(
+                &python, adapter, &fake_node, &cli_entry, &graph, &workspace, &temporary, &config,
+                &document, timeout,
+            )?;
+            verify_contextlint_adapter_adversarial_contract(
+                &python, adapter, &cli_entry, &graph, &root, timeout,
+            )
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn contextlint_private_roots(temporary: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut roots = Vec::new();
+    for entry in sorted_entries(temporary)? {
+        let name = entry.file_name();
+        if !name
+            .to_str()
+            .is_some_and(|name| name.starts_with(CONTEXTLINT_PRIVATE_ROOT_PREFIX))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("inspect Contextlint private root {path:?}: {error}"))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Contextlint private root is not a physical directory: {path:?}"
+            ));
+        }
+        roots.push(path);
+    }
+    Ok(roots)
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn run_contextlint_adapter_lifecycle_scenario(
+    python: &Path,
+    adapter: &str,
+    fake_node: &Path,
+    cli_entry: &Path,
+    graph: &Path,
+    workspace: &Path,
+    temporary: &Path,
+    config: &Path,
+    document: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let child_pid_path = workspace.join(".contextlint-lifecycle-child.pid");
+    let descendant_pid_path = workspace.join(".contextlint-lifecycle-descendant.pid");
+    let ready_path = workspace.join(".contextlint-lifecycle.ready");
+    let argv_path = workspace.join(".contextlint-lifecycle.argv");
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(fake_node)
+        .arg(cli_entry)
+        .arg(config)
+        .arg(CONTEXTLINT_FILES_MARKER)
+        .arg(document)
+        .current_dir(workspace)
+        .env_clear()
+        .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+        .env(TMPDIR_ENV, temporary)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn evaluated Contextlint lifecycle adapter: {error}"))?;
+    let outer_pid = outer.id();
+    let startup_timeout = timeout.min(Duration::from_secs(5));
+    let startup_deadline = std::time::Instant::now() + startup_timeout;
+    while !ready_path.is_file() {
+        if let Some(status) = outer
+            .try_wait()
+            .map_err(|error| format!("poll Contextlint lifecycle adapter: {error}"))?
+        {
+            let output = outer.wait_with_output().map_err(|error| {
+                format!("collect early Contextlint lifecycle adapter output: {error}")
+            })?;
+            return Err(format!(
+                "Contextlint lifecycle adapter exited {status:?} before its authoritative child became ready; stdout={:?}; stderr={:?}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+        if std::time::Instant::now() >= startup_deadline {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(format!(
+                "Contextlint lifecycle child did not become ready within {startup_timeout:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let private_roots = contextlint_private_roots(temporary)?;
+    let [private_root] = private_roots.as_slice() else {
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "Contextlint lifecycle expected one unique private root, got {private_roots:?}"
+        ));
+    };
+    let private_root = private_root.clone();
+
+    let parse_pid = |path: &Path, description: &str| -> Result<u32, String> {
+        let value = std::fs::read_to_string(path)
+            .map_err(|error| format!("read Contextlint lifecycle {description}: {error}"))?;
+        value.trim().parse::<u32>().map_err(|error| {
+            format!("parse Contextlint lifecycle {description} {value:?}: {error}")
+        })
+    };
+    let child_pid = match parse_pid(&child_pid_path, "child PID") {
+        Ok(pid) => pid,
+        Err(error) => {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(error);
+        }
+    };
+    let descendant_pid = match parse_pid(&descendant_pid_path, "descendant PID") {
+        Ok(pid) => pid,
+        Err(error) => {
+            let _ = signal_process_group(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(error);
+        }
+    };
+    if !signal_process_group(child_pid, "0")?.success() {
+        let _ = signal_process(descendant_pid, "KILL");
+        let _ = signal_process(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "Contextlint lifecycle child {child_pid} did not lead an isolated process group"
+        ));
+    }
+
+    let expected_arguments = [
+        "--disable-proto=throw".to_owned(),
+        "--permission".to_owned(),
+        format!("--allow-fs-read={}", graph.display()),
+        format!("--allow-fs-read={}", workspace.display()),
+        format!("--allow-fs-read={}", private_root.display()),
+        cli_entry.to_string_lossy().into_owned(),
+        "lint".to_owned(),
+        "--config".to_owned(),
+        private_root
+            .join("project.config.json")
+            .to_string_lossy()
+            .into_owned(),
+        "--cwd".to_owned(),
+        workspace.to_string_lossy().into_owned(),
+        "--format".to_owned(),
+        "json".to_owned(),
+        "--".to_owned(),
+        document.to_string_lossy().into_owned(),
+    ]
+    .join("\n")
+        + "\n";
+    let observed_arguments = std::fs::read_to_string(&argv_path).map_err(|error| {
+        let _ = signal_process_group(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        format!("read Contextlint lifecycle argv: {error}")
+    })?;
+    if observed_arguments != expected_arguments {
+        let _ = signal_process_group(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "Contextlint lifecycle authoritative argv mismatch: expected {expected_arguments:?}, got {observed_arguments:?}"
+        ));
+    }
+
+    let private_config = private_root.join("contextlint.config.json");
+    let private_project_config = private_root.join("project.config.json");
+    let private_document = private_root.join("probe.md");
+    let expected_private_config = b"{\"rules\":[{\"rule\":\"sec001\",\"options\":{\"sections\":[\"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"]}}]}\n";
+    let expected_private_document = b"# Probe\n";
+    let private_check = (|| {
+        if std::fs::read(&private_config).ok().as_deref() != Some(expected_private_config)
+            || std::fs::read(&private_project_config).ok().as_deref()
+                != std::fs::read(config).ok().as_deref()
+            || std::fs::read(&private_document).ok().as_deref() != Some(expected_private_document)
+        {
+            return Err("Contextlint lifecycle private probe bytes drifted".to_owned());
+        }
+        for (path, expected_mode) in [
+            (&private_root, 0o700),
+            (&private_root.join("home"), 0o700),
+            (&private_root.join("tmp"), 0o700),
+            (&private_root.join("xdg-cache"), 0o700),
+            (&private_config, 0o600),
+            (&private_project_config, 0o600),
+            (&private_document, 0o600),
+        ] {
+            let mode = std::fs::metadata(path)
+                .map_err(|error| format!("stat Contextlint private probe {path:?}: {error}"))?
+                .permissions()
+                .mode()
+                & 0o777;
+            if mode != expected_mode {
+                return Err(format!(
+                    "Contextlint private probe {path:?} mode {mode:o}, expected {expected_mode:o}"
+                ));
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = private_check {
+        let _ = signal_process_group(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(error);
+    }
+
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process_group(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "send SIGTERM to Contextlint lifecycle adapter {outer_pid}: {term:?}"
+        ));
+    }
+
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(outer.wait_with_output());
+    });
+    let completion_timeout = timeout.min(Duration::from_secs(5));
+    let output = match receiver.recv_timeout(completion_timeout) {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            let _ = signal_process_group(child_pid, "KILL");
+            return Err(format!(
+                "wait for terminated Contextlint lifecycle adapter: {error}"
+            ));
+        }
+        Err(error) => {
+            let _ = signal_process_group(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = receiver.recv_timeout(Duration::from_secs(2));
+            return Err(format!(
+                "Contextlint lifecycle adapter or inherited output pipe remained open for {completion_timeout:?}: {error}"
+            ));
+        }
+    };
+    let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+    let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+    let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+    if child_alive {
+        let _ = signal_process(child_pid, "KILL");
+    }
+    if descendant_alive {
+        let _ = signal_process(descendant_pid, "KILL");
+    }
+    if group_alive {
+        let _ = signal_process_group(child_pid, "KILL");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() != Some(2) {
+        Err(format!(
+            "SIGTERM Contextlint lifecycle adapter exited {:?}, expected status 2; stdout={stdout:?}; stderr={stderr:?}",
+            output.status.code()
+        ))
+    } else if child_alive {
+        Err(format!(
+            "SIGTERM Contextlint lifecycle adapter left child {child_pid} alive"
+        ))
+    } else if descendant_alive {
+        Err(format!(
+            "SIGTERM Contextlint lifecycle adapter left same-group descendant {descendant_pid} alive"
+        ))
+    } else if group_alive {
+        Err(format!(
+            "SIGTERM Contextlint lifecycle adapter left process group {child_pid} alive"
+        ))
+    } else if !stdout.is_empty() {
+        Err(format!(
+            "Contextlint lifecycle adapter emitted unexpected stdout: {stdout:?}"
+        ))
+    } else if stderr != "velvet-glove-contextlint: received signal 15\n" {
+        Err(format!(
+            "Contextlint lifecycle adapter emitted unexpected stderr: {stderr:?}"
+        ))
+    } else if private_root.exists() {
+        Err("Contextlint lifecycle adapter left its private probe root behind".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+struct ContextlintProbeProject {
+    workspace: PathBuf,
+    temporary: PathBuf,
+    config: PathBuf,
+    document: PathBuf,
+}
+
+#[cfg(unix)]
+fn prepare_contextlint_probe_project(
+    root: &Path,
+    label: &str,
+) -> Result<ContextlintProbeProject, String> {
+    let scenario = root.join(label);
+    let workspace = scenario.join("workspace");
+    let temporary = scenario.join("tmp");
+    std::fs::create_dir_all(&workspace)
+        .map_err(|error| format!("create Contextlint {label} workspace: {error}"))?;
+    std::fs::create_dir_all(&temporary)
+        .map_err(|error| format!("create Contextlint {label} TMPDIR: {error}"))?;
+    let config = workspace.join("contextlint.config.json");
+    let document = workspace.join("example.md");
+    std::fs::write(
+        &config,
+        b"{\"rules\":[{\"rule\":\"sec001\",\"options\":{\"sections\":[\"Overview\"]}}]}\n",
+    )
+    .map_err(|error| format!("write Contextlint {label} config: {error}"))?;
+    std::fs::write(&document, b"# Overview\n\nComplete.\n")
+        .map_err(|error| format!("write Contextlint {label} document: {error}"))?;
+    Ok(ContextlintProbeProject {
+        workspace,
+        temporary,
+        config,
+        document,
+    })
+}
+
+#[cfg(unix)]
+fn contextlint_fake_node_source(project_body: &str) -> String {
+    let mut source = String::from(
+        r#"#!/bin/sh
+set -eu
+config=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--config" ]; then
+    config=$argument
+    break
+  fi
+  previous=$argument
+done
+case "$config" in
+  */velvet-glove-contextlint-probe-*/contextlint.config.json)
+    printf '%s\n' '[{"file":"probe.md","line":0,"severity":"error","message":"Missing required section \"__VELVET_GLOVE_CONTEXTLINT_COMPLETION__\"","ruleId":"SEC-001"}]'
+    exit 1
+    ;;
+esac
+"#,
+    );
+    source.push_str(project_body);
+    source
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn run_contextlint_adapter_probe(
+    python: &Path,
+    adapter: &str,
+    node: &Path,
+    cli_entry: &Path,
+    project: &ContextlintProbeProject,
+    config: &Path,
+    document: &Path,
+    timeout: Duration,
+    capture: &Path,
+) -> Result<BoundedOutput, String> {
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(node)
+        .arg(cli_entry)
+        .arg(config)
+        .arg(CONTEXTLINT_FILES_MARKER)
+        .arg(document)
+        .current_dir(&project.workspace)
+        .env_clear()
+        .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+        .env(TMPDIR_ENV, &project.temporary);
+    run_with_timeout(
+        &mut command,
+        &[],
+        timeout.min(Duration::from_secs(10)),
+        capture,
+    )
+    .map_err(|error| format!("run Contextlint adapter probe: {error}"))
+}
+
+#[cfg(unix)]
+fn assert_contextlint_private_roots_removed(temporary: &Path, label: &str) -> Result<(), String> {
+    let roots = contextlint_private_roots(temporary)?;
+    if roots.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Contextlint {label} left private roots behind: {roots:?}"
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn verify_contextlint_adapter_adversarial_contract(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    graph: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    verify_contextlint_authoritative_config_copy(python, adapter, cli_entry, graph, root, timeout)?;
+    verify_contextlint_normal_exit_descendants(python, adapter, cli_entry, root, timeout)?;
+    verify_contextlint_output_cap(python, adapter, cli_entry, root, timeout)?;
+    verify_contextlint_cleanup_signal_cutoff(python, adapter, cli_entry, root, timeout)?;
+    verify_contextlint_guarded_spawn_signal(python, adapter, cli_entry, root, timeout)?;
+    verify_contextlint_preflight_paths(python, adapter, cli_entry, root, timeout)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_contextlint_authoritative_config_copy(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    graph: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let project = prepare_contextlint_probe_project(root, "authoritative-config")?;
+    let node = root.join("contextlint-authoritative-config-node");
+    let captured_path = root.join("contextlint-authoritative-config-path");
+    let captured_bytes = root.join("contextlint-authoritative-config-bytes");
+    let config_bytes = std::fs::read(&project.config)
+        .map_err(|error| format!("read Contextlint authoritative config baseline: {error}"))?;
+    let source = contextlint_fake_node_source(&format!(
+        r#"printf '%s\n' "$config" > '{captured_path}'
+printf '%s\n' '{{"rules":[{{"rule":"not-pinned"}}]}}' > '{source_config}'
+/bin/cp "$config" '{captured_bytes}'
+printf '%s' '{original_config}' > '{source_config}'
+printf '%s\n' '[]'
+exit 0
+"#,
+        captured_path = shell_probe_path(&captured_path)?,
+        source_config = shell_probe_path(&project.config)?,
+        captured_bytes = shell_probe_path(&captured_bytes)?,
+        original_config = String::from_utf8(config_bytes.clone())
+            .map_err(|error| format!("Contextlint test config is not UTF-8: {error}"))?
+            .replace('\'', "'\\''"),
+    ));
+    write_executable_probe(&node, &source)?;
+    let output = run_contextlint_adapter_probe(
+        python,
+        adapter,
+        &node,
+        cli_entry,
+        &project,
+        &project.config,
+        &project.document,
+        timeout,
+        &root.join("capture-contextlint-authoritative-config"),
+    )?;
+    let private_config = PathBuf::from(
+        std::fs::read_to_string(&captured_path)
+            .map_err(|error| format!("read Contextlint authoritative config path: {error}"))?
+            .trim(),
+    );
+    let observed = std::fs::read(&captured_bytes)
+        .map_err(|error| format!("read Contextlint authoritative config capture: {error}"))?;
+    let source_after = std::fs::read(&project.config)
+        .map_err(|error| format!("read Contextlint restored source config: {error}"))?;
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-contextlint: contextlint.config.json changed during contextlint: <workspace>/contextlint.config.json\n"
+        || observed != config_bytes
+        || source_after != config_bytes
+        || !private_config.starts_with(&project.temporary)
+        || private_config.starts_with(&project.workspace)
+        || private_config.file_name() != Some(OsStr::new("project.config.json"))
+        || private_config.exists()
+        || private_config.parent().is_some_and(Path::exists)
+    {
+        return Err(format!(
+            "Contextlint authoritative private config mismatch: status={:?} stdout={:?} stderr={:?} private={private_config:?} bytes={} source={} graph={graph:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+            observed == config_bytes,
+            source_after == config_bytes,
+        ));
+    }
+    assert_contextlint_private_roots_removed(&project.temporary, "authoritative config")
+}
+
+#[cfg(unix)]
+fn verify_contextlint_normal_exit_descendants(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    for (label, redirect) in [
+        ("closed-stdio-descendant", " >/dev/null 2>&1"),
+        ("inherited-pipe-descendant", ""),
+    ] {
+        let project = prepare_contextlint_probe_project(root, label)?;
+        let node = root.join(format!("contextlint-{label}-node"));
+        let pid_record = root.join(format!("contextlint-{label}.pid"));
+        let ready = root.join(format!("contextlint-{label}.ready"));
+        let body = format!(
+            r#"(
+  trap '' HUP INT TERM
+  : > '{ready}'
+  while :; do sleep 1; done
+){redirect} &
+descendant=$!
+while [ ! -f '{ready}' ]; do sleep 0.01; done
+printf '%s\n' "$descendant" > '{pid_record}'
+printf '%s\n' '[]'
+exit 0
+"#,
+            ready = shell_probe_path(&ready)?,
+            pid_record = shell_probe_path(&pid_record)?,
+        );
+        write_executable_probe(&node, &contextlint_fake_node_source(&body))?;
+        let output = run_contextlint_adapter_probe(
+            python,
+            adapter,
+            &node,
+            cli_entry,
+            &project,
+            &project.config,
+            &project.document,
+            timeout,
+            &root.join(format!("capture-contextlint-{label}")),
+        )?;
+        let descendant = read_pid_file(&pid_record, &format!("Contextlint {label}"))?;
+        let descendant_alive = process_survives(descendant, Duration::from_secs(1))?;
+        if descendant_alive {
+            let _ = signal_process(descendant, "KILL");
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.code() != Some(2)
+            || !output.stdout.is_empty()
+            || descendant_alive
+            || stderr
+                != "velvet-glove-contextlint: native Contextlint left same-group descendants after child exit\n"
+        {
+            return Err(format!(
+                "Contextlint {label} sweep mismatch: status={:?} descendant={descendant}:{descendant_alive} stdout={:?} stderr={stderr:?}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+            ));
+        }
+        assert_contextlint_private_roots_removed(&project.temporary, label)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_contextlint_output_cap(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    const LIMIT_ENTRY: &str = "MAX_OUTPUT_BYTES = 16 * 1024 * 1024";
+    if adapter.matches(LIMIT_ENTRY).count() != 1 {
+        return Err("Contextlint output-cap probe could not locate one limit".to_owned());
+    }
+    let instrumented = adapter.replacen(LIMIT_ENTRY, "MAX_OUTPUT_BYTES = 1024", 1);
+    let project = prepare_contextlint_probe_project(root, "output-cap")?;
+    let node = root.join("contextlint-output-cap-node");
+    let oversized = "x".repeat(2048);
+    write_executable_probe(
+        &node,
+        &contextlint_fake_node_source(&format!("printf '%s' '{oversized}'\nexit 0\n")),
+    )?;
+    let output = run_contextlint_adapter_probe(
+        python,
+        &instrumented,
+        &node,
+        cli_entry,
+        &project,
+        &project.config,
+        &project.document,
+        timeout,
+        &root.join("capture-contextlint-output-cap"),
+    )?;
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-contextlint: adapter failure: combined contextlint output exceeded 1024 bytes\n"
+    {
+        return Err(format!(
+            "Contextlint output-cap mismatch: status={:?} stdout={:?} stderr={:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    assert_contextlint_private_roots_removed(&project.temporary, "output cap")
+}
+
+#[cfg(unix)]
+fn wait_for_contextlint_barrier(
+    outer: &mut std::process::Child,
+    outer_pid: u32,
+    ready: &Path,
+    label: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let startup_timeout = timeout.min(Duration::from_secs(5));
+    let deadline = std::time::Instant::now() + startup_timeout;
+    while !ready.is_file() {
+        if let Some(status) = outer
+            .try_wait()
+            .map_err(|error| format!("poll Contextlint {label} adapter: {error}"))?
+        {
+            return Err(format!(
+                "Contextlint {label} adapter exited {status:?} before its barrier"
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(format!(
+                "Contextlint {label} adapter did not reach its barrier within {startup_timeout:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn collect_contextlint_outer(
+    outer: std::process::Child,
+    outer_pid: u32,
+    label: &str,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(outer.wait_with_output());
+    });
+    match receiver.recv_timeout(timeout.min(Duration::from_secs(5))) {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(format!("wait for Contextlint {label} adapter: {error}")),
+        Err(error) => {
+            let _ = signal_process(outer_pid, "KILL");
+            Err(format!(
+                "Contextlint {label} adapter did not finish: {error}"
+            ))
+        }
+    }
+}
+
+#[cfg(unix)]
+fn verify_contextlint_cleanup_signal_cutoff(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    const READY_ENV: &str = "VELVET_GLOVE_CONTEXTLINT_CLEANUP_PROBE_READY";
+    const RELEASE_ENV: &str = "VELVET_GLOVE_CONTEXTLINT_CLEANUP_PROBE_RELEASE";
+    const CLEANUP_ENTRY: &str =
+        "        cleaning = True\n        try:\n            if run_root is not None:\n";
+    if adapter.matches(CLEANUP_ENTRY).count() != 1 {
+        return Err("Contextlint cleanup probe could not locate one cleanup entry".to_owned());
+    }
+    let instrumented_entry = format!(
+        "        cleaning = True\n        cleanup_probe_ready = os.environ.get({READY_ENV:?})\n        cleanup_probe_release = os.environ.get({RELEASE_ENV:?})\n        if cleanup_probe_ready is not None and cleanup_probe_release is not None:\n            with open(cleanup_probe_ready, \"xb\"):\n                pass\n            while not os.path.exists(cleanup_probe_release):\n                time.sleep(0.01)\n        try:\n            if run_root is not None:\n"
+    );
+    let instrumented = adapter.replacen(CLEANUP_ENTRY, &instrumented_entry, 1);
+    let project = prepare_contextlint_probe_project(root, "cleanup-signal")?;
+    let node = root.join("contextlint-cleanup-signal-node");
+    let private_config_record = root.join("contextlint-cleanup-signal-private-config");
+    write_executable_probe(
+        &node,
+        &contextlint_fake_node_source(&format!(
+            "printf '%s\\n' \"$config\" > '{}'\nprintf '%s\\n' '[]'\nexit 0\n",
+            shell_probe_path(&private_config_record)?,
+        )),
+    )?;
+    let ready = root.join("contextlint-cleanup-signal.ready");
+    let release = root.join("contextlint-cleanup-signal.release");
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", &instrumented])
+        .arg(&node)
+        .arg(cli_entry)
+        .arg(&project.config)
+        .arg(CONTEXTLINT_FILES_MARKER)
+        .arg(&project.document)
+        .current_dir(&project.workspace)
+        .env_clear()
+        .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+        .env(TMPDIR_ENV, &project.temporary)
+        .env(READY_ENV, &ready)
+        .env(RELEASE_ENV, &release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn Contextlint cleanup-signal adapter: {error}"))?;
+    let outer_pid = outer.id();
+    wait_for_contextlint_barrier(&mut outer, outer_pid, &ready, "cleanup-signal", timeout)?;
+    let private_config = PathBuf::from(
+        std::fs::read_to_string(&private_config_record)
+            .map_err(|error| format!("read Contextlint cleanup private config: {error}"))?
+            .trim(),
+    );
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "send cleanup-window SIGTERM to Contextlint adapter {outer_pid}: {term:?}"
+        ));
+    }
+    std::fs::write(&release, b"release\n")
+        .map_err(|error| format!("release Contextlint cleanup barrier: {error}"))?;
+    let output = collect_contextlint_outer(outer, outer_pid, "cleanup-signal", timeout)?;
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-contextlint: received signal 15\n"
+        || private_config.exists()
+        || private_config.parent().is_some_and(Path::exists)
+    {
+        return Err(format!(
+            "Contextlint cleanup-signal mismatch: status={:?} stdout={:?} stderr={:?} private={private_config:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    assert_contextlint_private_roots_removed(&project.temporary, "cleanup signal")
+}
+
+#[cfg(unix)]
+fn verify_contextlint_guarded_spawn_signal(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    const READY_ENV: &str = "VELVET_GLOVE_CONTEXTLINT_SPAWN_PROBE_READY";
+    const RELEASE_ENV: &str = "VELVET_GLOVE_CONTEXTLINT_SPAWN_PROBE_RELEASE";
+    const SPAWN_ENTRY: &str = "        spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n        try:\n";
+    if adapter.matches(SPAWN_ENTRY).count() != 1 {
+        return Err("Contextlint spawn probe could not locate one guarded spawn entry".to_owned());
+    }
+    let instrumented_entry = format!(
+        "        spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n        spawn_probe_ready = os.environ.get({READY_ENV:?})\n        spawn_probe_release = os.environ.get({RELEASE_ENV:?})\n        if spawn_probe_ready is not None and spawn_probe_release is not None:\n            with open(spawn_probe_ready, \"xb\"):\n                pass\n            while not os.path.exists(spawn_probe_release):\n                time.sleep(0.01)\n        try:\n"
+    );
+    let instrumented = adapter.replacen(SPAWN_ENTRY, &instrumented_entry, 1);
+    let project = prepare_contextlint_probe_project(root, "guarded-spawn")?;
+    let node = root.join("contextlint-guarded-spawn-node");
+    let node_marker = root.join("contextlint-guarded-spawn-node-ran");
+    write_executable_probe(
+        &node,
+        &format!(
+            "#!/bin/sh\nset -eu\n: > '{}'\ntrap '' HUP INT TERM\nwhile :; do sleep 1; done\n",
+            shell_probe_path(&node_marker)?,
+        ),
+    )?;
+    let ready = root.join("contextlint-guarded-spawn.ready");
+    let release = root.join("contextlint-guarded-spawn.release");
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", &instrumented])
+        .arg(&node)
+        .arg(cli_entry)
+        .arg(&project.config)
+        .arg(CONTEXTLINT_FILES_MARKER)
+        .arg(&project.document)
+        .current_dir(&project.workspace)
+        .env_clear()
+        .env(PATH_ENV, CONTEXTLINT_CHILD_PATH)
+        .env(TMPDIR_ENV, &project.temporary)
+        .env(READY_ENV, &ready)
+        .env(RELEASE_ENV, &release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn Contextlint guarded-spawn adapter: {error}"))?;
+    let outer_pid = outer.id();
+    wait_for_contextlint_barrier(&mut outer, outer_pid, &ready, "guarded-spawn", timeout)?;
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "send spawn-window SIGTERM to Contextlint adapter {outer_pid}: {term:?}"
+        ));
+    }
+    std::fs::write(&release, b"release\n")
+        .map_err(|error| format!("release Contextlint guarded-spawn barrier: {error}"))?;
+    let output = collect_contextlint_outer(outer, outer_pid, "guarded-spawn", timeout)?;
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || node_marker.exists()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-contextlint: received signal 15\n"
+    {
+        return Err(format!(
+            "Contextlint guarded-spawn mismatch: status={:?} node_ran={} stdout={:?} stderr={:?}",
+            output.status.code(),
+            node_marker.exists(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    assert_contextlint_private_roots_removed(&project.temporary, "guarded spawn")
+}
+
+#[cfg(unix)]
+fn verify_contextlint_preflight_paths(
+    python: &Path,
+    adapter: &str,
+    cli_entry: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let node = root.join("contextlint-preflight-node");
+    let marker = root.join("contextlint-preflight-node-ran");
+    write_executable_probe(
+        &node,
+        &format!(
+            "#!/bin/sh\nset -eu\n: > '{}'\nexit 99\n",
+            shell_probe_path(&marker)?,
+        ),
+    )?;
+
+    let symlink_project = prepare_contextlint_probe_project(root, "indicator-symlink")?;
+    let alias = root.join("contextlint-indicator-workspace-alias");
+    std::os::unix::fs::symlink(&symlink_project.workspace, &alias)
+        .map_err(|error| format!("create Contextlint workspace alias: {error}"))?;
+    let output = run_contextlint_adapter_probe(
+        python,
+        adapter,
+        &node,
+        cli_entry,
+        &symlink_project,
+        &alias.join("contextlint.config.json"),
+        &alias.join("example.md"),
+        timeout,
+        &root.join("capture-contextlint-indicator-symlink"),
+    )?;
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-contextlint: workspace indicator traverses a symbolic link\n"
+        || marker.exists()
+    {
+        return Err(format!(
+            "Contextlint indicator-symlink mismatch: status={:?} marker={} stdout={:?} stderr={:?}",
+            output.status.code(),
+            marker.exists(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+
+    let inside_project = prepare_contextlint_probe_project(root, "inside-workspace-tmp")?;
+    let inside_tmp = inside_project.workspace.join("tmp");
+    std::fs::create_dir(&inside_tmp)
+        .map_err(|error| format!("create Contextlint inside-workspace TMPDIR: {error}"))?;
+    let inside = ContextlintProbeProject {
+        workspace: inside_project.workspace.clone(),
+        temporary: inside_tmp,
+        config: inside_project.config.clone(),
+        document: inside_project.document.clone(),
+    };
+    let output = run_contextlint_adapter_probe(
+        python,
+        adapter,
+        &node,
+        cli_entry,
+        &inside,
+        &inside.config,
+        &inside.document,
+        timeout,
+        &root.join("capture-contextlint-inside-workspace-tmp"),
+    )?;
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || String::from_utf8_lossy(&output.stderr)
+            != "velvet-glove-contextlint: TMPDIR must resolve outside the Contextlint workspace\n"
+        || marker.exists()
+    {
+        return Err(format!(
+            "Contextlint inside-workspace TMPDIR mismatch: status={:?} marker={} stdout={:?} stderr={:?}",
+            output.status.code(),
+            marker.exists(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+
+    let unwritable = prepare_contextlint_probe_project(root, "unwritable-tmp")?;
+    let mut permissions = std::fs::metadata(&unwritable.temporary)
+        .map_err(|error| format!("inspect Contextlint unwritable TMPDIR: {error}"))?
+        .permissions();
+    permissions.set_mode(0o500);
+    std::fs::set_permissions(&unwritable.temporary, permissions)
+        .map_err(|error| format!("make Contextlint TMPDIR unwritable: {error}"))?;
+    let output = run_contextlint_adapter_probe(
+        python,
+        adapter,
+        &node,
+        cli_entry,
+        &unwritable,
+        &unwritable.config,
+        &unwritable.document,
+        timeout,
+        &root.join("capture-contextlint-unwritable-tmp"),
+    );
+    let mut permissions = std::fs::metadata(&unwritable.temporary)
+        .map_err(|error| format!("reinspect Contextlint unwritable TMPDIR: {error}"))?
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&unwritable.temporary, permissions)
+        .map_err(|error| format!("restore Contextlint TMPDIR permissions: {error}"))?;
+    let output = output?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || marker.exists()
+        || stderr.contains(CONTEXTLINT_PRIVATE_ROOT_PREFIX)
+        || stderr
+            != "velvet-glove-contextlint: cannot create private completion-probe root: [Errno 13] Permission denied: '<private-probe>'\n"
+    {
+        return Err(format!(
+            "Contextlint unwritable TMPDIR mismatch: status={:?} marker={} stdout={:?} stderr={stderr:?}",
+            output.status.code(),
+            marker.exists(),
+            String::from_utf8_lossy(&output.stdout),
+        ));
+    }
+    assert_contextlint_private_roots_removed(&unwritable.temporary, "unwritable TMPDIR")
+}
+
 fn verify_biome_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
     #[cfg(not(unix))]
     {
@@ -13960,6 +16372,11 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
     for alias in aliases {
         output = output.replace(alias, "<workspace>");
     }
+    let mut contextlint_cli_aliases = contextlint_cli_path_aliases();
+    contextlint_cli_aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
+    for alias in contextlint_cli_aliases {
+        output = output.replace(&alias, "contextlint");
+    }
     let mut node_module_aliases = node_module_path_aliases();
     node_module_aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
     for alias in node_module_aliases {
@@ -13999,6 +16416,25 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
             output = output.replace(script, "<inline-script>");
         }
     }
+    if case.tool == "contextlint" {
+        let adapter_scripts = case
+            .spec
+            .phases
+            .values()
+            .flat_map(|phase| phase.argv.iter())
+            .filter_map(|argument| match argument {
+                ArgvElement::Literal(script)
+                    if script.contains(CONTEXTLINT_FILES_MARKER) && script.contains('\n') =>
+                {
+                    Some(script)
+                }
+                ArgvElement::Literal(_) | ArgvElement::Token(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for script in adapter_scripts {
+            output = output.replace(script, "<inline-script>");
+        }
+    }
     output
 }
 
@@ -14008,6 +16444,31 @@ fn prettier_cli_path_aliases() -> Vec<String> {
         paths.push(PathBuf::from(root).join("package/node_modules/prettier/bin/prettier.cjs"));
     }
     if let Some(path) = resolve_program("prettier") {
+        paths.push(path);
+    }
+
+    let mut aliases = Vec::new();
+    for path in paths {
+        let rendered = path.to_string_lossy().into_owned();
+        if !rendered.is_empty() && !aliases.contains(&rendered) {
+            aliases.push(rendered);
+        }
+        if let Ok(canonical) = path.canonicalize() {
+            let canonical = canonical.to_string_lossy().into_owned();
+            if !aliases.contains(&canonical) {
+                aliases.push(canonical);
+            }
+        }
+    }
+    aliases
+}
+
+fn contextlint_cli_path_aliases() -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(root) = std::env::var_os(CONTEXTLINT_ROOT_ENV) {
+        paths.push(PathBuf::from(root).join("package/node_modules/@contextlint/cli/dist/index.js"));
+    }
+    if let Ok(path) = resolve_contextlint_fixture_cli() {
         paths.push(path);
     }
 
