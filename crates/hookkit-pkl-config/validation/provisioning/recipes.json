@@ -644,6 +644,57 @@
       "bootstrap": []
     },
     {
+      "id": "macos-arm64-errcheck",
+      "provisioningGroup": "go",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "errcheck-go",
+          "version": "1.26.5",
+          "miseTool": "go@1.26.5",
+          "installationSource": "official go1.26.5 Darwin arm64 archive at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a, tag commit c19862e5f8415b4f24b189d065ed739517c548ba, and the exact mise archive lock in validation/provisioning/mise.lock",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock",
+            "sha256": "efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a"
+          },
+          "probe": {
+            "argv": ["go", "version"],
+            "match": "prefix",
+            "expected": "go version go1.26.5 "
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["go"],
+      "bootstrap": [
+        {
+          "id": "errcheck-go-mod-download",
+          "argv": [
+            "go",
+            "-C",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/errcheck",
+            "mod",
+            "download",
+            "all"
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOMODCACHE": "{state}/errcheck-go1.26.5-mod-cache",
+            "GOCACHE": "{state}/errcheck-bootstrap-go1.26.5-build-cache",
+            "GOPROXY": "https://proxy.golang.org",
+            "GOSUMDB": "sum.golang.org"
+          },
+          "workingDirectory": "/",
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/errcheck/go.sum"
+        }
+      ]
+    },
+    {
       "id": "macos-arm64-rust",
       "provisioningGroup": "rust",
       "platform": "macos",
@@ -1668,6 +1719,55 @@
       },
       "caseExecutables": ["gofmt", "python"],
       "cases": ["clean", "multi-file", "operational-failure", "unformatted"],
+      "representativeCase": "multi-file"
+    },
+    {
+      "id": "errcheck-macos-arm64",
+      "toolId": "errcheck",
+      "environmentId": "macos-arm64-errcheck",
+      "version": "1.20.0",
+      "installationSource": "official github.com/kisielk/errcheck v1.20.0 Go module proxy archive for tag commit 4d54a96416c48063572cc1c24ae072fff58a63b4 pinned at SHA-256 50dbdc1e07128552bda3dad27dfaad9dca100d16869bf58485fe05ed4a45f0b6, exact module closure in validation/provisioning/errcheck/go.sum, reproducibly built to SHA-256 4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c with official Go 1.26.5 Darwin arm64 archive pinned at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a and tag commit c19862e5f8415b4f24b189d065ed739517c548ba",
+      "integrity": {
+        "kind": "go-module-build",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/errcheck/go.mod",
+        "url": "https://proxy.golang.org/github.com/kisielk/errcheck/@v/v1.20.0.zip",
+        "sha256": "50dbdc1e07128552bda3dad27dfaad9dca100d16869bf58485fe05ed4a45f0b6",
+        "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/errcheck/go.mod",
+        "moduleManifestSha256": "06abec38397f045f72e5496d0430dd3473ef2be2fe0187b4d29cd7ff7dd968ef",
+        "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/errcheck/go.sum",
+        "moduleLockSha256": "594d33a278d8c5313b8b7015f6d8e9590ed0e53ea393296fa9c03ea58a8fa145",
+        "builtArtifactSha256": "4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c",
+        "buildToolchainComponentId": "errcheck-go",
+        "buildWorkingDirectory": "/",
+        "buildArgv": [
+          "go",
+          "install",
+          "-trimpath",
+          "-ldflags",
+          "-s -w -buildid=",
+          "github.com/kisielk/errcheck@v1.20.0"
+        ],
+        "buildEnvironment": {
+          "GOTOOLCHAIN": "local",
+          "CGO_ENABLED": "0",
+          "GOOS": "darwin",
+          "GOARCH": "arm64",
+          "GOMODCACHE": "{state}/errcheck-go1.26.5-mod-cache",
+          "GOCACHE": "{state}/errcheck-build-1.20.0/go-build-cache",
+          "GOPROXY": "file://{state}/errcheck-go1.26.5-mod-cache/cache/download",
+          "GOSUMDB": "off",
+          "GOBIN": "{state}/errcheck-build-1.20.0/install/bin"
+        },
+        "minOsVersion": "12.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["go", "version", "-m", "errcheck"],
+        "match": "exact",
+        "expected": "github.com/kisielk/errcheck v1.20.0 h1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=; go1.26.5; darwin/arm64; sha256:4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c"
+      },
+      "caseExecutables": ["errcheck", "go", "python"],
+      "cases": ["clean", "unhandled", "multi-file", "operational-failure"],
       "representativeCase": "multi-file"
     },
     {

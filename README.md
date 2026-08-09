@@ -156,13 +156,14 @@ just tool-case eslint multi-file
 just tool-case ghalint-workflow multi-workflow
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
+just tool-case errcheck multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Twenty behavior-rich contracts across sixteen environments: jq, Buf, and
+# Twenty-one behavior-rich contracts across seventeen environments: jq, Buf, and
 # Vacuum data formats; shared Node; dedicated Prettier, Contextlint, dclint,
-# ESLint, and GitHub Actions; Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security,
-# and native macOS.
+# ESLint, and GitHub Actions; Python, gofmt, errcheck, Rust, Cargo Clippy/Fmt,
+# Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -305,6 +306,21 @@ dirty-valid and parse-invalid batch cannot partially mutate. Exact archive/tag
 provenance, command traces, environment controls, and filesystem limitations
 are in the
 [gofmt contract](docs/pinned-tool-environments.md#gofmt-validation-contract).
+
+The dedicated errcheck lane pins errcheck 1.20.0 from its exact Go proxy and
+module-sum closure, then reproducibly builds it with the checksum-locked Go
+1.26.5 Darwin arm64 toolchain. The outer and denied-network runners both bind
+the proxy zip, module manifests, binary SHA-256, and full embedded Go build
+metadata. Its read-only adapter verifies the selected module and physical Go
+source inventory before running one workspace-wide check, accepts only
+canonical source-bound diagnostics, scrubs network and toolchain overrides,
+and performs bounded signal and descendant cleanup. Clean, unchecked-error,
+multi-file/workspace-scope, and operational cases run on Claude and Codex across
+immediate and compatibility-deferred surfaces; the adversarial lifecycle also
+proves false-clean, mutation, malformed-output, alias, signal, and orphan
+failure behavior. Exact provenance and remaining filesystem/process boundaries
+are in the
+[errcheck contract](docs/pinned-tool-environments.md#errcheck-validation-contract).
 
 The dedicated Cargo Clippy lane pins the official Rust and Cargo 1.97.1
 distribution with Clippy 0.1.97. Its isolated adapter runs frozen read-only

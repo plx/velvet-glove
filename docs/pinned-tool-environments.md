@@ -15,6 +15,7 @@ just tool-case dclint autofix-multi-file
 just tool-case eslint multi-file
 just tool-case ghalint-workflow multi-workflow
 just tool-case go-fmt multi-file
+just tool-case errcheck multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
@@ -52,11 +53,13 @@ Before a case runs, the driver:
    required version, and the declared compiler, Xcode, and SDK minimum probes
    pass;
 2. installs only the selected mise-managed tools in `--locked` mode and verifies
-   every directly managed Rust or Ruby archive, and every Betterleaks or
-   ghalint source, patch, module-lock, and build-artifact digest, against
+   every directly managed Rust or Ruby archive, every Betterleaks or ghalint
+   source, patch, module-lock, and build-artifact digest, and the errcheck proxy,
+   module-input, reproducible-artifact, and Go build-identity chain against
    committed values;
-3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, Betterleaks Go, and
-   ghalint Go module graphs from their committed locks as applicable; Cargo runs from `/`
+3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, Betterleaks,
+   ghalint, and errcheck Go module graphs from their committed locks as
+   applicable; Cargo runs from `/`
    with an explicit manifest and controlled target root so ancestor `.cargo`
    files and host build caches cannot participate, while the patched Betterleaks
    build verifies modules and compiles with the network denied;
@@ -88,6 +91,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | GitHub Actions | Go 1.26.5; ghalint 1.5.6+velvet-glove.1; Python 3.14.5 | mise SHA-256; source, closure patch, module graph, and reproducible built-artifact SHA-256 | `ghalint-workflow/multi-workflow` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
+| Errcheck Go | Go 1.26.5; errcheck 1.20.0; Python 3.14.5 | official Go archive SHA-256; Go proxy zip SHA-256; exact module sums; reproducible binary SHA-256 and embedded build metadata | `errcheck/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Cargo Clippy/Fmt | Rust/Cargo 1.97.1; Clippy 0.1.97; cargo-fmt/rustfmt 1.9.0; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix`, `cargo-fmt/workspace-multi` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
@@ -455,6 +459,92 @@ checks. Native multi-file `-w` is not transactional, so a late write-time I/O
 failure such as a permission change or storage failure can still leave earlier
 files mutated even though deterministic parse/read failures are caught by the
 preflight.
+
+### errcheck validation contract
+
+The dedicated errcheck environment reuses the locked official Go 1.26.5
+Darwin arm64 archive without changing the shared gofmt closure. It pins
+`github.com/kisielk/errcheck` 1.20.0 at tag commit
+[`4d54a96416c48063572cc1c24ae072fff58a63b4`](https://github.com/kisielk/errcheck/commit/4d54a96416c48063572cc1c24ae072fff58a63b4).
+The official Go proxy
+[`v1.20.0.zip`](https://proxy.golang.org/github.com/kisielk/errcheck/@v/v1.20.0.zip)
+is pinned at SHA-256
+`50dbdc1e07128552bda3dad27dfaad9dca100d16869bf58485fe05ed4a45f0b6`.
+The committed `go.mod` and `go.sum` are pinned at SHA-256
+`06abec38397f045f72e5496d0430dd3473ef2be2fe0187b4d29cd7ff7dd968ef`
+and
+`594d33a278d8c5313b8b7015f6d8e9590ed0e53ea393296fa9c03ea58a8fa145`.
+They lock errcheck plus `golang.org/x/mod` 0.35.0, `golang.org/x/sync`
+0.20.0, and `golang.org/x/tools` 0.44.0 with their exact Go sums.
+
+Provisioning downloads that module graph while network access is allowed,
+then verifies the root proxy zip and the committed module inputs. Under the
+same denied-network sandbox used for cases, it runs `go mod verify`, enumerates
+the exact package dependency closure, and executes this version-preserving
+build from `/` with a fresh transactional build cache:
+
+```text
+go install -trimpath -ldflags "-s -w -buildid=" github.com/kisielk/errcheck@v1.20.0
+```
+
+The local file proxy is the only build source, `GOTOOLCHAIN=local`,
+`CGO_ENABLED=0`, `GOOS=darwin`, and `GOARCH=arm64` are fixed, and the resulting
+binary must have SHA-256
+`4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c`.
+Both the provisioner and denied-network runner require `go version -m` to name
+Go 1.26.5, errcheck v1.20.0 with its module sum, exactly the three dependency
+modules above, trimpath, the Darwin arm64 target, and disabled CGO. The
+content-addressed installation identity includes the complete recipe, while
+the evidence record cross-links the Go archive checksum, mise lock, proxy and
+module hashes, binary hash, and embedded build metadata.
+
+The evaluated command uses pinned Python 3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> errcheck go {extra-args} __VELVET_GLOVE_ERRCHECK_WORKSPACE__ {workspace-indicator}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Extra arguments are rejected because native errcheck flags can alter package
+scope and diagnostic semantics. The workspace `go.mod`, optional `go.sum`,
+and every physical Go source outside fixed excluded subtrees must be unique,
+canonical regular files. Before invoking errcheck, the adapter creates private
+home, temporary, build, and Go-path roots; removes ambient Go, compiler,
+loader, CI, and debug configuration; fixes `GOPROXY=off`, `GOSUMDB=off`,
+`GOVCS=*:off`, `GOTOOLCHAIN=local`, and `GOFLAGS=-mod=readonly`; and runs three
+preflights through the managed Go launcher:
+
+```text
+go env -json GOARCH GOMODCACHE GOOS GOROOT GOVERSION
+go mod verify
+go list -mod=readonly -json ./...
+```
+
+The package inventory must account for every physical production, internal
+test, and external test Go file or explicitly report it ignored. The native
+checker then runs exactly `errcheck -abspath -mod=readonly ./...`. Clean status
+zero must be silent. Status one is accepted only as complete UTF-8 diagnostics
+whose absolute canonical paths, positive line and column, source text,
+workspace membership, sort order, and unchanged file snapshots all validate.
+Status two is operational failure; every other status, malformed output,
+scope omission, mutation, or preflight inconsistency is normalized to two.
+Combined child output is bounded, signals are forwarded to owned process
+groups, and normal and exceptional exits perform bounded descendant cleanup.
+
+The four-case matrix covers a silent clean workspace, one unchecked-error
+diagnostic, a multi-package/multi-file workspace that proves complete module
+scope beyond the selected files, and an operational module failure. Claude and Codex immediate hooks and the
+compatibility-translated deferred lifecycle execute the same read-only command.
+The evaluated adversarial lifecycle additionally covers false clean/no-op
+preflights, malformed and unstable diagnostics, source and control mutation,
+symlink and hard-link aliases, hostile environments, bounded output, signals,
+and orphan descendants. Filesystem replacement races and descendants that
+deliberately escape their process group remain explicit operating-system
+boundaries; the adapter fails closed on every demonstrated instance but cannot
+make external concurrent actors transactional.
 
 ### Betterleaks validation contract
 
