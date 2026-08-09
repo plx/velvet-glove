@@ -333,6 +333,22 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
                 "sha512-lLTYzx3fOvCmtwD3JVBLQcbORbIOW1/j0R+3IvJx/XKwMGrk7mFnF0BYSOeRiNw1qHUR5mdA6+hRnyvyDfqrWQ==",
             );
         }
+        if recipe.tool_id == "biome" {
+            validate_npm_lock_package(
+                &root,
+                &recipe.integrity,
+                "@biomejs/biome",
+                &recipe.version,
+                "sha512-zr8K/DcY5tYsQOQwqMJ0AWElo6QgmgNI7idXgXLhevVszlt8RGVpesEJPqx3ThazLaOwjJ5Y8fz3BtH5fGZNsw==",
+            );
+            validate_npm_lock_entry(
+                &root,
+                &recipe.integrity,
+                "@biomejs/cli-darwin-arm64",
+                &recipe.version,
+                "sha512-vxo/Ls3/PYdQWyLhYYcgMOCzQypAjcY+iihS8M0wW03l16TCLW4zqZzGo75gm1VdCMj38hTVZ31KBWrZ4G9dJw==",
+            );
+        }
         match &tool.provenance.upstream {
             UpstreamProvenance::Recorded {
                 version,
@@ -363,6 +379,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "asciidoctor",
             "astro",
             "betterleaks",
+            "biome",
             "black",
             "go-fmt",
             "jq",
@@ -953,6 +970,32 @@ fn validate_npm_lock_package(
         lock["packages"][""]["dependencies"][package_id], expected_version,
         "{package_id}: root dependency pin"
     );
+    validate_npm_lock_entry(
+        root,
+        integrity,
+        package_id,
+        expected_version,
+        expected_integrity,
+    );
+}
+
+fn validate_npm_lock_entry(
+    root: &Path,
+    integrity: &Integrity,
+    package_id: &str,
+    expected_version: &str,
+    expected_integrity: &str,
+) {
+    assert_eq!(integrity.kind, "npm-lock", "{package_id}: integrity kind");
+    let lock_path = integrity
+        .path
+        .as_deref()
+        .unwrap_or_else(|| panic!("{package_id}: missing npm lock path"));
+    let lock: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join(lock_path))
+            .unwrap_or_else(|error| panic!("{package_id}: read {lock_path}: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("{package_id}: parse {lock_path}: {error}"));
     let package_path = format!("node_modules/{package_id}");
     let package = &lock["packages"][&package_path];
     assert_eq!(

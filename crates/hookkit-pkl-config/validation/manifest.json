@@ -1914,14 +1914,19 @@
                   "role": "phase",
                   "mode": "fix",
                   "reusesImmediatePhase": null,
-                  "program": "biome",
+                  "program": "python",
                   "argv": [
-                    "check",
-                    "--write",
-                    "--no-errors-on-unmatched",
+                    "-I",
+                    "-c",
+                    "import json\nimport os\nimport selectors\nimport signal\nimport subprocess\nimport sys\nimport time\n\nMARKER = \"__VELVET_GLOVE_BIOME_FILES__\"\nLIMIT = 16 * 1024 * 1024\nJSON_WARNING = (\n    b\"The `json` and `json-pretty` reporters are experimental and may change in patch releases.\\n\"\n)\n\n\ndef fail(message):\n    print(f\"velvet-glove-biome: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\ntool = sys.argv[1]\nphase = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif phase not in (\"fix\", \"verify\") or not files:\n    fail(\"invalid phase or empty file selection\")\n\nfor path in files:\n    try:\n        info = os.lstat(path)\n        if not os.path.isfile(path) or os.path.islink(path):\n            fail(f\"selected path is not a regular file: {path}\")\n        with open(path, \"rb\"):\n            pass\n    except OSError as error:\n        fail(f\"cannot read {path}: {error}\")\n\ncontrolled = (\n    \"--colors\",\n    \"--use-server\",\n    \"--verbose\",\n    \"--config-path\",\n    \"--max-diagnostics\",\n    \"--skip-parse-errors\",\n    \"--no-errors-on-unmatched\",\n    \"--error-on-warnings\",\n    \"--reporter\",\n    \"--reporter-file\",\n    \"--diagnostic-level\",\n    \"--log-file\",\n    \"--log-prefix-name\",\n    \"--log-path\",\n    \"--log-level\",\n    \"--log-kind\",\n    \"--write\",\n    \"--fix\",\n    \"--unsafe\",\n    \"--profile-rules\",\n    \"--stdin-file-path\",\n    \"--staged\",\n    \"--changed\",\n    \"--since\",\n    \"--watch\",\n    \"--help\",\n    \"--version\",\n)\nfor argument in extra_args:\n    lowered = argument.lower()\n    option_name = lowered.split(\"=\", 1)[0]\n    is_controlled = any(\n        lowered == option or lowered.startswith(option + \"=\") for option in controlled\n    )\n    changes_scope = (\n        option_name in (\n            \"--only\",\n            \"--skip\",\n            \"--enforce-assist\",\n            \"--format-with-errors\",\n            \"--organize-imports-enabled\",\n        )\n        or option_name.startswith(\"--vcs-\")\n        or option_name.startswith(\"--files-\")\n        or option_name.endswith(\"-formatter-enabled\")\n        or option_name.endswith(\"-linter-enabled\")\n        or option_name.endswith(\"-assist-enabled\")\n    )\n    if (\n        argument == \"--\"\n        or not lowered.startswith(\"--\")\n        or \"=\" not in argument\n        or is_controlled\n        or changes_scope\n    ):\n        fail(f\"unsupported argument {argument!r}; use a non-controlled long --name=value option\")\n\nfixed = [\n    \"--colors=off\",\n    \"--reporter=json\",\n    \"--max-diagnostics=none\",\n    \"--error-on-warnings\",\n    \"--no-errors-on-unmatched\",\n]\nchild_args = [tool, \"check\"]\nif phase == \"fix\":\n    child_args.append(\"--write\")\nchild_args.extend(extra_args)\nchild_args.extend(fixed)\nchild_args.append(\"--\")\nchild_args.extend(files)\n\nenvironment = os.environ.copy()\nenvironment.update(\n    {\n        \"CI\": \"1\",\n        \"NO_COLOR\": \"1\",\n        \"FORCE_COLOR\": \"0\",\n        \"CLICOLOR\": \"0\",\n        \"RAYON_NUM_THREADS\": \"1\",\n    }\n)\nfor name in (\n    \"BIOME_BINARY\",\n    \"BIOME_THREADS\",\n    \"NODE_OPTIONS\",\n    \"NODE_PATH\",\n    \"BIOME_CONFIG_PATH\",\n    \"BIOME_LOG_FILE\",\n    \"BIOME_LOG_PREFIX_NAME\",\n    \"BIOME_LOG_PATH\",\n    \"BIOME_LOG_LEVEL\",\n    \"BIOME_LOG_KIND\",\n    \"RUST_LOG\",\n    \"RUST_BACKTRACE\",\n    \"RUST_LIB_BACKTRACE\",\n    \"DEBUG\",\n):\n    environment.pop(name, None)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        # The npm wrapper can have a native descendant in the same session\n        # after its direct process exits. Always clear the complete group,\n        # even if the leader was already reaped, then reap the leader again.\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\nprevious_handlers = {}\nstdout_chunks = []\nstderr_chunks = []\ntotal = 0\nadapter_error = None\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    process = subprocess.Popen(\n        child_args,\n        stdin=subprocess.DEVNULL,\n        stdout=subprocess.PIPE,\n        stderr=subprocess.PIPE,\n        env=environment,\n        start_new_session=True,\n    )\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    selector = selectors.DefaultSelector()\n    for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n        if stream is None:\n            raise OSError(\"failed to capture tool output\")\n        os.set_blocking(stream.fileno(), False)\n        selector.register(stream, selectors.EVENT_READ, target)\n    while selector.get_map():\n        if pending_signal is not None:\n            raise InterruptedError(f\"received signal {pending_signal}\")\n        for key, _ in selector.select(timeout=0.1):\n            chunk = os.read(key.fileobj.fileno(), 65536)\n            if chunk:\n                total += len(chunk)\n                if total > LIMIT:\n                    raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                key.data.append(chunk)\n            else:\n                selector.unregister(key.fileobj)\n                key.fileobj.close()\n    returncode = process.wait()\nexcept AdapterSignal as error:\n    stop_child(error.signum)\n    adapter_error = error\n    returncode = 2\nexcept BaseException as error:\n    stop_child()\n    adapter_error = error\n    returncode = 2\nfinally:\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None and adapter_error is None:\n        adapter_error = AdapterSignal(pending_signal)\n        returncode = 2\nprocess = None\n\nstdout_bytes = b\"\".join(stdout_chunks)\nstderr_bytes = b\"\".join(stderr_chunks)\nif adapter_error is not None:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(str(adapter_error))\n\ntry:\n    stdout = stdout_bytes.decode(\"utf-8\")\n    report = json.loads(stdout)\nexcept (UnicodeError, json.JSONDecodeError) as error:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(f\"invalid JSON completion report: {error}\")\n\nsummary = report.get(\"summary\") if isinstance(report, dict) else None\ndiagnostics = report.get(\"diagnostics\") if isinstance(report, dict) else None\ninteger_fields = (\n    \"changed\",\n    \"unchanged\",\n    \"matches\",\n    \"errors\",\n    \"warnings\",\n    \"infos\",\n    \"skipped\",\n    \"suggestedFixesSkipped\",\n    \"diagnosticsNotPrinted\",\n    \"duration\",\n    \"scannerDuration\",\n)\nvalid_severities = (\"hint\", \"info\", \"warning\", \"error\", \"fatal\")\nvalid_shape = (\n    isinstance(summary, dict)\n    and isinstance(diagnostics, list)\n    and report.get(\"command\") == \"check\"\n    and all(type(summary.get(field)) is int and summary[field] >= 0 for field in integer_fields)\n    and all(\n        isinstance(item, dict)\n        and item.get(\"severity\") in valid_severities\n        and isinstance(item.get(\"category\"), str)\n        for item in diagnostics\n    )\n)\nif not valid_shape:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(\"invalid JSON completion report shape\")\n\nprocessed = summary[\"changed\"] + summary[\"unchanged\"]\nerror_count = sum(item[\"severity\"] in (\"error\", \"fatal\") for item in diagnostics)\nwarning_count = sum(item[\"severity\"] == \"warning\" for item in diagnostics)\ninfo_count = sum(item[\"severity\"] in (\"hint\", \"info\") for item in diagnostics)\ncounts_agree = (\n    summary[\"errors\"] == error_count\n    and summary[\"warnings\"] == warning_count\n    and summary[\"infos\"] == info_count\n    and len(diagnostics) == error_count + warning_count + info_count\n)\nfailing = [\n    item\n    for item in diagnostics\n    if item[\"severity\"] in (\"error\", \"warning\", \"fatal\")\n]\n\n\ndef source_category(item):\n    category = item.get(\"category\")\n    return isinstance(category, str) and (\n        category in (\"parse\", \"format\")\n        or category.startswith(\"lint/\")\n        or category.startswith(\"assist/\")\n        or category.startswith(\"suppressions/\")\n    )\n\n\ncomplete = (\n    processed == len(files)\n    and summary[\"matches\"] == 0\n    and summary[\"skipped\"] == 0\n    and summary[\"diagnosticsNotPrinted\"] == 0\n    and counts_agree\n)\nif returncode == 0 and complete and not diagnostics:\n    outer_status = 0\nelif (\n    returncode == 1\n    and complete\n    and summary[\"errors\"] + summary[\"warnings\"] > 0\n    and failing\n    and all(item[\"severity\"] != \"fatal\" for item in failing)\n    and all(source_category(item) for item in failing)\n):\n    outer_status = 1\nelse:\n    outer_status = 2\n\nsummary.pop(\"duration\", None)\nsummary.pop(\"scannerDuration\", None)\nstable_stdout = (json.dumps(report, ensure_ascii=False, separators=(\",\", \":\")) + \"\\n\").encode()\nstable_stderr = stderr_bytes\nif stable_stderr.startswith(JSON_WARNING):\n    stable_stderr = stable_stderr[len(JSON_WARNING) :]\nsys.stdout.buffer.write(stable_stdout)\nif stable_stderr:\n    sys.stderr.buffer.write(stable_stderr)\nraise SystemExit(outer_status)",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "fix",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_BIOME_FILES__",
                     {
                       "type": "Files"
                     }
@@ -1933,7 +1938,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -1945,13 +1952,19 @@
                   "role": "phase",
                   "mode": "verify",
                   "reusesImmediatePhase": null,
-                  "program": "biome",
+                  "program": "python",
                   "argv": [
-                    "check",
-                    "--no-errors-on-unmatched",
+                    "-I",
+                    "-c",
+                    "import json\nimport os\nimport selectors\nimport signal\nimport subprocess\nimport sys\nimport time\n\nMARKER = \"__VELVET_GLOVE_BIOME_FILES__\"\nLIMIT = 16 * 1024 * 1024\nJSON_WARNING = (\n    b\"The `json` and `json-pretty` reporters are experimental and may change in patch releases.\\n\"\n)\n\n\ndef fail(message):\n    print(f\"velvet-glove-biome: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\ntool = sys.argv[1]\nphase = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif phase not in (\"fix\", \"verify\") or not files:\n    fail(\"invalid phase or empty file selection\")\n\nfor path in files:\n    try:\n        info = os.lstat(path)\n        if not os.path.isfile(path) or os.path.islink(path):\n            fail(f\"selected path is not a regular file: {path}\")\n        with open(path, \"rb\"):\n            pass\n    except OSError as error:\n        fail(f\"cannot read {path}: {error}\")\n\ncontrolled = (\n    \"--colors\",\n    \"--use-server\",\n    \"--verbose\",\n    \"--config-path\",\n    \"--max-diagnostics\",\n    \"--skip-parse-errors\",\n    \"--no-errors-on-unmatched\",\n    \"--error-on-warnings\",\n    \"--reporter\",\n    \"--reporter-file\",\n    \"--diagnostic-level\",\n    \"--log-file\",\n    \"--log-prefix-name\",\n    \"--log-path\",\n    \"--log-level\",\n    \"--log-kind\",\n    \"--write\",\n    \"--fix\",\n    \"--unsafe\",\n    \"--profile-rules\",\n    \"--stdin-file-path\",\n    \"--staged\",\n    \"--changed\",\n    \"--since\",\n    \"--watch\",\n    \"--help\",\n    \"--version\",\n)\nfor argument in extra_args:\n    lowered = argument.lower()\n    option_name = lowered.split(\"=\", 1)[0]\n    is_controlled = any(\n        lowered == option or lowered.startswith(option + \"=\") for option in controlled\n    )\n    changes_scope = (\n        option_name in (\n            \"--only\",\n            \"--skip\",\n            \"--enforce-assist\",\n            \"--format-with-errors\",\n            \"--organize-imports-enabled\",\n        )\n        or option_name.startswith(\"--vcs-\")\n        or option_name.startswith(\"--files-\")\n        or option_name.endswith(\"-formatter-enabled\")\n        or option_name.endswith(\"-linter-enabled\")\n        or option_name.endswith(\"-assist-enabled\")\n    )\n    if (\n        argument == \"--\"\n        or not lowered.startswith(\"--\")\n        or \"=\" not in argument\n        or is_controlled\n        or changes_scope\n    ):\n        fail(f\"unsupported argument {argument!r}; use a non-controlled long --name=value option\")\n\nfixed = [\n    \"--colors=off\",\n    \"--reporter=json\",\n    \"--max-diagnostics=none\",\n    \"--error-on-warnings\",\n    \"--no-errors-on-unmatched\",\n]\nchild_args = [tool, \"check\"]\nif phase == \"fix\":\n    child_args.append(\"--write\")\nchild_args.extend(extra_args)\nchild_args.extend(fixed)\nchild_args.append(\"--\")\nchild_args.extend(files)\n\nenvironment = os.environ.copy()\nenvironment.update(\n    {\n        \"CI\": \"1\",\n        \"NO_COLOR\": \"1\",\n        \"FORCE_COLOR\": \"0\",\n        \"CLICOLOR\": \"0\",\n        \"RAYON_NUM_THREADS\": \"1\",\n    }\n)\nfor name in (\n    \"BIOME_BINARY\",\n    \"BIOME_THREADS\",\n    \"NODE_OPTIONS\",\n    \"NODE_PATH\",\n    \"BIOME_CONFIG_PATH\",\n    \"BIOME_LOG_FILE\",\n    \"BIOME_LOG_PREFIX_NAME\",\n    \"BIOME_LOG_PATH\",\n    \"BIOME_LOG_LEVEL\",\n    \"BIOME_LOG_KIND\",\n    \"RUST_LOG\",\n    \"RUST_BACKTRACE\",\n    \"RUST_LIB_BACKTRACE\",\n    \"DEBUG\",\n):\n    environment.pop(name, None)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        # The npm wrapper can have a native descendant in the same session\n        # after its direct process exits. Always clear the complete group,\n        # even if the leader was already reaped, then reap the leader again.\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\nprevious_handlers = {}\nstdout_chunks = []\nstderr_chunks = []\ntotal = 0\nadapter_error = None\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    process = subprocess.Popen(\n        child_args,\n        stdin=subprocess.DEVNULL,\n        stdout=subprocess.PIPE,\n        stderr=subprocess.PIPE,\n        env=environment,\n        start_new_session=True,\n    )\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    selector = selectors.DefaultSelector()\n    for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n        if stream is None:\n            raise OSError(\"failed to capture tool output\")\n        os.set_blocking(stream.fileno(), False)\n        selector.register(stream, selectors.EVENT_READ, target)\n    while selector.get_map():\n        if pending_signal is not None:\n            raise InterruptedError(f\"received signal {pending_signal}\")\n        for key, _ in selector.select(timeout=0.1):\n            chunk = os.read(key.fileobj.fileno(), 65536)\n            if chunk:\n                total += len(chunk)\n                if total > LIMIT:\n                    raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                key.data.append(chunk)\n            else:\n                selector.unregister(key.fileobj)\n                key.fileobj.close()\n    returncode = process.wait()\nexcept AdapterSignal as error:\n    stop_child(error.signum)\n    adapter_error = error\n    returncode = 2\nexcept BaseException as error:\n    stop_child()\n    adapter_error = error\n    returncode = 2\nfinally:\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None and adapter_error is None:\n        adapter_error = AdapterSignal(pending_signal)\n        returncode = 2\nprocess = None\n\nstdout_bytes = b\"\".join(stdout_chunks)\nstderr_bytes = b\"\".join(stderr_chunks)\nif adapter_error is not None:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(str(adapter_error))\n\ntry:\n    stdout = stdout_bytes.decode(\"utf-8\")\n    report = json.loads(stdout)\nexcept (UnicodeError, json.JSONDecodeError) as error:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(f\"invalid JSON completion report: {error}\")\n\nsummary = report.get(\"summary\") if isinstance(report, dict) else None\ndiagnostics = report.get(\"diagnostics\") if isinstance(report, dict) else None\ninteger_fields = (\n    \"changed\",\n    \"unchanged\",\n    \"matches\",\n    \"errors\",\n    \"warnings\",\n    \"infos\",\n    \"skipped\",\n    \"suggestedFixesSkipped\",\n    \"diagnosticsNotPrinted\",\n    \"duration\",\n    \"scannerDuration\",\n)\nvalid_severities = (\"hint\", \"info\", \"warning\", \"error\", \"fatal\")\nvalid_shape = (\n    isinstance(summary, dict)\n    and isinstance(diagnostics, list)\n    and report.get(\"command\") == \"check\"\n    and all(type(summary.get(field)) is int and summary[field] >= 0 for field in integer_fields)\n    and all(\n        isinstance(item, dict)\n        and item.get(\"severity\") in valid_severities\n        and isinstance(item.get(\"category\"), str)\n        for item in diagnostics\n    )\n)\nif not valid_shape:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(\"invalid JSON completion report shape\")\n\nprocessed = summary[\"changed\"] + summary[\"unchanged\"]\nerror_count = sum(item[\"severity\"] in (\"error\", \"fatal\") for item in diagnostics)\nwarning_count = sum(item[\"severity\"] == \"warning\" for item in diagnostics)\ninfo_count = sum(item[\"severity\"] in (\"hint\", \"info\") for item in diagnostics)\ncounts_agree = (\n    summary[\"errors\"] == error_count\n    and summary[\"warnings\"] == warning_count\n    and summary[\"infos\"] == info_count\n    and len(diagnostics) == error_count + warning_count + info_count\n)\nfailing = [\n    item\n    for item in diagnostics\n    if item[\"severity\"] in (\"error\", \"warning\", \"fatal\")\n]\n\n\ndef source_category(item):\n    category = item.get(\"category\")\n    return isinstance(category, str) and (\n        category in (\"parse\", \"format\")\n        or category.startswith(\"lint/\")\n        or category.startswith(\"assist/\")\n        or category.startswith(\"suppressions/\")\n    )\n\n\ncomplete = (\n    processed == len(files)\n    and summary[\"matches\"] == 0\n    and summary[\"skipped\"] == 0\n    and summary[\"diagnosticsNotPrinted\"] == 0\n    and counts_agree\n)\nif returncode == 0 and complete and not diagnostics:\n    outer_status = 0\nelif (\n    returncode == 1\n    and complete\n    and summary[\"errors\"] + summary[\"warnings\"] > 0\n    and failing\n    and all(item[\"severity\"] != \"fatal\" for item in failing)\n    and all(source_category(item) for item in failing)\n):\n    outer_status = 1\nelse:\n    outer_status = 2\n\nsummary.pop(\"duration\", None)\nsummary.pop(\"scannerDuration\", None)\nstable_stdout = (json.dumps(report, ensure_ascii=False, separators=(\",\", \":\")) + \"\\n\").encode()\nstable_stderr = stderr_bytes\nif stable_stderr.startswith(JSON_WARNING):\n    stable_stderr = stable_stderr[len(JSON_WARNING) :]\nsys.stdout.buffer.write(stable_stdout)\nif stable_stderr:\n    sys.stderr.buffer.write(stable_stderr)\nraise SystemExit(outer_status)",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "verify",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_BIOME_FILES__",
                     {
                       "type": "Files"
                     }
@@ -1963,7 +1976,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -2043,13 +2058,19 @@
                   "role": "workflow-check",
                   "mode": "verify",
                   "reusesImmediatePhase": "verify",
-                  "program": "biome",
+                  "program": "python",
                   "argv": [
-                    "check",
-                    "--no-errors-on-unmatched",
+                    "-I",
+                    "-c",
+                    "import json\nimport os\nimport selectors\nimport signal\nimport subprocess\nimport sys\nimport time\n\nMARKER = \"__VELVET_GLOVE_BIOME_FILES__\"\nLIMIT = 16 * 1024 * 1024\nJSON_WARNING = (\n    b\"The `json` and `json-pretty` reporters are experimental and may change in patch releases.\\n\"\n)\n\n\ndef fail(message):\n    print(f\"velvet-glove-biome: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\ntool = sys.argv[1]\nphase = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif phase not in (\"fix\", \"verify\") or not files:\n    fail(\"invalid phase or empty file selection\")\n\nfor path in files:\n    try:\n        info = os.lstat(path)\n        if not os.path.isfile(path) or os.path.islink(path):\n            fail(f\"selected path is not a regular file: {path}\")\n        with open(path, \"rb\"):\n            pass\n    except OSError as error:\n        fail(f\"cannot read {path}: {error}\")\n\ncontrolled = (\n    \"--colors\",\n    \"--use-server\",\n    \"--verbose\",\n    \"--config-path\",\n    \"--max-diagnostics\",\n    \"--skip-parse-errors\",\n    \"--no-errors-on-unmatched\",\n    \"--error-on-warnings\",\n    \"--reporter\",\n    \"--reporter-file\",\n    \"--diagnostic-level\",\n    \"--log-file\",\n    \"--log-prefix-name\",\n    \"--log-path\",\n    \"--log-level\",\n    \"--log-kind\",\n    \"--write\",\n    \"--fix\",\n    \"--unsafe\",\n    \"--profile-rules\",\n    \"--stdin-file-path\",\n    \"--staged\",\n    \"--changed\",\n    \"--since\",\n    \"--watch\",\n    \"--help\",\n    \"--version\",\n)\nfor argument in extra_args:\n    lowered = argument.lower()\n    option_name = lowered.split(\"=\", 1)[0]\n    is_controlled = any(\n        lowered == option or lowered.startswith(option + \"=\") for option in controlled\n    )\n    changes_scope = (\n        option_name in (\n            \"--only\",\n            \"--skip\",\n            \"--enforce-assist\",\n            \"--format-with-errors\",\n            \"--organize-imports-enabled\",\n        )\n        or option_name.startswith(\"--vcs-\")\n        or option_name.startswith(\"--files-\")\n        or option_name.endswith(\"-formatter-enabled\")\n        or option_name.endswith(\"-linter-enabled\")\n        or option_name.endswith(\"-assist-enabled\")\n    )\n    if (\n        argument == \"--\"\n        or not lowered.startswith(\"--\")\n        or \"=\" not in argument\n        or is_controlled\n        or changes_scope\n    ):\n        fail(f\"unsupported argument {argument!r}; use a non-controlled long --name=value option\")\n\nfixed = [\n    \"--colors=off\",\n    \"--reporter=json\",\n    \"--max-diagnostics=none\",\n    \"--error-on-warnings\",\n    \"--no-errors-on-unmatched\",\n]\nchild_args = [tool, \"check\"]\nif phase == \"fix\":\n    child_args.append(\"--write\")\nchild_args.extend(extra_args)\nchild_args.extend(fixed)\nchild_args.append(\"--\")\nchild_args.extend(files)\n\nenvironment = os.environ.copy()\nenvironment.update(\n    {\n        \"CI\": \"1\",\n        \"NO_COLOR\": \"1\",\n        \"FORCE_COLOR\": \"0\",\n        \"CLICOLOR\": \"0\",\n        \"RAYON_NUM_THREADS\": \"1\",\n    }\n)\nfor name in (\n    \"BIOME_BINARY\",\n    \"BIOME_THREADS\",\n    \"NODE_OPTIONS\",\n    \"NODE_PATH\",\n    \"BIOME_CONFIG_PATH\",\n    \"BIOME_LOG_FILE\",\n    \"BIOME_LOG_PREFIX_NAME\",\n    \"BIOME_LOG_PATH\",\n    \"BIOME_LOG_LEVEL\",\n    \"BIOME_LOG_KIND\",\n    \"RUST_LOG\",\n    \"RUST_BACKTRACE\",\n    \"RUST_LIB_BACKTRACE\",\n    \"DEBUG\",\n):\n    environment.pop(name, None)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        # The npm wrapper can have a native descendant in the same session\n        # after its direct process exits. Always clear the complete group,\n        # even if the leader was already reaped, then reap the leader again.\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\nprevious_handlers = {}\nstdout_chunks = []\nstderr_chunks = []\ntotal = 0\nadapter_error = None\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    process = subprocess.Popen(\n        child_args,\n        stdin=subprocess.DEVNULL,\n        stdout=subprocess.PIPE,\n        stderr=subprocess.PIPE,\n        env=environment,\n        start_new_session=True,\n    )\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    selector = selectors.DefaultSelector()\n    for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n        if stream is None:\n            raise OSError(\"failed to capture tool output\")\n        os.set_blocking(stream.fileno(), False)\n        selector.register(stream, selectors.EVENT_READ, target)\n    while selector.get_map():\n        if pending_signal is not None:\n            raise InterruptedError(f\"received signal {pending_signal}\")\n        for key, _ in selector.select(timeout=0.1):\n            chunk = os.read(key.fileobj.fileno(), 65536)\n            if chunk:\n                total += len(chunk)\n                if total > LIMIT:\n                    raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                key.data.append(chunk)\n            else:\n                selector.unregister(key.fileobj)\n                key.fileobj.close()\n    returncode = process.wait()\nexcept AdapterSignal as error:\n    stop_child(error.signum)\n    adapter_error = error\n    returncode = 2\nexcept BaseException as error:\n    stop_child()\n    adapter_error = error\n    returncode = 2\nfinally:\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None and adapter_error is None:\n        adapter_error = AdapterSignal(pending_signal)\n        returncode = 2\nprocess = None\n\nstdout_bytes = b\"\".join(stdout_chunks)\nstderr_bytes = b\"\".join(stderr_chunks)\nif adapter_error is not None:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(str(adapter_error))\n\ntry:\n    stdout = stdout_bytes.decode(\"utf-8\")\n    report = json.loads(stdout)\nexcept (UnicodeError, json.JSONDecodeError) as error:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(f\"invalid JSON completion report: {error}\")\n\nsummary = report.get(\"summary\") if isinstance(report, dict) else None\ndiagnostics = report.get(\"diagnostics\") if isinstance(report, dict) else None\ninteger_fields = (\n    \"changed\",\n    \"unchanged\",\n    \"matches\",\n    \"errors\",\n    \"warnings\",\n    \"infos\",\n    \"skipped\",\n    \"suggestedFixesSkipped\",\n    \"diagnosticsNotPrinted\",\n    \"duration\",\n    \"scannerDuration\",\n)\nvalid_severities = (\"hint\", \"info\", \"warning\", \"error\", \"fatal\")\nvalid_shape = (\n    isinstance(summary, dict)\n    and isinstance(diagnostics, list)\n    and report.get(\"command\") == \"check\"\n    and all(type(summary.get(field)) is int and summary[field] >= 0 for field in integer_fields)\n    and all(\n        isinstance(item, dict)\n        and item.get(\"severity\") in valid_severities\n        and isinstance(item.get(\"category\"), str)\n        for item in diagnostics\n    )\n)\nif not valid_shape:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(\"invalid JSON completion report shape\")\n\nprocessed = summary[\"changed\"] + summary[\"unchanged\"]\nerror_count = sum(item[\"severity\"] in (\"error\", \"fatal\") for item in diagnostics)\nwarning_count = sum(item[\"severity\"] == \"warning\" for item in diagnostics)\ninfo_count = sum(item[\"severity\"] in (\"hint\", \"info\") for item in diagnostics)\ncounts_agree = (\n    summary[\"errors\"] == error_count\n    and summary[\"warnings\"] == warning_count\n    and summary[\"infos\"] == info_count\n    and len(diagnostics) == error_count + warning_count + info_count\n)\nfailing = [\n    item\n    for item in diagnostics\n    if item[\"severity\"] in (\"error\", \"warning\", \"fatal\")\n]\n\n\ndef source_category(item):\n    category = item.get(\"category\")\n    return isinstance(category, str) and (\n        category in (\"parse\", \"format\")\n        or category.startswith(\"lint/\")\n        or category.startswith(\"assist/\")\n        or category.startswith(\"suppressions/\")\n    )\n\n\ncomplete = (\n    processed == len(files)\n    and summary[\"matches\"] == 0\n    and summary[\"skipped\"] == 0\n    and summary[\"diagnosticsNotPrinted\"] == 0\n    and counts_agree\n)\nif returncode == 0 and complete and not diagnostics:\n    outer_status = 0\nelif (\n    returncode == 1\n    and complete\n    and summary[\"errors\"] + summary[\"warnings\"] > 0\n    and failing\n    and all(item[\"severity\"] != \"fatal\" for item in failing)\n    and all(source_category(item) for item in failing)\n):\n    outer_status = 1\nelse:\n    outer_status = 2\n\nsummary.pop(\"duration\", None)\nsummary.pop(\"scannerDuration\", None)\nstable_stdout = (json.dumps(report, ensure_ascii=False, separators=(\",\", \":\")) + \"\\n\").encode()\nstable_stderr = stderr_bytes\nif stable_stderr.startswith(JSON_WARNING):\n    stable_stderr = stable_stderr[len(JSON_WARNING) :]\nsys.stdout.buffer.write(stable_stdout)\nif stable_stderr:\n    sys.stderr.buffer.write(stable_stderr)\nraise SystemExit(outer_status)",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "verify",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_BIOME_FILES__",
                     {
                       "type": "Files"
                     }
@@ -2061,7 +2082,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -2073,14 +2096,19 @@
                   "role": "workflow-remedy",
                   "mode": "fix",
                   "reusesImmediatePhase": "fix",
-                  "program": "biome",
+                  "program": "python",
                   "argv": [
-                    "check",
-                    "--write",
-                    "--no-errors-on-unmatched",
+                    "-I",
+                    "-c",
+                    "import json\nimport os\nimport selectors\nimport signal\nimport subprocess\nimport sys\nimport time\n\nMARKER = \"__VELVET_GLOVE_BIOME_FILES__\"\nLIMIT = 16 * 1024 * 1024\nJSON_WARNING = (\n    b\"The `json` and `json-pretty` reporters are experimental and may change in patch releases.\\n\"\n)\n\n\ndef fail(message):\n    print(f\"velvet-glove-biome: {message}\", file=sys.stderr)\n    raise SystemExit(2)\n\n\nif len(sys.argv) < 5 or sys.argv[3:].count(MARKER) != 1:\n    fail(\"invalid adapter arguments\")\n\ntool = sys.argv[1]\nphase = sys.argv[2]\npayload = sys.argv[3:]\nmarker_index = payload.index(MARKER)\nextra_args = payload[:marker_index]\nfiles = payload[marker_index + 1 :]\nif phase not in (\"fix\", \"verify\") or not files:\n    fail(\"invalid phase or empty file selection\")\n\nfor path in files:\n    try:\n        info = os.lstat(path)\n        if not os.path.isfile(path) or os.path.islink(path):\n            fail(f\"selected path is not a regular file: {path}\")\n        with open(path, \"rb\"):\n            pass\n    except OSError as error:\n        fail(f\"cannot read {path}: {error}\")\n\ncontrolled = (\n    \"--colors\",\n    \"--use-server\",\n    \"--verbose\",\n    \"--config-path\",\n    \"--max-diagnostics\",\n    \"--skip-parse-errors\",\n    \"--no-errors-on-unmatched\",\n    \"--error-on-warnings\",\n    \"--reporter\",\n    \"--reporter-file\",\n    \"--diagnostic-level\",\n    \"--log-file\",\n    \"--log-prefix-name\",\n    \"--log-path\",\n    \"--log-level\",\n    \"--log-kind\",\n    \"--write\",\n    \"--fix\",\n    \"--unsafe\",\n    \"--profile-rules\",\n    \"--stdin-file-path\",\n    \"--staged\",\n    \"--changed\",\n    \"--since\",\n    \"--watch\",\n    \"--help\",\n    \"--version\",\n)\nfor argument in extra_args:\n    lowered = argument.lower()\n    option_name = lowered.split(\"=\", 1)[0]\n    is_controlled = any(\n        lowered == option or lowered.startswith(option + \"=\") for option in controlled\n    )\n    changes_scope = (\n        option_name in (\n            \"--only\",\n            \"--skip\",\n            \"--enforce-assist\",\n            \"--format-with-errors\",\n            \"--organize-imports-enabled\",\n        )\n        or option_name.startswith(\"--vcs-\")\n        or option_name.startswith(\"--files-\")\n        or option_name.endswith(\"-formatter-enabled\")\n        or option_name.endswith(\"-linter-enabled\")\n        or option_name.endswith(\"-assist-enabled\")\n    )\n    if (\n        argument == \"--\"\n        or not lowered.startswith(\"--\")\n        or \"=\" not in argument\n        or is_controlled\n        or changes_scope\n    ):\n        fail(f\"unsupported argument {argument!r}; use a non-controlled long --name=value option\")\n\nfixed = [\n    \"--colors=off\",\n    \"--reporter=json\",\n    \"--max-diagnostics=none\",\n    \"--error-on-warnings\",\n    \"--no-errors-on-unmatched\",\n]\nchild_args = [tool, \"check\"]\nif phase == \"fix\":\n    child_args.append(\"--write\")\nchild_args.extend(extra_args)\nchild_args.extend(fixed)\nchild_args.append(\"--\")\nchild_args.extend(files)\n\nenvironment = os.environ.copy()\nenvironment.update(\n    {\n        \"CI\": \"1\",\n        \"NO_COLOR\": \"1\",\n        \"FORCE_COLOR\": \"0\",\n        \"CLICOLOR\": \"0\",\n        \"RAYON_NUM_THREADS\": \"1\",\n    }\n)\nfor name in (\n    \"BIOME_BINARY\",\n    \"BIOME_THREADS\",\n    \"NODE_OPTIONS\",\n    \"NODE_PATH\",\n    \"BIOME_CONFIG_PATH\",\n    \"BIOME_LOG_FILE\",\n    \"BIOME_LOG_PREFIX_NAME\",\n    \"BIOME_LOG_PATH\",\n    \"BIOME_LOG_LEVEL\",\n    \"BIOME_LOG_KIND\",\n    \"RUST_LOG\",\n    \"RUST_BACKTRACE\",\n    \"RUST_LIB_BACKTRACE\",\n    \"DEBUG\",\n):\n    environment.pop(name, None)\n\nprocess = None\npending_signal = None\ncleaning = False\n\n\nclass AdapterSignal(BaseException):\n    def __init__(self, signum):\n        super().__init__(f\"received signal {signum}\")\n        self.signum = signum\n\n\ndef signal_group(signum):\n    if process is None:\n        return\n    try:\n        os.killpg(process.pid, signum)\n    except (OSError, ValueError):\n        pass\n\n\ndef stop_child(initial_signal=None):\n    global process\n    global cleaning\n    child = process\n    if child is None:\n        return\n    cleaning = True\n    try:\n        try:\n            running = child.poll() is None\n        except (OSError, ValueError):\n            running = True\n        if running:\n            signal_group(initial_signal if initial_signal is not None else signal.SIGTERM)\n            try:\n                child.wait(timeout=1)\n            except (OSError, ValueError, subprocess.TimeoutExpired):\n                pass\n        # The npm wrapper can have a native descendant in the same session\n        # after its direct process exits. Always clear the complete group,\n        # even if the leader was already reaped, then reap the leader again.\n        signal_group(signal.SIGKILL)\n        try:\n            child.wait(timeout=1)\n        except (OSError, ValueError, subprocess.TimeoutExpired):\n            pass\n    finally:\n        process = None\n        cleaning = False\n\n\ndef forward_signal(signum, _frame):\n    global pending_signal\n    pending_signal = signum\n    if process is not None and not cleaning:\n        signal_group(signum)\n        raise AdapterSignal(signum)\n\n\nprevious_handlers = {}\nstdout_chunks = []\nstderr_chunks = []\ntotal = 0\nadapter_error = None\ntry:\n    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):\n        previous_handlers[signum] = signal.signal(signum, forward_signal)\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    process = subprocess.Popen(\n        child_args,\n        stdin=subprocess.DEVNULL,\n        stdout=subprocess.PIPE,\n        stderr=subprocess.PIPE,\n        env=environment,\n        start_new_session=True,\n    )\n    if pending_signal is not None:\n        raise AdapterSignal(pending_signal)\n    selector = selectors.DefaultSelector()\n    for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):\n        if stream is None:\n            raise OSError(\"failed to capture tool output\")\n        os.set_blocking(stream.fileno(), False)\n        selector.register(stream, selectors.EVENT_READ, target)\n    while selector.get_map():\n        if pending_signal is not None:\n            raise InterruptedError(f\"received signal {pending_signal}\")\n        for key, _ in selector.select(timeout=0.1):\n            chunk = os.read(key.fileobj.fileno(), 65536)\n            if chunk:\n                total += len(chunk)\n                if total > LIMIT:\n                    raise BufferError(f\"combined output exceeded {LIMIT} bytes\")\n                key.data.append(chunk)\n            else:\n                selector.unregister(key.fileobj)\n                key.fileobj.close()\n    returncode = process.wait()\nexcept AdapterSignal as error:\n    stop_child(error.signum)\n    adapter_error = error\n    returncode = 2\nexcept BaseException as error:\n    stop_child()\n    adapter_error = error\n    returncode = 2\nfinally:\n    cleaning = True\n    try:\n        for signum, handler in previous_handlers.items():\n            try:\n                signal.signal(signum, handler)\n            except (OSError, ValueError):\n                pass\n    finally:\n        cleaning = False\n    if pending_signal is not None and adapter_error is None:\n        adapter_error = AdapterSignal(pending_signal)\n        returncode = 2\nprocess = None\n\nstdout_bytes = b\"\".join(stdout_chunks)\nstderr_bytes = b\"\".join(stderr_chunks)\nif adapter_error is not None:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(str(adapter_error))\n\ntry:\n    stdout = stdout_bytes.decode(\"utf-8\")\n    report = json.loads(stdout)\nexcept (UnicodeError, json.JSONDecodeError) as error:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(f\"invalid JSON completion report: {error}\")\n\nsummary = report.get(\"summary\") if isinstance(report, dict) else None\ndiagnostics = report.get(\"diagnostics\") if isinstance(report, dict) else None\ninteger_fields = (\n    \"changed\",\n    \"unchanged\",\n    \"matches\",\n    \"errors\",\n    \"warnings\",\n    \"infos\",\n    \"skipped\",\n    \"suggestedFixesSkipped\",\n    \"diagnosticsNotPrinted\",\n    \"duration\",\n    \"scannerDuration\",\n)\nvalid_severities = (\"hint\", \"info\", \"warning\", \"error\", \"fatal\")\nvalid_shape = (\n    isinstance(summary, dict)\n    and isinstance(diagnostics, list)\n    and report.get(\"command\") == \"check\"\n    and all(type(summary.get(field)) is int and summary[field] >= 0 for field in integer_fields)\n    and all(\n        isinstance(item, dict)\n        and item.get(\"severity\") in valid_severities\n        and isinstance(item.get(\"category\"), str)\n        for item in diagnostics\n    )\n)\nif not valid_shape:\n    if stdout_bytes:\n        sys.stdout.buffer.write(stdout_bytes)\n    if stderr_bytes:\n        sys.stderr.buffer.write(stderr_bytes)\n    fail(\"invalid JSON completion report shape\")\n\nprocessed = summary[\"changed\"] + summary[\"unchanged\"]\nerror_count = sum(item[\"severity\"] in (\"error\", \"fatal\") for item in diagnostics)\nwarning_count = sum(item[\"severity\"] == \"warning\" for item in diagnostics)\ninfo_count = sum(item[\"severity\"] in (\"hint\", \"info\") for item in diagnostics)\ncounts_agree = (\n    summary[\"errors\"] == error_count\n    and summary[\"warnings\"] == warning_count\n    and summary[\"infos\"] == info_count\n    and len(diagnostics) == error_count + warning_count + info_count\n)\nfailing = [\n    item\n    for item in diagnostics\n    if item[\"severity\"] in (\"error\", \"warning\", \"fatal\")\n]\n\n\ndef source_category(item):\n    category = item.get(\"category\")\n    return isinstance(category, str) and (\n        category in (\"parse\", \"format\")\n        or category.startswith(\"lint/\")\n        or category.startswith(\"assist/\")\n        or category.startswith(\"suppressions/\")\n    )\n\n\ncomplete = (\n    processed == len(files)\n    and summary[\"matches\"] == 0\n    and summary[\"skipped\"] == 0\n    and summary[\"diagnosticsNotPrinted\"] == 0\n    and counts_agree\n)\nif returncode == 0 and complete and not diagnostics:\n    outer_status = 0\nelif (\n    returncode == 1\n    and complete\n    and summary[\"errors\"] + summary[\"warnings\"] > 0\n    and failing\n    and all(item[\"severity\"] != \"fatal\" for item in failing)\n    and all(source_category(item) for item in failing)\n):\n    outer_status = 1\nelse:\n    outer_status = 2\n\nsummary.pop(\"duration\", None)\nsummary.pop(\"scannerDuration\", None)\nstable_stdout = (json.dumps(report, ensure_ascii=False, separators=(\",\", \":\")) + \"\\n\").encode()\nstable_stderr = stderr_bytes\nif stable_stderr.startswith(JSON_WARNING):\n    stable_stderr = stable_stderr[len(JSON_WARNING) :]\nsys.stdout.buffer.write(stable_stdout)\nif stable_stderr:\n    sys.stderr.buffer.write(stable_stderr)\nraise SystemExit(outer_status)",
+                    {
+                      "type": "ToolExecutable"
+                    },
+                    "fix",
                     {
                       "type": "ExtraArgs"
                     },
+                    "__VELVET_GLOVE_BIOME_FILES__",
                     {
                       "type": "Files"
                     }
@@ -2092,7 +2120,9 @@
                     "issues": [
                       1
                     ],
-                    "failure": [],
+                    "failure": [
+                      2
+                    ],
                     "unexpected": "failure"
                   },
                   "issuesOnStdout": false,
@@ -2122,19 +2152,34 @@
           ]
         }
       },
-      "fixtureCases": [],
+      "fixtureCases": [
+        "autofix",
+        "clean",
+        "multi-file",
+        "operational-failure",
+        "source-issue"
+      ],
       "dependencies": {
         "provisioningGroup": "node",
         "primaryExecutable": "biome",
-        "programOverrides": [],
-        "wrapperExecutables": []
+        "programOverrides": [
+          "python"
+        ],
+        "wrapperExecutables": [
+          "node"
+        ]
       },
       "provenance": {
         "catalogSource": "initial-port",
         "upstream": {
-          "status": "gap",
-          "reason": "No reviewed upstream source, tested version, installation source, or version probe is recorded.",
-          "trackingIssue": 15
+          "status": "recorded",
+          "url": "https://github.com/biomejs/biome/releases/tag/%40biomejs%2Fbiome%402.5.7",
+          "version": "2.5.7",
+          "installationSource": "@biomejs/biome 2.5.7 wrapper and @biomejs/cli-darwin-arm64 2.5.7 native binary in the exact npm dependency graph with package integrity hashes in validation/provisioning/node/package-lock.json",
+          "versionCommand": [
+            "biome",
+            "--version"
+          ]
         }
       },
       "constraints": {
@@ -2166,7 +2211,7 @@
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -2189,13 +2234,15 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No probe-backed immediate rendered-command contract is recorded for this target.",
-          "trackingIssue": 7
+          "references": [
+            "cargo:test/run_all_tool_fixtures[biome/immediate-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -2218,13 +2265,25 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 15
+          "references": [
+            "recipe:biome-macos-arm64",
+            "artifact:autofix/pinned-environment.json#biome-2.5.7",
+            "artifact:autofix/fixtures/report.json#biome/autofix/immediate",
+            "artifact:clean/pinned-environment.json#biome-2.5.7",
+            "artifact:clean/fixtures/report.json#biome/clean/immediate",
+            "artifact:multi-file/pinned-environment.json#biome-2.5.7",
+            "artifact:multi-file/fixtures/report.json#biome/multi-file/immediate",
+            "artifact:operational-failure/pinned-environment.json#biome-2.5.7",
+            "artifact:operational-failure/fixtures/report.json#biome/operational-failure/immediate",
+            "artifact:source-issue/pinned-environment.json#biome-2.5.7",
+            "artifact:source-issue/fixtures/report.json#biome/source-issue/immediate"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "rendered-command",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -2247,13 +2306,15 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No probe-backed deferred rendered-command contract is recorded for this target.",
-          "trackingIssue": 8
+          "references": [
+            "cargo:test/run_all_tool_fixtures[biome/compatibility-deferred-contract]"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -2276,9 +2337,21 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "No controlled, version-pinned real-tool evidence is recorded; legacy host-PATH fixtures, where present, do not satisfy this tier.",
-          "trackingIssue": 15
+          "references": [
+            "recipe:biome-macos-arm64",
+            "artifact:autofix/pinned-environment.json#biome-2.5.7",
+            "artifact:autofix/fixtures/report.json#biome/autofix/deferred",
+            "artifact:clean/pinned-environment.json#biome-2.5.7",
+            "artifact:clean/fixtures/report.json#biome/clean/deferred",
+            "artifact:multi-file/pinned-environment.json#biome-2.5.7",
+            "artifact:multi-file/fixtures/report.json#biome/multi-file/deferred",
+            "artifact:operational-failure/pinned-environment.json#biome-2.5.7",
+            "artifact:operational-failure/fixtures/report.json#biome/operational-failure/deferred",
+            "artifact:source-issue/pinned-environment.json#biome-2.5.7",
+            "artifact:source-issue/fixtures/report.json#biome/source-issue/deferred"
+          ],
+          "reason": null,
+          "trackingIssue": null
         }
       ],
       "exceptions": []

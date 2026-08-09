@@ -51,6 +51,24 @@ const BETTERLEAKS_CONFIG_TOML_ENV: &str = "BETTERLEAKS_CONFIG_TOML";
 const GITLEAKS_CONFIG_ENV: &str = "GITLEAKS_CONFIG";
 const GITLEAKS_CONFIG_TOML_ENV: &str = "GITLEAKS_CONFIG_TOML";
 const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this";
+const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
+const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
+const BIOME_SCRUBBED_ENV: &[&str] = &[
+    "BIOME_BINARY",
+    "BIOME_THREADS",
+    "NODE_OPTIONS",
+    NODE_PATH_ENV,
+    "BIOME_CONFIG_PATH",
+    "BIOME_LOG_FILE",
+    "BIOME_LOG_PREFIX_NAME",
+    "BIOME_LOG_PATH",
+    "BIOME_LOG_LEVEL",
+    "BIOME_LOG_KIND",
+    "RUST_LOG",
+    "RUST_BACKTRACE",
+    "RUST_LIB_BACKTRACE",
+    DEBUG_ENV,
+];
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +107,14 @@ enum TracePlan {
         adapter_prefix: &'static [&'static str],
         marker: &'static str,
         leading: &'static [&'static str],
+        before_files: &'static [&'static str],
+    },
+    SingleNestedModeFilesMarker {
+        nested_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        leading: &'static [&'static str],
+        mode_arguments: &'static [(&'static str, &'static [&'static str])],
         before_files: &'static [&'static str],
     },
     TrailingOptionsAdapter {
@@ -141,6 +167,25 @@ const BETTERLEAKS_TRACE_PLAN: TracePlan = TracePlan::SingleNestedFilesMarker {
 };
 const BETTERLEAKS_FIXTURE_SECRET: &str = "VG_SECRET_AbCdEf0123456789";
 
+const BIOME_FILES_MARKER: &str = "__VELVET_GLOVE_BIOME_FILES__";
+const BIOME_MODE_ARGUMENTS: &[(&str, &[&str])] = &[("fix", &["--write"]), ("verify", &[])];
+const BIOME_ARGUMENTS_BEFORE_FILES: &[&str] = &[
+    "--colors=off",
+    "--reporter=json",
+    "--max-diagnostics=none",
+    "--error-on-warnings",
+    "--no-errors-on-unmatched",
+    "--",
+];
+const BIOME_TRACE_PLAN: TracePlan = TracePlan::SingleNestedModeFilesMarker {
+    nested_program_index: 3,
+    adapter_prefix: &["-I", "-c"],
+    marker: BIOME_FILES_MARKER,
+    leading: &["check"],
+    mode_arguments: BIOME_MODE_ARGUMENTS,
+    before_files: BIOME_ARGUMENTS_BEFORE_FILES,
+};
+
 #[derive(Debug)]
 struct ExpectedInvocation {
     targets: &'static [&'static str],
@@ -157,6 +202,15 @@ struct RealToolContractCase {
     diagnostic_contains: &'static [&'static str],
     diagnostic_excludes: &'static [&'static str],
     trace_plan: TracePlan,
+}
+
+#[derive(Debug)]
+struct MutatingToolContractCase {
+    remedy_phase_id: &'static str,
+    remedy_invocations: &'static [ExpectedInvocation],
+    final_invocations: &'static [ExpectedInvocation],
+    immediate_outcome: ExpectedOutcome,
+    changed_targets: &'static [&'static str],
 }
 
 impl RealToolContractCase {
@@ -409,9 +463,168 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &[],
             trace_plan: BETTERLEAKS_TRACE_PLAN,
         },
-        ("jq" | "asciidoctor" | "astro" | "betterleaks", other) => {
+        ("biome", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: BIOME_TRACE_PLAN,
+        },
+        ("biome", "autofix") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"category\":\"format\"",
+                "\"path\":\"src/example.js\"",
+                "Formatter would have printed the following content:",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: BIOME_TRACE_PLAN,
+        },
+        ("biome", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"category\":\"parse\"",
+                "\"path\":\"src/example.js\"",
+                "Expected an expression",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: BIOME_TRACE_PLAN,
+        },
+        ("biome", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.js", "src/selected-two.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["\"category\":\"format\"", "\"path\":\"src/example.js\""],
+            diagnostic_excludes: &["src/unselected-sentinel.js"],
+            trace_plan: BIOME_TRACE_PLAN,
+        },
+        ("biome", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 2,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["biome.json", "configuration resulted in errors"],
+            diagnostic_excludes: &["::error title=format"],
+            trace_plan: BIOME_TRACE_PLAN,
+        },
+        ("jq" | "asciidoctor" | "astro" | "betterleaks" | "biome", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no real-tool contract declaration",
+                case.tool
+            ));
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(contract))
+}
+
+fn mutating_tool_contract_case(
+    case: &FixtureCase,
+) -> Result<Option<MutatingToolContractCase>, String> {
+    let contract = match (case.tool.as_str(), case.case.as_str()) {
+        ("biome", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("biome", "autofix") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["src/example.js"],
+        },
+        ("biome", "source-issue") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            immediate_outcome: ExpectedOutcome::Issues,
+            changed_targets: &[],
+        },
+        ("biome", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js", "src/selected-two.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js", "src/selected-two.js"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["src/example.js"],
+        },
+        ("biome", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.js"],
+                exit_code: 2,
+                trace_exit_codes: &[1],
+            }],
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("biome", other) => {
+            return Err(format!(
+                "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
             ));
         }
@@ -1282,6 +1495,18 @@ fn named_fixture_case(tool: &str, name: &str) -> FixtureCase {
 }
 
 #[test]
+#[ignore = "evaluated Biome adapter lifecycle; requires controlled Python"]
+fn biome_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("biome")
+        .unwrap_or_else(|| panic!("builtin catalog has no Biome spec"));
+    verify_biome_adapter_lifecycle(spec, timeout).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     let options = HarnessOptions::from_environment().unwrap_or_else(|error| panic!("{error}"));
@@ -1301,6 +1526,11 @@ fn run_all_tool_fixtures() {
         verify_betterleaks_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("betterleaks adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "biome") {
+        verify_biome_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("biome adapter lifecycle probe: pass");
     }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -1898,6 +2128,13 @@ fn run_fixture_case_inner(
     workspace: &FixtureWorkspace,
 ) -> Result<(), String> {
     let contract = real_tool_contract_case(case)?;
+    let mutation = mutating_tool_contract_case(case)?;
+    if mutation.is_some() && contract.is_none() {
+        return Err(format!(
+            "{} mutating fixture has no authoritative check contract",
+            case.tool
+        ));
+    }
     let config = write_pkl_config(
         &workspace.project,
         &case.tool,
@@ -1908,6 +2145,16 @@ fn run_fixture_case_inner(
         .as_ref()
         .map(|contract| resolve_real_tool_contract(case, contract, &config, &workspace.project))
         .transpose()?;
+    let resolved_mutation = match (contract.as_ref(), mutation.as_ref()) {
+        (Some(contract), Some(mutation)) => Some(resolve_mutating_tool_contract(
+            case,
+            contract,
+            mutation,
+            &config,
+            &workspace.project,
+        )?),
+        _ => None,
+    };
     let input = build_fixture_input(case, surface, &workspace.project, contract.as_ref())?;
     std::fs::write(workspace.evidence.join("input.json"), input.bytes())
         .map_err(|error| format!("write input evidence: {error}"))?;
@@ -1925,6 +2172,32 @@ fn run_fixture_case_inner(
             &workspace.evidence.join("workspace-before.json"),
             &before.as_json(),
         )?;
+    }
+
+    if let (Some(contract), Some(mutation), Some(resolved), Some(resolved_mutation)) = (
+        contract.as_ref(),
+        mutation.as_ref(),
+        resolved_contract.as_ref(),
+        resolved_mutation.as_ref(),
+    ) {
+        return run_mutating_fixture_case_inner(
+            case,
+            surface,
+            timeout,
+            workspace,
+            &config,
+            &input,
+            tool_trace
+                .as_ref()
+                .expect("mutating real-tool contract has trace harness"),
+            contract,
+            mutation,
+            resolved,
+            resolved_mutation,
+            before
+                .as_ref()
+                .expect("mutating real-tool contract has before snapshot"),
+        );
     }
 
     let binary = env!("CARGO_BIN_EXE_velvet-glove");
@@ -2056,6 +2329,306 @@ fn run_fixture_case_inner(
     Ok(())
 }
 
+#[derive(Debug)]
+struct DeferredPhaseExpectation<'a> {
+    phase: &'static str,
+    resolved: &'a ResolvedContract,
+    assert_diagnostics: bool,
+}
+
+#[derive(Debug)]
+struct DeferredAttemptExpectation<'a> {
+    phases: Vec<DeferredPhaseExpectation<'a>>,
+    outcome: ExpectedOutcome,
+    initial_outcome: ExpectedOutcome,
+    final_outcome: Option<ExpectedOutcome>,
+    fix_attempted: bool,
+    changed_targets: &'a [&'static str],
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_mutating_fixture_case_inner(
+    case: &FixtureCase,
+    surface: ProtocolSurface,
+    timeout: Duration,
+    workspace: &FixtureWorkspace,
+    config: &Path,
+    input: &support::native_events::NativePostToolInput,
+    trace: &ToolTraceHarness,
+    contract: &RealToolContractCase,
+    mutation: &MutatingToolContractCase,
+    resolved: &ResolvedContract,
+    resolved_mutation: &ResolvedMutatingContract,
+    pristine: &TreeSnapshot,
+) -> Result<(), String> {
+    validate_mutation_expected_tree(case, mutation)?;
+    let immediate_trace = resolved_mutation
+        .remedy
+        .trace_invocations
+        .iter()
+        .chain(
+            resolved_mutation
+                .final_check
+                .iter()
+                .flat_map(|phase| phase.trace_invocations.iter()),
+        )
+        .cloned()
+        .collect::<Vec<_>>();
+    let binary = env!("CARGO_BIN_EXE_velvet-glove");
+    let mut command = Command::new(binary);
+    command
+        .args(["--harness", surface.cli_name(), "--config"])
+        .arg(config)
+        .arg("post-tool-immediate");
+    input.configure_command(&mut command);
+    trace.configure(&mut command, "immediate-1")?;
+    let output = run_with_timeout(&mut command, input.bytes(), timeout, &workspace.evidence)
+        .map_err(|error| format!("run {binary} for {surface}: {error}"))?;
+    std::fs::write(
+        workspace.evidence.join("exit.txt"),
+        format!("{}\n", output.status.code().unwrap_or(-1)),
+    )
+    .map_err(|error| format!("write exit evidence: {error}"))?;
+    verify_outputs(case, surface, &workspace.project, &output)?;
+    verify_tool_trace_invocations(
+        trace,
+        "immediate-1",
+        &resolved.trace_program,
+        &immediate_trace,
+        &workspace.project,
+        &workspace.evidence.join("immediate-1-trace.json"),
+    )?;
+    let after_first = TreeSnapshot::read(&workspace.project)?;
+    let first_diff = pristine.diff(&after_first);
+    verify_mutating_workspace_diff(case, mutation, mutation.immediate_outcome, &first_diff)?;
+    write_json(
+        &workspace.evidence.join("workspace-after-immediate-1.json"),
+        &after_first.as_json(),
+    )?;
+    write_json(
+        &workspace.evidence.join("workspace-immediate-1-diff.json"),
+        &first_diff.as_json(),
+    )?;
+    verify_mutating_immediate_artifact(case, contract, mutation, &workspace.project)?;
+
+    let repeat_dir = workspace.evidence.join("immediate-repeat");
+    let mut repeat_command = Command::new(binary);
+    repeat_command
+        .args(["--harness", surface.cli_name(), "--config"])
+        .arg(config)
+        .arg("post-tool-immediate");
+    input.configure_command(&mut repeat_command);
+    trace.configure(&mut repeat_command, "immediate-2")?;
+    let repeated = run_with_timeout(&mut repeat_command, input.bytes(), timeout, &repeat_dir)
+        .map_err(|error| format!("repeat {binary} for {surface}: {error}"))?;
+    std::fs::write(
+        repeat_dir.join("exit.txt"),
+        format!("{}\n", repeated.status.code().unwrap_or(-1)),
+    )
+    .map_err(|error| format!("write repeated exit evidence: {error}"))?;
+    if mutation.changed_targets.is_empty() {
+        verify_repeated_output(&case.tool, &output, &repeated, &workspace.project)?;
+    } else {
+        verify_idempotent_immediate_output(case, surface, &repeated, &workspace.project)?;
+    }
+    verify_tool_trace_invocations(
+        trace,
+        "immediate-2",
+        &resolved.trace_program,
+        &immediate_trace,
+        &workspace.project,
+        &workspace.evidence.join("immediate-2-trace.json"),
+    )?;
+    let after_second = TreeSnapshot::read(&workspace.project)?;
+    let repeat_diff = after_first.diff(&after_second);
+    if !repeat_diff.is_empty() {
+        return Err(format!(
+            "{} immediate repeat was not idempotent: {}",
+            case.tool,
+            repeat_diff.describe()
+        ));
+    }
+    write_json(
+        &workspace.evidence.join("workspace-immediate-2-diff.json"),
+        &repeat_diff.as_json(),
+    )?;
+
+    pristine.restore(&workspace.project)?;
+    let restored = TreeSnapshot::read(&workspace.project)?;
+    if &restored != pristine {
+        return Err(format!(
+            "{} could not restore a pristine deferred baseline",
+            case.tool
+        ));
+    }
+    write_json(
+        &workspace.evidence.join("workspace-deferred-pristine.json"),
+        &restored.as_json(),
+    )?;
+
+    let initial_outcome = aggregate_resolved_outcome(&resolved.invocations);
+    let mut first_phases = vec![DeferredPhaseExpectation {
+        phase: "initial-check",
+        resolved,
+        assert_diagnostics: initial_outcome != ExpectedOutcome::Clean,
+    }];
+    let first_fix_attempted = initial_outcome == ExpectedOutcome::Issues;
+    let first_final_outcome = if first_fix_attempted {
+        first_phases.push(DeferredPhaseExpectation {
+            phase: "remedy",
+            resolved: &resolved_mutation.remedy,
+            assert_diagnostics: false,
+        });
+        let final_check = resolved_mutation.final_check.as_ref().ok_or_else(|| {
+            format!(
+                "{} fixable contract omitted its authoritative final check",
+                case.tool
+            )
+        })?;
+        first_phases.push(DeferredPhaseExpectation {
+            phase: "final-check",
+            resolved: final_check,
+            assert_diagnostics: false,
+        });
+        Some(aggregate_resolved_outcome(&final_check.invocations))
+    } else if initial_outcome == ExpectedOutcome::Clean {
+        Some(ExpectedOutcome::Clean)
+    } else {
+        None
+    };
+    let first_outcome = first_final_outcome.unwrap_or(initial_outcome);
+    let first_expectation = DeferredAttemptExpectation {
+        phases: first_phases,
+        outcome: first_outcome,
+        initial_outcome,
+        final_outcome: first_final_outcome,
+        fix_attempted: first_fix_attempted,
+        changed_targets: if first_fix_attempted {
+            mutation.changed_targets
+        } else {
+            &[]
+        },
+    };
+    let first_semantic = run_mutating_deferred_attempt(
+        case,
+        surface,
+        timeout,
+        workspace,
+        config,
+        input,
+        trace,
+        contract,
+        mutation,
+        1,
+        &restored,
+        &first_expectation,
+    )?;
+    let after_deferred_first = TreeSnapshot::read(&workspace.project)?;
+
+    let repaired = first_fix_attempted && first_final_outcome == Some(ExpectedOutcome::Clean);
+    let second_expectation = if repaired {
+        let second_resolved = resolved_mutation
+            .final_check
+            .as_ref()
+            .ok_or_else(|| format!("{} fixed-state contract omitted checker", case.tool))?;
+        let second_initial_outcome = aggregate_resolved_outcome(&second_resolved.invocations);
+        DeferredAttemptExpectation {
+            phases: vec![DeferredPhaseExpectation {
+                phase: "initial-check",
+                resolved: second_resolved,
+                assert_diagnostics: false,
+            }],
+            outcome: second_initial_outcome,
+            initial_outcome: second_initial_outcome,
+            final_outcome: Some(second_initial_outcome),
+            fix_attempted: false,
+            changed_targets: &[],
+        }
+    } else if first_fix_attempted {
+        let final_check = resolved_mutation
+            .final_check
+            .as_ref()
+            .ok_or_else(|| format!("{} repeated manual-fix contract omitted checker", case.tool))?;
+        let final_outcome = aggregate_resolved_outcome(&final_check.invocations);
+        DeferredAttemptExpectation {
+            phases: vec![
+                DeferredPhaseExpectation {
+                    phase: "initial-check",
+                    resolved,
+                    assert_diagnostics: true,
+                },
+                DeferredPhaseExpectation {
+                    phase: "remedy",
+                    resolved: &resolved_mutation.remedy,
+                    assert_diagnostics: false,
+                },
+                DeferredPhaseExpectation {
+                    phase: "final-check",
+                    resolved: final_check,
+                    assert_diagnostics: false,
+                },
+            ],
+            outcome: final_outcome,
+            initial_outcome,
+            final_outcome: Some(final_outcome),
+            fix_attempted: true,
+            changed_targets: mutation.changed_targets,
+        }
+    } else {
+        DeferredAttemptExpectation {
+            phases: vec![DeferredPhaseExpectation {
+                phase: "initial-check",
+                resolved,
+                assert_diagnostics: initial_outcome != ExpectedOutcome::Clean,
+            }],
+            outcome: initial_outcome,
+            initial_outcome,
+            final_outcome: (initial_outcome == ExpectedOutcome::Clean)
+                .then_some(ExpectedOutcome::Clean),
+            fix_attempted: false,
+            changed_targets: &[],
+        }
+    };
+    let second_semantic = run_mutating_deferred_attempt(
+        case,
+        surface,
+        timeout,
+        workspace,
+        config,
+        input,
+        trace,
+        contract,
+        mutation,
+        2,
+        &after_deferred_first,
+        &second_expectation,
+    )?;
+    let expect_equal_semantics = mutation.changed_targets.is_empty();
+    if expect_equal_semantics && first_semantic != second_semantic {
+        return Err(format!(
+            "{} unchanged deferred repeat changed semantic evidence\nfirst:\n{}\nsecond:\n{}",
+            case.tool,
+            serde_json::to_string_pretty(&first_semantic)
+                .unwrap_or_else(|_| format!("{first_semantic:?}")),
+            serde_json::to_string_pretty(&second_semantic)
+                .unwrap_or_else(|_| format!("{second_semantic:?}")),
+        ));
+    }
+    write_json(
+        &workspace.evidence.join("deferred-idempotence.json"),
+        &serde_json::json!({
+            "formatVersion": 1,
+            "attempts": 2,
+            "first": first_semantic,
+            "second": second_semantic,
+            "equal": expect_equal_semantics,
+            "secondChangedFiles": [],
+            "secondFixAttempted": second_expectation.fix_attempted,
+        }),
+    )?;
+    Ok(())
+}
+
 fn build_fixture_input(
     case: &FixtureCase,
     surface: ProtocolSurface,
@@ -2102,7 +2675,7 @@ struct ResolvedContract {
     trace_invocations: Vec<ResolvedTraceInvocation>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ResolvedInvocation {
     targets: Vec<PathBuf>,
     arguments: Vec<String>,
@@ -2110,11 +2683,17 @@ struct ResolvedInvocation {
     outcome: ExpectedOutcome,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ResolvedTraceInvocation {
     targets: Vec<PathBuf>,
     arguments: Vec<String>,
     exit_code: i32,
+}
+
+#[derive(Debug)]
+struct ResolvedMutatingContract {
+    remedy: ResolvedContract,
+    final_check: Option<ResolvedContract>,
 }
 
 fn resolve_real_tool_contract(
@@ -2255,6 +2834,209 @@ fn resolve_real_tool_contract(
     })
 }
 
+fn resolve_mutating_tool_contract(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    mutation: &MutatingToolContractCase,
+    config: &Path,
+    project: &Path,
+) -> Result<ResolvedMutatingContract, String> {
+    let loaded = hookkit_pkl_config::load_explicit(config, project)
+        .map_err(|error| format!("reload evaluated fixture config {config:?}: {error}"))?;
+    let spec = loaded
+        .config
+        .tools
+        .get(&case.tool)
+        .ok_or_else(|| format!("evaluated fixture config omitted tool {}", case.tool))?;
+    let remedy_phase = spec.phases.get(mutation.remedy_phase_id).ok_or_else(|| {
+        format!(
+            "{} mutating contract remedy phase {:?} is absent from evaluated config",
+            case.tool, mutation.remedy_phase_id
+        )
+    })?;
+    if !remedy_phase.enabled || remedy_phase.mode != PhaseMode::Fix {
+        return Err(format!(
+            "{} mutating contract phase {:?} is not an enabled remedy",
+            case.tool, mutation.remedy_phase_id
+        ));
+    }
+    if remedy_phase.writes != WriteBehavior::TargetFiles {
+        return Err(format!(
+            "{} mutating contract remedy {:?} must declare target-files writes, got {:?}",
+            case.tool, mutation.remedy_phase_id, remedy_phase.writes
+        ));
+    }
+    let expected_extra_args = contract
+        .extra_args
+        .iter()
+        .map(|argument| (*argument).to_owned())
+        .collect::<Vec<_>>();
+    if remedy_phase.extra_args != expected_extra_args {
+        return Err(format!(
+            "{} remedy extra args mismatch: expected {:?}, evaluated {:?}",
+            case.tool, expected_extra_args, remedy_phase.extra_args
+        ));
+    }
+    let remedy = resolve_phase_invocations(
+        case,
+        spec,
+        remedy_phase,
+        mutation.remedy_invocations,
+        contract.trace_plan,
+        project,
+    )?;
+
+    let final_check = if mutation.final_invocations.is_empty() {
+        None
+    } else {
+        let phase = spec.phases.get(contract.phase_id).ok_or_else(|| {
+            format!(
+                "{} mutating contract final phase {:?} is absent from evaluated config",
+                case.tool, contract.phase_id
+            )
+        })?;
+        Some(resolve_phase_invocations(
+            case,
+            spec,
+            phase,
+            mutation.final_invocations,
+            contract.trace_plan,
+            project,
+        )?)
+    };
+
+    for resolved in std::iter::once(&remedy).chain(final_check.iter()) {
+        if resolved.trace_program
+            != final_check
+                .as_ref()
+                .map_or(remedy.trace_program.as_str(), |final_check| {
+                    final_check.trace_program.as_str()
+                })
+        {
+            return Err(format!(
+                "{} mutating contract changes its traced child program between phases",
+                case.tool
+            ));
+        }
+    }
+    let aggregate = aggregate_resolved_outcome(
+        final_check
+            .as_ref()
+            .map_or(remedy.invocations.as_slice(), |final_check| {
+                final_check.invocations.as_slice()
+            }),
+    );
+    if aggregate != mutation.immediate_outcome {
+        return Err(format!(
+            "{} mutating contract expected immediate {:?}, but final executed phase classifies as {aggregate:?}",
+            case.tool, mutation.immediate_outcome
+        ));
+    }
+    let targets = contract.targets().into_iter().collect::<BTreeSet<_>>();
+    let changed = mutation
+        .changed_targets
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if !changed.is_subset(&targets) {
+        return Err(format!(
+            "{} mutating contract changed targets {changed:?} outside candidates {targets:?}",
+            case.tool
+        ));
+    }
+    Ok(ResolvedMutatingContract {
+        remedy,
+        final_check,
+    })
+}
+
+fn resolve_phase_invocations(
+    case: &FixtureCase,
+    spec: &ToolSpec,
+    phase: &Phase,
+    expected_invocations: &[ExpectedInvocation],
+    trace_plan: TracePlan,
+    project: &Path,
+) -> Result<ResolvedContract, String> {
+    match spec.phase_invocation {
+        InvocationGranularity::PerFile
+            if expected_invocations
+                .iter()
+                .all(|invocation| invocation.targets.len() == 1) => {}
+        InvocationGranularity::Batch if expected_invocations.len() == 1 => {}
+        InvocationGranularity::Workspace if expected_invocations.len() == 1 => {}
+        actual => {
+            return Err(format!(
+                "{} phase contract invocation groups do not match evaluated granularity {actual:?}",
+                case.tool
+            ));
+        }
+    }
+    let outer_program = phase
+        .program
+        .clone()
+        .unwrap_or_else(|| spec.executable.clone());
+    let mut invocations = Vec::with_capacity(expected_invocations.len());
+    let mut trace_program = None;
+    let mut trace_invocations = Vec::new();
+    for invocation in expected_invocations {
+        let targets = invocation
+            .targets
+            .iter()
+            .map(|relative| canonical_project(&project.join(relative)))
+            .collect::<Vec<_>>();
+        let arguments = render_expected_arguments(spec, phase, project, &targets)?;
+        let outcome = classify_expected_exit(phase, invocation.exit_code);
+        let (invocation_trace_program, mut invocation_traces) = resolve_trace_invocations(
+            trace_plan,
+            &outer_program,
+            &arguments,
+            &targets,
+            invocation.trace_exit_codes,
+        )?;
+        if let Some(expected) = &trace_program {
+            if expected != &invocation_trace_program {
+                return Err(format!(
+                    "{} phase contract trace program changed between invocation groups",
+                    case.tool
+                ));
+            }
+        } else {
+            trace_program = Some(invocation_trace_program);
+        }
+        trace_invocations.append(&mut invocation_traces);
+        invocations.push(ResolvedInvocation {
+            targets,
+            arguments,
+            exit_code: invocation.exit_code,
+            outcome,
+        });
+    }
+    Ok(ResolvedContract {
+        outer_program,
+        trace_program: trace_program
+            .ok_or_else(|| format!("{} phase contract has no trace program", case.tool))?,
+        invocations,
+        trace_invocations,
+    })
+}
+
+fn aggregate_resolved_outcome(invocations: &[ResolvedInvocation]) -> ExpectedOutcome {
+    if invocations
+        .iter()
+        .any(|invocation| invocation.outcome == ExpectedOutcome::OperationalFailure)
+    {
+        ExpectedOutcome::OperationalFailure
+    } else if invocations
+        .iter()
+        .any(|invocation| invocation.outcome == ExpectedOutcome::Issues)
+    {
+        ExpectedOutcome::Issues
+    } else {
+        ExpectedOutcome::Clean
+    }
+}
+
 fn resolve_trace_invocations(
     plan: TracePlan,
     outer_program: &str,
@@ -2371,6 +3153,109 @@ fn resolve_trace_invocations(
                 .map(|argument| (*argument).to_owned())
                 .chain(
                     outer_arguments[(nested_program_index + 1)..*marker_index]
+                        .iter()
+                        .cloned(),
+                )
+                .chain(before_files.iter().map(|argument| (*argument).to_owned()))
+                .chain(expected_files)
+                .collect();
+            Ok((
+                trace_program,
+                vec![ResolvedTraceInvocation {
+                    targets: targets.to_vec(),
+                    arguments,
+                    exit_code: expected_exit_codes[0],
+                }],
+            ))
+        }
+        TracePlan::SingleNestedModeFilesMarker {
+            nested_program_index,
+            adapter_prefix,
+            marker,
+            leading,
+            mode_arguments,
+            before_files,
+        } => {
+            if expected_exit_codes.len() != 1 {
+                return Err(format!(
+                    "mode-and-files single-child adapter trace for {outer_program} must declare exactly one exit code, got {expected_exit_codes:?}"
+                ));
+            }
+            if nested_program_index != adapter_prefix.len() + 1 {
+                return Err(format!(
+                    "mode-and-files single-child adapter trace plan for {outer_program} must place exactly one script between its adapter prefix and nested tool"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "mode-and-files single-child adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "mode-and-files single-child adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(nested_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "mode-and-files single-child adapter {outer_program} has no nested tool at argument {nested_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let mode_index = nested_program_index + 1;
+            let mode = outer_arguments.get(mode_index).ok_or_else(|| {
+                format!(
+                    "mode-and-files single-child adapter {outer_program} has no phase mode: {outer_arguments:?}"
+                )
+            })?;
+            let mode_arguments = mode_arguments
+                .iter()
+                .find_map(|(name, arguments)| (*name == mode).then_some(*arguments))
+                .ok_or_else(|| {
+                    format!(
+                        "mode-and-files single-child adapter {outer_program} has unsupported phase mode {mode:?}"
+                    )
+                })?;
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "mode-and-files single-child adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= mode_index {
+                return Err(format!(
+                    "mode-and-files single-child adapter {outer_program} places {marker:?} before phase mode: {outer_arguments:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let rendered_files = &outer_arguments[(*marker_index + 1)..];
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "mode-and-files single-child adapter {outer_program} file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let arguments = leading
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .chain(mode_arguments.iter().map(|argument| (*argument).to_owned()))
+                .chain(
+                    outer_arguments[(mode_index + 1)..*marker_index]
                         .iter()
                         .cloned(),
                 )
@@ -2588,6 +3473,13 @@ impl ToolTraceHarness {
                 command.env(name, BETTERLEAKS_POISON_ENV_VALUE);
             }
         }
+        if self.logical_program == "biome" {
+            command.env(CI_ENV, BIOME_POISON_ENV_VALUE);
+            command.env(RAYON_NUM_THREADS_ENV, BIOME_POISON_ENV_VALUE);
+            for name in BIOME_SCRUBBED_ENV {
+                command.env(name, BIOME_POISON_ENV_VALUE);
+            }
+        }
         Ok(())
     }
 }
@@ -2599,25 +3491,43 @@ fn verify_tool_trace(
     project: &Path,
     evidence_path: &Path,
 ) -> Result<(), String> {
+    verify_tool_trace_invocations(
+        harness,
+        label,
+        &contract.trace_program,
+        &contract.trace_invocations,
+        project,
+        evidence_path,
+    )
+}
+
+fn verify_tool_trace_invocations(
+    harness: &ToolTraceHarness,
+    label: &str,
+    trace_program: &str,
+    expected_invocations: &[ResolvedTraceInvocation],
+    project: &Path,
+    evidence_path: &Path,
+) -> Result<(), String> {
     let trace_dir = harness.trace_root.join(label).join("invocations");
     let invocations = sorted_entries(&trace_dir)?
         .into_iter()
         .filter(|entry| entry.path().is_dir())
         .collect::<Vec<_>>();
-    if invocations.len() != contract.trace_invocations.len() {
+    if invocations.len() != expected_invocations.len() {
         return Err(format!(
             "{} {label} expected {} invocation(s), observed {} at {trace_dir:?}",
-            contract.trace_program,
-            contract.trace_invocations.len(),
+            trace_program,
+            expected_invocations.len(),
             invocations.len()
         ));
     }
 
     let cwd = canonical_project(project);
     let mut records = Vec::new();
-    for (invocation, expected) in invocations.iter().zip(&contract.trace_invocations) {
+    for (invocation, expected) in invocations.iter().zip(expected_invocations) {
         let record = invocation.path();
-        assert_record(&record, "logical-program", &contract.trace_program)?;
+        assert_record(&record, "logical-program", trace_program)?;
         for (name, expected) in [
             ("LANG", "C"),
             ("LC_ALL", "C"),
@@ -2642,10 +3552,10 @@ fn verify_tool_trace(
         assert_record(&record, "status", &expected.exit_code.to_string())?;
         assert_record(&record, "execution", "pass-through")?;
         let program = read_record(&record, "program")?;
-        if Path::new(&program).file_name() != Some(OsStr::new(&contract.trace_program)) {
+        if Path::new(&program).file_name() != Some(OsStr::new(trace_program)) {
             return Err(format!(
                 "{} {label} trace recorded unexpected shim program {program:?}",
-                contract.trace_program
+                trace_program
             ));
         }
         let mut environment = serde_json::json!({
@@ -2657,7 +3567,7 @@ fn verify_tool_trace(
             "FORCE_COLOR": "0",
             TOOL_TRACE_SENTINEL_ENV: TOOL_TRACE_SENTINEL,
         });
-        if contract.trace_program == "astro" {
+        if trace_program == "astro" {
             let (node_path, telemetry_disabled, ci, debug) =
                 verify_astro_trace_environment(&record, harness)?;
             let environment = environment
@@ -2671,7 +3581,7 @@ fn verify_tool_trace(
             environment.insert(CI_ENV.to_owned(), JsonValue::String(ci));
             environment.insert(DEBUG_ENV.to_owned(), JsonValue::String(debug));
         }
-        if contract.trace_program == "betterleaks" {
+        if trace_program == "betterleaks" {
             let scrubbed = verify_betterleaks_trace_environment(&record)?;
             let environment = environment
                 .as_object_mut()
@@ -2680,8 +3590,17 @@ fn verify_tool_trace(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if trace_program == "biome" {
+            let scrubbed = verify_biome_trace_environment(&record)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in scrubbed {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         records.push(serde_json::json!({
-            "logicalProgram": contract.trace_program,
+            "logicalProgram": trace_program,
             "shimProgram": program,
             "realProgram": harness.real_program,
             "cwd": cwd,
@@ -2793,7 +3712,35 @@ fn verify_betterleaks_trace_environment(record: &Path) -> Result<BTreeMap<String
                 "Betterleaks trace must clear inherited configuration, got {name}={value:?}"
             ));
         }
-        environment.insert(name.to_owned(), value);
+        environment.insert((*name).to_owned(), value);
+    }
+    Ok(environment)
+}
+
+fn verify_biome_trace_environment(record: &Path) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    let ci = read_record(record, &format!("env-{CI_ENV}"))?;
+    if ci != "1" {
+        return Err(format!(
+            "Biome trace must force non-interactive CI mode, got {CI_ENV}={ci:?}"
+        ));
+    }
+    environment.insert(CI_ENV.to_owned(), ci);
+    let rayon_threads = read_record(record, &format!("env-{RAYON_NUM_THREADS_ENV}"))?;
+    if rayon_threads != "1" {
+        return Err(format!(
+            "Biome trace must force deterministic worker count, got {RAYON_NUM_THREADS_ENV}={rayon_threads:?}"
+        ));
+    }
+    environment.insert(RAYON_NUM_THREADS_ENV.to_owned(), rayon_threads);
+    for name in BIOME_SCRUBBED_ENV {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "Biome trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
     }
     Ok(environment)
 }
@@ -2841,6 +3788,30 @@ impl TreeSnapshot {
             removed,
             changed,
         }
+    }
+
+    fn restore(&self, root: &Path) -> Result<(), String> {
+        let current = Self::read(root)?;
+        for relative in current.files.keys() {
+            if self.files.contains_key(relative) {
+                continue;
+            }
+            let path = root.join(relative);
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("remove restored-baseline addition {path:?}: {error}"))?;
+        }
+        for (relative, bytes) in &self.files {
+            let path = root.join(relative);
+            let parent = path.parent().ok_or_else(|| {
+                format!("restored-baseline file has no parent directory: {path:?}")
+            })?;
+            std::fs::create_dir_all(parent).map_err(|error| {
+                format!("create restored-baseline directory {parent:?}: {error}")
+            })?;
+            std::fs::write(&path, bytes)
+                .map_err(|error| format!("restore baseline file {path:?}: {error}"))?;
+        }
+        Ok(())
     }
 
     fn as_json(&self) -> JsonValue {
@@ -2954,6 +3925,174 @@ fn verify_first_workspace_diff(
             "{} workspace diff contained unexpected additions: {}",
             case.tool,
             diff.describe()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mutation_expected_tree(
+    case: &FixtureCase,
+    mutation: &MutatingToolContractCase,
+) -> Result<(), String> {
+    let expected_root = case.directory.join("expected");
+    let mut expected_paths = BTreeSet::new();
+    if expected_root.is_dir() {
+        collect_relative_file_paths(&expected_root, &expected_root, &mut expected_paths)?;
+    }
+    let changed_paths = mutation
+        .changed_targets
+        .iter()
+        .map(PathBuf::from)
+        .collect::<BTreeSet<_>>();
+    if expected_paths != changed_paths {
+        return Err(format!(
+            "{} mutating fixture expected/ mirror does not exactly bind changed targets: expected files {expected_paths:?}, contract {changed_paths:?}",
+            case.tool
+        ));
+    }
+    Ok(())
+}
+
+fn collect_relative_file_paths(
+    root: &Path,
+    current: &Path,
+    paths: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    for entry in sorted_entries(current)? {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("expected-tree file type for {path:?}: {error}"))?;
+        if file_type.is_dir() {
+            collect_relative_file_paths(root, &path, paths)?;
+        } else if file_type.is_file() {
+            paths.insert(
+                path.strip_prefix(root)
+                    .map_err(|error| format!("expected-tree relative path {path:?}: {error}"))?
+                    .to_path_buf(),
+            );
+        } else {
+            return Err(format!("expected-tree does not support {path:?}"));
+        }
+    }
+    Ok(())
+}
+
+fn verify_mutating_workspace_diff(
+    case: &FixtureCase,
+    mutation: &MutatingToolContractCase,
+    outcome: ExpectedOutcome,
+    diff: &TreeDiff,
+) -> Result<(), String> {
+    if !diff.removed.is_empty() {
+        return Err(format!(
+            "{} mutating run removed workspace files: {}",
+            case.tool,
+            diff.describe()
+        ));
+    }
+    let expected_changed = mutation
+        .changed_targets
+        .iter()
+        .map(PathBuf::from)
+        .collect::<BTreeSet<_>>();
+    let actual_changed = diff.changed.iter().cloned().collect::<BTreeSet<_>>();
+    if actual_changed != expected_changed {
+        return Err(format!(
+            "{} mutating run changed the wrong workspace files: expected {expected_changed:?}, got {}",
+            case.tool,
+            diff.describe()
+        ));
+    }
+    let expected_artifacts = usize::from(outcome != ExpectedOutcome::Clean);
+    let diagnostics = format!(".velvet-glove/{}-agent-hook", case.tool);
+    if diff.added.len() != expected_artifacts
+        || diff.added.iter().any(|path| {
+            !path.starts_with(Path::new(&diagnostics))
+                || path.extension() != Some(OsStr::new("txt"))
+        })
+    {
+        return Err(format!(
+            "{} mutating run added unexpected workspace files: {}",
+            case.tool,
+            diff.describe()
+        ));
+    }
+    Ok(())
+}
+
+fn verify_mutating_immediate_artifact(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    mutation: &MutatingToolContractCase,
+    project: &Path,
+) -> Result<(), String> {
+    let directory = project.join(format!(".velvet-glove/{}-agent-hook", case.tool));
+    let artifacts = if directory.is_dir() {
+        sorted_entries(&directory)?
+            .into_iter()
+            .filter(|entry| entry.path().is_file())
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let expected = usize::from(mutation.immediate_outcome != ExpectedOutcome::Clean);
+    if artifacts.len() != expected {
+        return Err(format!(
+            "{} mutating immediate expected {expected} diagnostic artifact(s), found {artifacts:?}",
+            case.tool
+        ));
+    }
+    let Some(path) = artifacts.first() else {
+        return Ok(());
+    };
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("read {} immediate artifact {path:?}: {error}", case.tool))?;
+    let classification = match mutation.immediate_outcome {
+        ExpectedOutcome::Clean => unreachable!(),
+        ExpectedOutcome::Issues => "classification: Some(Issues)",
+        ExpectedOutcome::OperationalFailure => "classification: Some(Failure)",
+    };
+    if !contents.contains(classification) {
+        return Err(format!(
+            "{} mutating immediate artifact lacks {classification:?}:\n{contents}",
+            case.tool
+        ));
+    }
+    verify_stable_diagnostics(case, contract, &contents, "mutating immediate artifact")
+}
+
+fn verify_idempotent_immediate_output(
+    case: &FixtureCase,
+    surface: ProtocolSurface,
+    output: &BoundedOutput,
+    project: &Path,
+) -> Result<(), String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    verify_tool_output_is_canonical(&case.tool, "idempotent immediate stdout", &stdout)?;
+    verify_tool_output_is_canonical(&case.tool, "idempotent immediate stderr", &stderr)?;
+    let aliases = workspace_path_aliases(project);
+    let normalized_stdout = normalize(&stdout, &aliases);
+    let normalized_stderr = normalize(&stderr, &aliases);
+    let native = serde_json::from_str::<JsonValue>(&normalized_stdout).map_err(|error| {
+        format!(
+            "{} idempotent immediate {surface} output was not JSON: {error}: {normalized_stdout:?}",
+            case.tool
+        )
+    })?;
+    if output.status.code() != Some(0) || native != serde_json::json!({}) {
+        return Err(format!(
+            "{} idempotent immediate {surface} was not a successful native no-op: status={:?}, stdout={normalized_stdout:?}",
+            case.tool,
+            output.status.code()
+        ));
+    }
+    if !normalized_stderr.trim().is_empty() {
+        return Err(format!(
+            "{} idempotent immediate {surface} emitted stderr:\n{normalized_stderr}",
+            case.tool
         ));
     }
     Ok(())
@@ -3192,6 +4331,227 @@ fn run_deferred_attempt(
     Ok(semantic)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_mutating_deferred_attempt(
+    case: &FixtureCase,
+    surface: ProtocolSurface,
+    timeout: Duration,
+    workspace: &FixtureWorkspace,
+    config: &Path,
+    immediate_input: &support::native_events::NativePostToolInput,
+    trace: &ToolTraceHarness,
+    contract: &RealToolContractCase,
+    mutation: &MutatingToolContractCase,
+    attempt: usize,
+    project_baseline: &TreeSnapshot,
+    expectation: &DeferredAttemptExpectation<'_>,
+) -> Result<JsonValue, String> {
+    let state_dir = workspace.root.join(format!("deferred-state-{attempt}"));
+    seed_pending_targets(case, &state_dir, surface, &workspace.project, contract)?;
+    let turn_input = turn_completion_input(case, surface, &workspace.project)?;
+    let evidence = workspace.evidence.join(format!("deferred-{attempt}"));
+    std::fs::create_dir_all(&evidence).map_err(|error| {
+        format!(
+            "create {} mutating deferred evidence {evidence:?}: {error}",
+            case.tool
+        )
+    })?;
+    std::fs::write(evidence.join("input.json"), &turn_input)
+        .map_err(|error| format!("write {} deferred input evidence: {error}", case.tool))?;
+
+    let binary = env!("CARGO_BIN_EXE_velvet-glove");
+    let mut command = Command::new(binary);
+    command
+        .args(["--harness", surface.cli_name(), "--config"])
+        .arg(config)
+        .arg("--state-dir")
+        .arg(&state_dir)
+        .arg("turn-completion");
+    immediate_input.configure_command(&mut command);
+    let trace_label = format!("deferred-{attempt}");
+    trace.configure(&mut command, &trace_label)?;
+    let output = run_with_timeout(&mut command, &turn_input, timeout, &evidence)
+        .map_err(|error| format!("run deferred {binary} for {surface}: {error}"))?;
+    std::fs::write(
+        evidence.join("exit.txt"),
+        format!("{}\n", output.status.code().unwrap_or(-1)),
+    )
+    .map_err(|error| format!("write {} deferred exit evidence: {error}", case.tool))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{} deferred {surface} attempt {attempt} exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            case.tool,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    let native: JsonValue = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "parse {} deferred {surface} attempt {attempt} native output: {error}\n{}",
+            case.tool,
+            String::from_utf8_lossy(&output.stdout)
+        )
+    })?;
+    verify_mutating_deferred_native(case, expectation, &native, surface)?;
+    let expected_trace = expectation
+        .phases
+        .iter()
+        .flat_map(|phase| phase.resolved.trace_invocations.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let trace_program = expectation
+        .phases
+        .first()
+        .map(|phase| phase.resolved.trace_program.as_str())
+        .ok_or_else(|| format!("{} deferred attempt has no expected phases", case.tool))?;
+    if expectation
+        .phases
+        .iter()
+        .any(|phase| phase.resolved.trace_program != trace_program)
+    {
+        return Err(format!(
+            "{} deferred attempt changes traced child program between phases",
+            case.tool
+        ));
+    }
+    verify_tool_trace_invocations(
+        trace,
+        &trace_label,
+        trace_program,
+        &expected_trace,
+        &workspace.project,
+        &workspace
+            .evidence
+            .join(format!("deferred-{attempt}-trace.json")),
+    )?;
+
+    let summaries = files_named(&state_dir, "summary.json");
+    if summaries.len() != 1 {
+        return Err(format!(
+            "{} deferred {surface} attempt {attempt} expected one summary, found {summaries:?}",
+            case.tool
+        ));
+    }
+    let summary_path = &summaries[0];
+    let summary: JsonValue =
+        serde_json::from_slice(&std::fs::read(summary_path).map_err(|error| {
+            format!(
+                "read {} deferred summary {summary_path:?}: {error}",
+                case.tool
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "parse {} deferred summary {summary_path:?}: {error}",
+                case.tool
+            )
+        })?;
+    let semantic = verify_mutating_deferred_summary(
+        case,
+        contract,
+        mutation,
+        expectation,
+        &workspace.project,
+        &summary,
+    )?;
+    write_json(
+        &workspace
+            .evidence
+            .join(format!("deferred-{attempt}-summary.json")),
+        &summary,
+    )?;
+    write_json(
+        &workspace
+            .evidence
+            .join(format!("deferred-{attempt}-semantic.json")),
+        &semantic,
+    )?;
+
+    let after = TreeSnapshot::read(&workspace.project)?;
+    let diff = project_baseline.diff(&after);
+    verify_mutating_deferred_diff(case, expectation, &diff)?;
+    if !expectation.changed_targets.is_empty() {
+        let expected_root = case.directory.join("expected");
+        verify_expected_tree(&expected_root, &expected_root, &workspace.project)?;
+    }
+    write_json(
+        &workspace
+            .evidence
+            .join(format!("workspace-deferred-{attempt}-diff.json")),
+        &diff.as_json(),
+    )?;
+    Ok(semantic)
+}
+
+fn verify_mutating_deferred_native(
+    case: &FixtureCase,
+    expectation: &DeferredAttemptExpectation<'_>,
+    native: &JsonValue,
+    surface: ProtocolSurface,
+) -> Result<(), String> {
+    match expectation.outcome {
+        ExpectedOutcome::Clean => {
+            if native.get("decision").is_some() {
+                return Err(format!(
+                    "{} clean deferred {surface} unexpectedly blocked: {native}",
+                    case.tool
+                ));
+            }
+            let message = native
+                .get("systemMessage")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "{} clean deferred {surface} lacked systemMessage: {native}",
+                        case.tool
+                    )
+                })?;
+            let needle = if expectation.fix_attempted {
+                "Auto-fixed"
+            } else {
+                "clean"
+            };
+            if !message.contains(needle) {
+                return Err(format!(
+                    "{} clean deferred {surface} lacked {needle:?}: {message:?}",
+                    case.tool
+                ));
+            }
+        }
+        ExpectedOutcome::Issues | ExpectedOutcome::OperationalFailure => {
+            if native.get("decision").and_then(JsonValue::as_str) != Some("block") {
+                return Err(format!(
+                    "{} deferred {surface} expected a native block: {native}",
+                    case.tool
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_mutating_deferred_diff(
+    case: &FixtureCase,
+    expectation: &DeferredAttemptExpectation<'_>,
+    diff: &TreeDiff,
+) -> Result<(), String> {
+    let expected_changed = expectation
+        .changed_targets
+        .iter()
+        .map(PathBuf::from)
+        .collect::<BTreeSet<_>>();
+    let actual_changed = diff.changed.iter().cloned().collect::<BTreeSet<_>>();
+    if !diff.added.is_empty() || !diff.removed.is_empty() || actual_changed != expected_changed {
+        return Err(format!(
+            "{} deferred workspace diff mismatch: expected only changed={expected_changed:?}, got {}",
+            case.tool,
+            diff.describe()
+        ));
+    }
+    Ok(())
+}
+
 fn seed_pending_targets(
     case: &FixtureCase,
     state_dir: &Path,
@@ -3304,6 +4664,264 @@ fn verify_deferred_native(
         }
     }
     Ok(())
+}
+
+fn verify_mutating_deferred_summary(
+    case: &FixtureCase,
+    contract: &RealToolContractCase,
+    mutation: &MutatingToolContractCase,
+    expectation: &DeferredAttemptExpectation<'_>,
+    project: &Path,
+    summary: &JsonValue,
+) -> Result<JsonValue, String> {
+    require_json_string(summary, "status", expectation.outcome.summary_status())?;
+    let expected_targets = contract
+        .targets()
+        .into_iter()
+        .map(|relative| canonical_project(&project.join(relative)))
+        .collect::<Vec<_>>();
+    require_path_array(summary, "candidateFiles", &expected_targets)?;
+    let expected_changed = expectation
+        .changed_targets
+        .iter()
+        .map(|relative| canonical_project(&project.join(relative)))
+        .collect::<BTreeSet<_>>();
+
+    let result = require_json_object(summary, "result")?;
+    let artifacts = require_json_object_value(result, "artifacts")?;
+    let expected_artifact_count = expectation
+        .phases
+        .iter()
+        .map(|phase| phase.resolved.invocations.len())
+        .sum::<usize>();
+    if artifacts.len() != expected_artifact_count {
+        return Err(format!(
+            "{} mutating deferred expected {expected_artifact_count} artifacts, got {}: {artifacts:?}",
+            case.tool,
+            artifacts.len()
+        ));
+    }
+    let initial = expectation
+        .phases
+        .first()
+        .ok_or_else(|| format!("{} deferred expectation has no initial phase", case.tool))?;
+    let reports = require_json_object_value(result, "reports")?;
+    if reports.len() != initial.resolved.invocations.len() {
+        return Err(format!(
+            "{} mutating deferred expected {} reports, got {}: {reports:?}",
+            case.tool,
+            initial.resolved.invocations.len(),
+            reports.len()
+        ));
+    }
+
+    let cwd = canonical_project(project);
+    let mut artifact_contracts = Vec::new();
+    for phase in &expectation.phases {
+        for invocation in &phase.resolved.invocations {
+            let expected_classification = invocation.outcome.artifact_classification();
+            let artifact = artifacts
+                .values()
+                .find(|artifact| {
+                    artifact.get("phase").and_then(JsonValue::as_str) == Some(phase.phase)
+                        && json_path_array_equals(artifact, "candidateFiles", &invocation.targets)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "{} deferred artifact missing for phase {} and {:?}: {artifacts:?}",
+                        case.tool, phase.phase, invocation.targets
+                    )
+                })?;
+            let changed = invocation
+                .targets
+                .iter()
+                .filter(|target| expected_changed.contains(*target))
+                .cloned()
+                .collect::<Vec<_>>();
+            require_json_string(artifact, "toolId", &case.tool)?;
+            require_json_string(artifact, "workflowId", mutation.remedy_phase_id)?;
+            require_json_string(artifact, "phase", phase.phase)?;
+            require_json_string(artifact, "classification", expected_classification)?;
+            require_json_i64(artifact, "exitCode", i64::from(invocation.exit_code))?;
+            require_json_string(artifact, "program", &phase.resolved.outer_program)?;
+            require_string_array(artifact, "arguments", &invocation.arguments)?;
+            require_json_path(artifact, "workingDirectory", &cwd)?;
+            require_path_array(artifact, "files", &invocation.targets)?;
+            require_path_array(artifact, "candidateFiles", &invocation.targets)?;
+            require_path_array(artifact, "changedFiles", &changed)?;
+            let contents = artifact
+                .get("contents")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "{} deferred artifact lacks text contents: {artifact}",
+                        case.tool
+                    )
+                })?;
+            verify_tool_output_is_canonical(
+                &case.tool,
+                "mutating deferred diagnostic artifact",
+                contents,
+            )?;
+            if phase.assert_diagnostics {
+                verify_stable_diagnostics(
+                    case,
+                    contract,
+                    contents,
+                    &format!(
+                        "deferred {} artifact for {:?}",
+                        phase.phase, invocation.targets
+                    ),
+                )?;
+            }
+            let absolute = artifact
+                .get("absolutePath")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "{} deferred artifact lacks absolutePath: {artifact}",
+                        case.tool
+                    )
+                })?;
+            let on_disk = std::fs::read_to_string(absolute).map_err(|error| {
+                format!("read {} deferred artifact {absolute:?}: {error}", case.tool)
+            })?;
+            if on_disk != contents {
+                return Err(format!(
+                    "{} deferred artifact contents differ from {absolute:?}",
+                    case.tool
+                ));
+            }
+            artifact_contracts.push(serde_json::json!({
+                "targets": invocation.targets,
+                "phase": phase.phase,
+                "classification": expected_classification,
+                "exitCode": invocation.exit_code,
+                "program": phase.resolved.outer_program,
+                "arguments": invocation.arguments,
+                "workingDirectory": cwd,
+                "changedFiles": changed,
+                "contents": contents,
+            }));
+        }
+    }
+
+    let expected_initial_check = match expectation.initial_outcome {
+        ExpectedOutcome::Clean => Some("clean"),
+        ExpectedOutcome::Issues => Some("issues"),
+        ExpectedOutcome::OperationalFailure => None,
+    };
+    let expected_final_check = match expectation.final_outcome {
+        Some(ExpectedOutcome::Clean) => Some("clean"),
+        Some(ExpectedOutcome::Issues) => Some("issues"),
+        Some(ExpectedOutcome::OperationalFailure) | None => None,
+    };
+    for invocation in &initial.resolved.invocations {
+        let report = reports
+            .values()
+            .find(|report| json_path_array_equals(report, "candidateFiles", &invocation.targets))
+            .ok_or_else(|| {
+                format!(
+                    "{} deferred report missing for {:?}: {reports:?}",
+                    case.tool, invocation.targets
+                )
+            })?;
+        let changed = invocation
+            .targets
+            .iter()
+            .filter(|target| expected_changed.contains(*target))
+            .cloned()
+            .collect::<Vec<_>>();
+        require_json_string(report, "toolId", &case.tool)?;
+        require_json_string(report, "workflowId", mutation.remedy_phase_id)?;
+        require_path_array(report, "candidateFiles", &invocation.targets)?;
+        require_path_array(report, "changedFiles", &changed)?;
+        require_json_bool(report, "fixAttempted", expectation.fix_attempted)?;
+        require_json_bool(
+            report,
+            "conservativeAttribution",
+            invocation.targets.len() > 1,
+        )?;
+        require_optional_json_string(report, "initialCheck", expected_initial_check)?;
+        require_optional_json_string(report, "finalCheck", expected_final_check)?;
+    }
+
+    let files = require_json_object_value(result, "files")?;
+    let operational = require_json_object_value(result, "operationalProblems")?;
+    match expectation.outcome {
+        ExpectedOutcome::Clean | ExpectedOutcome::Issues => {
+            if files.len() != expected_targets.len() || !operational.is_empty() {
+                return Err(format!(
+                    "{} mutating deferred normal result shape mismatch: files={files:?}, operational={operational:?}",
+                    case.tool
+                ));
+            }
+            let status = match (expectation.outcome, expectation.fix_attempted) {
+                (ExpectedOutcome::Clean, true) => "auto-fixed",
+                (ExpectedOutcome::Clean, false) => "clean",
+                (ExpectedOutcome::Issues, _) => "manual-fixes-needed",
+                (ExpectedOutcome::OperationalFailure, _) => unreachable!(),
+            };
+            for target in &expected_targets {
+                let file = files
+                    .values()
+                    .find(|file| json_path_equals(file, "path", target))
+                    .ok_or_else(|| {
+                        format!("{} deferred file result missing for {target:?}", case.tool)
+                    })?;
+                require_json_string(file, "status", status)?;
+                require_json_bool(file, "changedByRunner", expected_changed.contains(target))?;
+            }
+        }
+        ExpectedOutcome::OperationalFailure => {
+            let failed_invocations = initial
+                .resolved
+                .invocations
+                .iter()
+                .filter(|invocation| invocation.outcome == ExpectedOutcome::OperationalFailure)
+                .collect::<Vec<_>>();
+            if !files.is_empty() || operational.len() != failed_invocations.len() {
+                return Err(format!(
+                    "{} mutating deferred operational shape mismatch: files={files:?}, operational={operational:?}",
+                    case.tool
+                ));
+            }
+            for invocation in failed_invocations {
+                let problem = operational
+                    .values()
+                    .find(|problem| {
+                        json_path_array_equals(problem, "affectedFiles", &invocation.targets)
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "{} deferred operational problem missing for {:?}",
+                            case.tool, invocation.targets
+                        )
+                    })?;
+                require_json_string(problem, "toolId", &case.tool)?;
+                require_json_string(problem, "phase", "initial-check")?;
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "status": expectation.outcome.summary_status(),
+        "targets": expected_targets,
+        "artifacts": artifact_contracts,
+        "fixAttempted": expectation.fix_attempted,
+        "changedFiles": expected_changed,
+        "fileStatuses": files.values().map(|file| serde_json::json!({
+            "path": file.get("path"),
+            "status": file.get("status"),
+            "changedByRunner": file.get("changedByRunner"),
+        })).collect::<Vec<_>>(),
+        "operationalProblems": operational.values().map(|problem| serde_json::json!({
+            "toolId": problem.get("toolId"),
+            "phase": problem.get("phase"),
+            "affectedFiles": problem.get("affectedFiles"),
+            "message": problem.get("message"),
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 fn verify_deferred_summary(
@@ -4226,6 +5844,378 @@ done
     }
 }
 
+fn verify_biome_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        const CHILD_PID_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_CHILD_PID";
+        const DESCENDANT_PID_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_DESCENDANT_PID";
+        const DESCENDANT_READY_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_DESCENDANT_READY";
+        const CHILD_ARGV_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_CHILD_ARGV";
+        const CHILD_MODE_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_CHILD_MODE";
+        const LEADER_TERM_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_LEADER_TERM";
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "biome lifecycle probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err("biome lifecycle probe could not extract the evaluated adapter".to_owned());
+        };
+        if isolated != "-I" || command != "-c" {
+            return Err(format!(
+                "biome lifecycle probe expected isolated Python -I -c, got {isolated:?} {command:?}"
+            ));
+        }
+        if mode != "verify" || marker != BIOME_FILES_MARKER {
+            return Err(format!(
+                "biome lifecycle probe expected exact verify/marker shape, got mode={mode:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "biome lifecycle probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("biome lifecycle probe cannot resolve {python_program:?}"))?;
+        let python = python
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Biome lifecycle Python {python:?}: {error}"))?;
+
+        let root = unique_temp_dir("velvet-glove-biome-lifecycle");
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("create Biome lifecycle root {root:?}: {error}"))?;
+        let result = (|| {
+            let spaced_program_dir = root.join("state root with spaces");
+            std::fs::create_dir(&spaced_program_dir)
+                .map_err(|error| format!("create spaced Biome program root: {error}"))?;
+            let lifecycle_python = spaced_program_dir.join("python");
+            std::os::unix::fs::symlink(&python, &lifecycle_python).map_err(|error| {
+                format!("link spaced Biome lifecycle Python {lifecycle_python:?}: {error}")
+            })?;
+            let fake_tool = root.join("biome-fake");
+            let target_argument = "--dash.js";
+            let target = root.join(target_argument);
+            std::fs::write(&target, "const dash = true;\n")
+                .map_err(|error| format!("write Biome lifecycle target {target:?}: {error}"))?;
+            let fake_source = format!(
+                r#"#!/bin/sh
+set -eu
+case "${{{CHILD_MODE_ENV}}}" in
+  trap) trap 'printf "term\n" > "${{{LEADER_TERM_ENV}}}"; exit 0' HUP INT TERM ;;
+  ignore) trap '' HUP INT TERM ;;
+  *) exit 64 ;;
+esac
+: > "${{{CHILD_ARGV_ENV}}}"
+for argument in "$@"; do
+  printf '%s\n' "$argument" >> "${{{CHILD_ARGV_ENV}}}"
+done
+(
+  trap '' HUP INT TERM
+  : > "${{{DESCENDANT_READY_ENV}}}"
+  while :; do
+    :
+  done
+) &
+while [ ! -f "${{{DESCENDANT_READY_ENV}}}" ]; do
+  :
+done
+printf '%s\n' "$!" > "${{{DESCENDANT_PID_ENV}}}"
+printf '%s\n' "$$" > "${{{CHILD_PID_ENV}}}"
+printf 'ready\n'
+while :; do
+  :
+done
+"#
+            );
+            std::fs::write(&fake_tool, fake_source)
+                .map_err(|error| format!("write Biome lifecycle fake {fake_tool:?}: {error}"))?;
+            let mut permissions = std::fs::metadata(&fake_tool)
+                .map_err(|error| format!("stat Biome lifecycle fake {fake_tool:?}: {error}"))?
+                .permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&fake_tool, permissions)
+                .map_err(|error| format!("make Biome lifecycle fake executable: {error}"))?;
+
+            let expected_arguments = [
+                "check",
+                "--colors=off",
+                "--reporter=json",
+                "--max-diagnostics=none",
+                "--error-on-warnings",
+                "--no-errors-on-unmatched",
+                "--",
+                target_argument,
+            ]
+            .join("\n")
+                + "\n";
+            for mode in ["trap", "ignore"] {
+                let child_pid_path = root.join(format!("{mode}-child.pid"));
+                let descendant_pid_path = root.join(format!("{mode}-descendant.pid"));
+                let descendant_ready_path = root.join(format!("{mode}-descendant.ready"));
+                let child_argv_path = root.join(format!("{mode}-child.argv"));
+                let leader_term_path = root.join(format!("{mode}-leader.term"));
+                run_biome_adapter_lifecycle_scenario(
+                    &lifecycle_python,
+                    adapter,
+                    &fake_tool,
+                    &root,
+                    target_argument,
+                    mode,
+                    &child_pid_path,
+                    &descendant_pid_path,
+                    &descendant_ready_path,
+                    &child_argv_path,
+                    &leader_term_path,
+                    timeout,
+                )?;
+                let observed_arguments =
+                    std::fs::read_to_string(&child_argv_path).map_err(|error| {
+                        format!(
+                            "read Biome lifecycle {mode} child argv {child_argv_path:?}: {error}"
+                        )
+                    })?;
+                if observed_arguments != expected_arguments {
+                    return Err(format!(
+                        "Biome lifecycle {mode} child argv mismatch for dash-leading selected path: expected {expected_arguments:?}, got {observed_arguments:?}"
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn run_biome_adapter_lifecycle_scenario(
+    lifecycle_python: &Path,
+    adapter: &str,
+    fake_tool: &Path,
+    root: &Path,
+    target_argument: &str,
+    mode: &str,
+    child_pid_path: &Path,
+    descendant_pid_path: &Path,
+    descendant_ready_path: &Path,
+    child_argv_path: &Path,
+    leader_term_path: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    const CHILD_PID_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_CHILD_PID";
+    const DESCENDANT_PID_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_DESCENDANT_PID";
+    const DESCENDANT_READY_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_DESCENDANT_READY";
+    const CHILD_ARGV_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_CHILD_ARGV";
+    const CHILD_MODE_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_CHILD_MODE";
+    const LEADER_TERM_ENV: &str = "VELVET_GLOVE_BIOME_LIFECYCLE_LEADER_TERM";
+    let mut command = Command::new(lifecycle_python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(fake_tool)
+        .arg("verify")
+        .arg(BIOME_FILES_MARKER)
+        .arg(target_argument)
+        .current_dir(root)
+        .env(CHILD_PID_ENV, child_pid_path)
+        .env(DESCENDANT_PID_ENV, descendant_pid_path)
+        .env(DESCENDANT_READY_ENV, descendant_ready_path)
+        .env(CHILD_ARGV_ENV, child_argv_path)
+        .env(CHILD_MODE_ENV, mode)
+        .env(LEADER_TERM_ENV, leader_term_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut outer = command
+        .spawn()
+        .map_err(|error| format!("spawn evaluated Biome {mode} lifecycle adapter: {error}"))?;
+    let outer_pid = outer.id();
+    let startup_timeout = timeout.min(Duration::from_secs(5));
+    let startup_deadline = std::time::Instant::now() + startup_timeout;
+    let child_pid = loop {
+        if let Ok(value) = std::fs::read_to_string(child_pid_path) {
+            match value.trim().parse::<u32>() {
+                Ok(pid) => break pid,
+                Err(error) => {
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "parse Biome {mode} lifecycle child PID {value:?}: {error}"
+                    ));
+                }
+            }
+        }
+        if let Some(status) = outer
+            .try_wait()
+            .map_err(|error| format!("poll Biome {mode} lifecycle adapter: {error}"))?
+        {
+            return Err(format!(
+                "Biome {mode} lifecycle adapter exited {status:?} before its child became ready"
+            ));
+        }
+        if std::time::Instant::now() >= startup_deadline {
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            return Err(format!(
+                "Biome {mode} lifecycle child did not become ready within {startup_timeout:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let descendant_pid = std::fs::read_to_string(descendant_pid_path)
+        .map_err(|error| {
+            let _ = signal_process(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            format!("read Biome {mode} lifecycle descendant PID {descendant_pid_path:?}: {error}")
+        })?
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| {
+            let _ = signal_process(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = outer.wait();
+            format!("parse Biome {mode} lifecycle descendant PID: {error}")
+        })?;
+    if !signal_process_group(child_pid, "0")?.success() {
+        let _ = signal_process(descendant_pid, "KILL");
+        let _ = signal_process(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "Biome {mode} lifecycle child {child_pid} did not lead an isolated process group"
+        ));
+    }
+
+    let term = signal_process(outer_pid, "TERM")?;
+    if !term.success() {
+        let _ = signal_process(descendant_pid, "KILL");
+        let _ = signal_process(child_pid, "KILL");
+        let _ = signal_process(outer_pid, "KILL");
+        let _ = outer.wait();
+        return Err(format!(
+            "send SIGTERM to Biome {mode} lifecycle adapter {outer_pid}: {term:?}"
+        ));
+    }
+
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(outer.wait_with_output());
+    });
+    let completion_timeout = timeout.min(Duration::from_secs(5));
+    let output = match receiver.recv_timeout(completion_timeout) {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            let _ = signal_process(descendant_pid, "KILL");
+            let _ = signal_process(child_pid, "KILL");
+            return Err(format!(
+                "wait for terminated Biome {mode} lifecycle adapter: {error}"
+            ));
+        }
+        Err(error) => {
+            let _ = signal_process(descendant_pid, "KILL");
+            let _ = signal_process(child_pid, "KILL");
+            let _ = signal_process(outer_pid, "KILL");
+            let _ = receiver.recv_timeout(Duration::from_secs(2));
+            return Err(format!(
+                "Biome {mode} lifecycle adapter or inherited output pipe remained open for {completion_timeout:?}: {error}"
+            ));
+        }
+    };
+    let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+    let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+    let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+    if child_alive {
+        let _ = signal_process(child_pid, "KILL");
+    }
+    if descendant_alive {
+        let _ = signal_process(descendant_pid, "KILL");
+    }
+    if group_alive {
+        let _ = signal_process_group(child_pid, "KILL");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let leader_term = std::fs::read_to_string(leader_term_path).ok();
+    if output.status.code() != Some(2) {
+        Err(format!(
+            "SIGTERM Biome {mode} lifecycle adapter exited {:?}, expected status 2; stdout={stdout:?}; stderr={stderr:?}",
+            output.status.code()
+        ))
+    } else if child_alive {
+        Err(format!(
+            "SIGTERM Biome {mode} lifecycle adapter left child {child_pid} alive"
+        ))
+    } else if descendant_alive {
+        Err(format!(
+            "SIGTERM Biome {mode} lifecycle adapter left same-group descendant {descendant_pid} alive"
+        ))
+    } else if group_alive {
+        Err(format!(
+            "SIGTERM Biome {mode} lifecycle adapter left process group {child_pid} alive"
+        ))
+    } else if !matches!(stdout.as_ref(), "" | "ready\n") {
+        Err(format!(
+            "Biome {mode} lifecycle adapter emitted unexpected partial stdout: {stdout:?}"
+        ))
+    } else if stderr != "velvet-glove-biome: received signal 15\n" {
+        Err(format!(
+            "Biome {mode} lifecycle adapter emitted unexpected stderr: {stderr:?}"
+        ))
+    } else if mode == "trap" && leader_term.as_deref() != Some("term\n") {
+        Err(format!(
+            "Biome trapping lifecycle leader did not record graceful TERM: {leader_term:?}"
+        ))
+    } else if mode == "ignore" && leader_term.is_some() {
+        Err(format!(
+            "Biome ignoring lifecycle leader unexpectedly handled TERM: {leader_term:?}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn process_survives(pid: u32, timeout: Duration) -> Result<bool, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if !signal_process(pid, "0")?.success() {
+            return Ok(false);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn process_group_survives(pgid: u32, timeout: Duration) -> Result<bool, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if !signal_process_group(pgid, "0")?.success() {
+            return Ok(false);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[cfg(unix)]
 fn signal_process(pid: u32, signal: &str) -> Result<std::process::ExitStatus, String> {
     Command::new("/bin/kill")
@@ -4235,6 +6225,18 @@ fn signal_process(pid: u32, signal: &str) -> Result<std::process::ExitStatus, St
         .stderr(Stdio::null())
         .status()
         .map_err(|error| format!("run /bin/kill -{signal} {pid}: {error}"))
+}
+
+#[cfg(unix)]
+fn signal_process_group(pgid: u32, signal: &str) -> Result<std::process::ExitStatus, String> {
+    Command::new("/bin/kill")
+        .arg(format!("-{signal}"))
+        .arg("--")
+        .arg(format!("-{pgid}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("run /bin/kill -{signal} -- -{pgid}: {error}"))
 }
 
 fn resolve_program(program: &str) -> Option<PathBuf> {

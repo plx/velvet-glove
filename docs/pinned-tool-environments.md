@@ -6,9 +6,10 @@ single command. For example:
 ```sh
 just tool-case jq multi-file-fragments
 just tool-case betterleaks multi-file
+just tool-case biome multi-file
 ```
 
-Run all ten behavior-rich representative contracts across eight environments
+Run all eleven behavior-rich representative contracts across eight environments
 with:
 
 ```sh
@@ -66,7 +67,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Environment | Runtime/tool | Integrity source | Representative |
 | --- | --- | --- | --- |
 | Data formats | jq 1.8.2 | SHA-256 + SLSA | `jq/multi-file-fragments` |
-| Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `sort-package-json/unformatted` |
+| Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5 | mise SHA-256 | `go-fmt/unformatted` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -313,6 +314,96 @@ not to an inferred culprit. `--noSync` prevents Astro's normal generated-file
 writes, but side-effectful project configuration, checker, or plugin code is
 outside that no-mutation guarantee.
 
+### Biome validation contract
+
+The Node environment pins
+[`@biomejs/biome` 2.5.7](https://www.npmjs.com/package/@biomejs/biome/v/2.5.7)
+and its `@biomejs/cli-darwin-arm64` 2.5.7 native package. The official
+[`@biomejs/biome@2.5.7` release](https://github.com/biomejs/biome/releases/tag/%40biomejs%2Fbiome%402.5.7)
+resolves to verified commit
+`191d051335821e804e7ffe484240ca326af86f7c`. npm registry signatures and SLSA
+provenance bind both tarballs to that commit and the upstream
+`.github/workflows/release.yml` run. Their committed SHA-512 integrities are:
+
+- wrapper: `sha512-zr8K/DcY5tYsQOQwqMJ0AWElo6QgmgNI7idXgXLhevVszlt8RGVpesEJPqx3ThazLaOwjJ5Y8fz3BtH5fGZNsw==`
+- macOS arm64 CLI: `sha512-vxo/Ls3/PYdQWyLhYYcgMOCzQypAjcY+iihS8M0wW03l16TCLW4zqZzGo75gm1VdCMj38hTVZ31KBWrZ4G9dJw==`
+
+The extracted native binary independently matches the official release asset
+at SHA-256
+`f71fe80909d2f70f1e051320f5ba9dfd553bc5ef3bacef5cdee1b00ee96a285c`.
+Biome is dual-licensed under MIT or Apache-2.0. The exact version probe is
+`Version: 2.5.7`.
+
+Both phases use the pinned Python 3.14.5 interpreter in isolated mode, while
+the npm executable uses pinned Node 24.18.0:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> biome fix {extra-args} __VELVET_GLOVE_BIOME_FILES__ {files}
+python -I -c <adapter> biome verify {extra-args} __VELVET_GLOVE_BIOME_FILES__ {files}
+```
+
+The adapter launches exactly one batch for each phase:
+
+```text
+biome check --write {extra-args} --colors=off --reporter=json --max-diagnostics=none --error-on-warnings --no-errors-on-unmatched -- {files}
+biome check {extra-args} --colors=off --reporter=json --max-diagnostics=none --error-on-warnings --no-errors-on-unmatched -- {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Isolated mode prevents project-local or ambient Python imports from replacing
+the adapter's standard-library modules. Before launch, it verifies every
+selected path is a readable regular nonsymlink file. It rejects configured
+arguments that can change file or VCS selection, rule scope, mutation,
+reporting, diagnostic completeness, server/watch behavior, or early exits.
+Allowed configuration remains restricted to non-controlled long
+`--name=value` arguments. A literal `--` separates the locked controls from
+selected paths, including filenames that begin with a dash. The child receives
+deterministic color, CI, and single-thread Rayon values,
+while Biome binary overrides, Node injection paths, Biome log/config inputs,
+Biome thread overrides, Rust logging/backtraces, and `DEBUG` are removed.
+
+Biome uses status one for both source diagnostics and operational failures.
+The adapter therefore accepts its exact-pinned JSON report only when all
+counters are nonnegative integers, every selected file was processed, no file
+or diagnostic was skipped, and diagnostic severities agree with the summary.
+Status zero maps to clean only for a complete report with no diagnostics.
+Status one maps to source issues only when every failing category is `parse`,
+`format`, `lint/*`, `assist/*`, or `suppressions/*`; configuration errors,
+unknown categories, malformed or incomplete reports, spawn/signals, and every
+other status map to operational status two. Volatile duration fields are
+removed before evidence is emitted. Output is drained concurrently with a
+combined 16 MiB bound, and handled HUP/INT/TERM signals are forwarded to the
+child process group before bounded termination and reap attempts.
+
+The five cases cover clean input, one safe formatting repair, a persistent
+parse issue, an invalid `biome.json` whose native status one must become
+operational, and a three-file batch. The batch selects one dirty and one clean
+file while leaving a dirty sentinel unselected; only the dirty selected file
+may change. Immediate execution proves `fix` then authoritative `verify`, and
+its second run is clean and mutation-free. The compatibility-deferred path is
+seeded independently from pristine input, proves initial check, remedy, final
+check, complete changed-file evidence, and then a clean verify-only repeat.
+Batch outcome attribution remains conservative even though the full workspace
+diff records the exact file Biome changed.
+
+The JSON reporter is explicitly experimental upstream, so the accepted schema
+is deliberately locked to Biome 2.5.7 and future patch updates require renewed
+tests. The regular-file check is a launch-time preflight, not protection from a
+concurrent path replacement. Project configuration can still choose rules and
+safe-fix behavior within the adapter's control boundary; unsafe fixes are not
+enabled.
+
+The official binary is not RustSec-clean: its dependency inventory includes
+`quick-xml` 0.38.4 findings RUSTSEC-2026-0194 and RUSTSEC-2026-0195, plus the
+RUSTSEC-2026-0097 `rand` warning. The affected `quick-xml` path is introduced by
+the JUnit reporter dependency; this contract locks the JSON reporter and
+rejects reporter overrides, so that parser is not reachable through the
+validated command. This is a narrow reachability argument, not a claim that
+the upstream artifact is vulnerability-free or exempt from future advisories.
+
 ### Asciidoctor validation contract
 
 The Ruby environment pins the dependency-free, pure-Ruby
@@ -400,11 +491,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These ten smoke contracts establish the reproducible environment substrate;
+These eleven smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
-and semantic case has evidence; jq, Betterleaks, Astro, and Asciidoctor are
-covered only after each complete four-case matrix passes. Linux, Intel, and
+and semantic case has evidence; jq, Betterleaks, Astro, Asciidoctor, and Biome
+are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 
 ## Updating a pin

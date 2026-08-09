@@ -454,7 +454,7 @@ fn eslint_builtin_matches_rust_spec() {
 }
 
 #[test]
-fn biome_builtin_matches_rust_spec() {
+fn biome_adapter_distinguishes_source_issues_and_verifies_mutations() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
     let biome = spec(&specs, "biome");
@@ -462,31 +462,98 @@ fn biome_builtin_matches_rust_spec() {
     assert_eq!(biome.id, "biome");
     assert_eq!(biome.display_name, "Biome");
     assert_eq!(biome.executable, "biome");
+    assert_eq!(biome.phase_invocation, InvocationGranularity::Batch);
+    assert!(
+        biome.workflows.is_empty(),
+        "biome uses compatibility translation"
+    );
 
     let fix = biome.phases.get("fix").expect("fix");
-    assert_argv(
-        fix,
-        vec![
-            literal("check"),
-            literal("--write"),
-            literal("--no-errors-on-unmatched"),
-            token(ArgToken::ExtraArgs),
-            token(ArgToken::Files),
-        ],
-    );
-    assert_exit_codes(&fix.exit_codes, &[0], &[1], &[]);
+    assert_eq!(fix.program.as_deref(), Some("python"));
+    assert_eq!(fix.argv.len(), 8);
+    assert_eq!(fix.argv[0], literal("-I"));
+    assert_eq!(fix.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &fix.argv[2] else {
+        panic!("biome adapter must be a literal Python program")
+    };
+    for required in [
+        "__VELVET_GLOVE_BIOME_FILES__",
+        "phase not in (\"fix\", \"verify\")",
+        "os.lstat(path)",
+        "not os.path.isfile(path) or os.path.islink(path)",
+        "use a non-controlled long --name=value option",
+        "option_name.startswith(\"--vcs-\")",
+        "option_name.startswith(\"--files-\")",
+        "option_name.endswith(\"-linter-enabled\")",
+        "\"--only\"",
+        "\"--skip\"",
+        "--reporter=json",
+        "--max-diagnostics=none",
+        "--error-on-warnings",
+        "--no-errors-on-unmatched",
+        "child_args.append(\"--write\")",
+        "child_args.extend(fixed)",
+        "child_args.append(\"--\")",
+        "environment.pop(name, None)",
+        "BIOME_BINARY",
+        "BIOME_THREADS",
+        "RAYON_NUM_THREADS",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "BIOME_CONFIG_PATH",
+        "selectors.DefaultSelector",
+        "start_new_session=True",
+        "class AdapterSignal(BaseException)",
+        "raise AdapterSignal(signum)",
+        "raise AdapterSignal(pending_signal)",
+        "os.killpg(process.pid, signum)",
+        "child.wait(timeout=1)",
+        "signal.SIGKILL",
+        "except AdapterSignal as error:",
+        "pending_signal is not None and adapter_error is None",
+        "combined output exceeded",
+        "report.get(\"command\") == \"check\"",
+        "type(summary.get(field)) is int and summary[field] >= 0",
+        "\"scannerDuration\"",
+        "processed = summary[\"changed\"] + summary[\"unchanged\"]",
+        "processed == len(files)",
+        "summary[\"skipped\"] == 0",
+        "summary[\"diagnosticsNotPrinted\"] == 0",
+        "counts_agree",
+        "category in (\"parse\", \"format\")",
+        "category.startswith(\"lint/\")",
+        "category.startswith(\"assist/\")",
+        "category.startswith(\"suppressions/\")",
+        "summary.pop(\"duration\", None)",
+        "summary.pop(\"scannerDuration\", None)",
+        "raise SystemExit(outer_status)",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "biome adapter omits {required:?}"
+        );
+    }
+    assert_eq!(fix.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(fix.argv[4], literal("fix"));
+    assert_eq!(fix.argv[5], token(ArgToken::ExtraArgs));
+    assert_eq!(fix.argv[6], literal("__VELVET_GLOVE_BIOME_FILES__"));
+    assert_eq!(fix.argv[7], token(ArgToken::Files));
+    assert_exit_codes(&fix.exit_codes, &[0], &[1], &[2]);
     assert_eq!(fix.writes, WriteBehavior::TargetFiles);
 
     let verify = biome.phases.get("verify").expect("verify");
-    assert_argv(
-        verify,
-        vec![
-            literal("check"),
-            literal("--no-errors-on-unmatched"),
-            token(ArgToken::ExtraArgs),
-            token(ArgToken::Files),
-        ],
-    );
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    assert_eq!(verify.argv[2], fix.argv[2]);
+    assert_eq!(verify.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[4], literal("verify"));
+    assert_eq!(verify.argv[5], token(ArgToken::ExtraArgs));
+    assert_eq!(verify.argv[6], literal("__VELVET_GLOVE_BIOME_FILES__"));
+    assert_eq!(verify.argv[7], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(biome.phase_order, vec!["fix", "verify"]);
 }
 
 #[test]
