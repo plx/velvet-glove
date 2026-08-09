@@ -815,8 +815,62 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
 
+    let gofmt = spec(&specs, "goFmt");
+    let gofmt_workflow = gofmt.workflows.get("format").expect("gofmt workflow");
+    let gofmt_check = gofmt_workflow.check.as_ref().expect("gofmt check");
+    let gofmt_remedy = gofmt_workflow.remedy.as_ref().expect("gofmt remedy");
+    assert_eq!(gofmt_check.program.as_deref(), Some("python"));
+    assert_eq!(gofmt_remedy.program.as_deref(), Some("python"));
+    assert!(gofmt_check.issues_on_stdout);
+    assert_eq!(gofmt_check.writes, WriteBehavior::None);
+    assert_eq!(gofmt_remedy.writes, WriteBehavior::TargetFiles);
+    assert_workflow_argv(
+        gofmt_check,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            gofmt_check.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("verify"),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_GOFMT_FILES__"),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_workflow_argv(
+        gofmt_remedy,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            gofmt_check.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("write"),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_GOFMT_FILES__"),
+            token(ArgToken::Files),
+        ],
+    );
+    let gofmt_script = match &gofmt_check.argv[2] {
+        ArgvElement::Literal(script) => script,
+        other => panic!("gofmt adapter script was not literal: {other:?}"),
+    };
+    assert!(gofmt_script.contains("run_child([tool, \"-l\", *files])"));
+    assert!(gofmt_script.contains("run_child([tool, \"-w\", *files])"));
+    assert!(gofmt_script.contains("info.st_nlink != 1"));
+    assert!(gofmt_script.contains("name.startswith(\"GO\")"));
+    assert!(gofmt_script.contains(
+        "try:\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)\n        process = subprocess.Popen("
+    ));
+    assert!(gofmt_script.contains(
+        "            start_new_session=True,\n        )\n        if pending_signal is not None:\n            raise AdapterSignal(pending_signal)"
+    ));
+    assert_eq!(gofmt_workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(gofmt_workflow.invocation, InvocationGranularity::Batch);
+    let gofmt_phase = gofmt.phases.get("format").expect("gofmt immediate phase");
+    assert_eq!(gofmt_phase.program.as_deref(), Some("python"));
+    assert_eq!(gofmt_phase.argv, gofmt_remedy.argv);
+
     for (key, check_prefix) in [
-        ("goFmt", "-l"),
         ("goFumpt", "-l"),
         ("goImports", "-l"),
         ("goLines", "--dry-run"),

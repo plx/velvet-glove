@@ -11,8 +11,8 @@ mod support;
 
 use bounded_process::{BoundedCommandError, BoundedOutput, run_with_timeout};
 use hookkit_pkl_config::{
-    ArgToken, ArgvElement, InvocationGranularity, Phase, PhaseMode, ToolSpec, UnexpectedExitPolicy,
-    WriteBehavior,
+    ArgToken, ArgvElement, CheckScope, ExitCodes, InvocationGranularity, Phase, PhaseMode,
+    ToolSpec, UnexpectedExitPolicy, WorkflowCommand, WriteBehavior,
 };
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,6 +56,33 @@ const GITLEAKS_CONFIG_TOML_ENV: &str = "GITLEAKS_CONFIG_TOML";
 const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this";
 const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
 const BUF_POISON_ENV_VALUE: &str = "velvet-glove-buf-adapter-must-clear-this";
+const GOFMT_POISON_ENV_VALUE: &str = "velvet-glove-gofmt-adapter-must-clear-this";
+const GOFMT_CHILD_PATH: &str = "/usr/bin:/bin";
+const GOFMT_CONTROLLED_ENV: &[(&str, &str)] = &[
+    ("GODEBUG", ""),
+    ("GOENV", "off"),
+    ("GOMAXPROCS", "1"),
+    ("GOTELEMETRY", "off"),
+    ("GOTOOLCHAIN", "local"),
+];
+const GOFMT_SCRUBBED_ENV: &[&str] = &[
+    "GOCACHE",
+    "GOFLAGS",
+    "GONOSUMDB",
+    "GOPATH",
+    "GOPROXY",
+    "GOSUMDB",
+    "GOTMPDIR",
+    "GOWORK",
+    "GO_VELVET_GLOVE_POISON",
+    DEBUG_ENV,
+];
+const GOFMT_LOADER_SCRUBBED_ENV: &[&str] = &[
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+];
 const BUF_CACHE_DIR_ENV: &str = "BUF_CACHE_DIR";
 const BUF_CHILD_PATH: &str = "/usr/bin:/bin";
 const BUF_DIFF_PROGRAM: &str = "/usr/bin/diff";
@@ -200,6 +227,12 @@ enum TracePlan {
         mode_arguments: &'static [(&'static str, &'static [&'static str])],
         before_files: &'static [&'static str],
     },
+    PreflightThenNestedModeFilesMarker {
+        nested_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        mode_arguments: &'static [(&'static str, &'static [&'static [&'static str]])],
+    },
     PreflightThenNestedModeWorkspaceMarker {
         nested_program_index: usize,
         adapter_prefix: &'static [&'static str],
@@ -287,6 +320,20 @@ const BIOME_TRACE_PLAN: TracePlan = TracePlan::SingleNestedModeFilesMarker {
     leading: &["check"],
     mode_arguments: BIOME_MODE_ARGUMENTS,
     before_files: BIOME_ARGUMENTS_BEFORE_FILES,
+};
+
+const GOFMT_FILES_MARKER: &str = "__VELVET_GLOVE_GOFMT_FILES__";
+const GOFMT_VERIFY_COMMANDS: &[&[&str]] = &[&["-l"]];
+const GOFMT_WRITE_COMMANDS: &[&[&str]] = &[&["-l"], &["-w"]];
+const GOFMT_MODE_ARGUMENTS: &[(&str, &[&[&str]])] = &[
+    ("verify", GOFMT_VERIFY_COMMANDS),
+    ("write", GOFMT_WRITE_COMMANDS),
+];
+const GOFMT_TRACE_PLAN: TracePlan = TracePlan::PreflightThenNestedModeFilesMarker {
+    nested_program_index: 3,
+    adapter_prefix: &["-I", "-c"],
+    marker: GOFMT_FILES_MARKER,
+    mode_arguments: GOFMT_MODE_ARGUMENTS,
 };
 
 const BUF_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_BUF_WORKSPACE__";
@@ -834,9 +881,61 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["\"status\":\"issues\""],
             trace_plan: CARGO_CLIPPY_TRACE_PLAN,
         },
+        ("go-fmt", "clean") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: GOFMT_TRACE_PLAN,
+        },
+        ("go-fmt", "unformatted") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go"],
+            diagnostic_excludes: &[],
+            trace_plan: GOFMT_TRACE_PLAN,
+        },
+        ("go-fmt", "multi-file") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go"],
+            diagnostic_excludes: &["unselected-sentinel.go"],
+            trace_plan: GOFMT_TRACE_PLAN,
+        },
+        ("go-fmt", "operational-failure") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "invalid.go"],
+                exit_code: 2,
+                trace_exit_codes: &[2],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["invalid.go:3:15: expected ')', found '{'"],
+            diagnostic_excludes: &["gofmt: changed example.go"],
+            trace_plan: GOFMT_TRACE_PLAN,
+        },
         (
             "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format"
-            | "cargo-clippy",
+            | "cargo-clippy" | "go-fmt",
             other,
         ) => {
             return Err(format!(
@@ -1079,7 +1178,75 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
-        ("biome" | "buf-format" | "cargo-clippy", other) => {
+        ("go-fmt", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("go-fmt", "unformatted") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.go"],
+        },
+        ("go-fmt", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.go"],
+        },
+        ("go-fmt", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "invalid.go"],
+                exit_code: 2,
+                trace_exit_codes: &[2],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("biome" | "buf-format" | "cargo-clippy" | "go-fmt", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
@@ -2470,6 +2637,67 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
 }
 
 #[test]
+fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
+    let root = unique_temp_dir("velvet-glove-gofmt-trace-environment");
+    let shim_dir = root.join("tool-shim");
+    let trace_root = root.join("tool-traces");
+    let record = root.join("record");
+    std::fs::create_dir_all(&shim_dir).expect("gofmt shim directory");
+    std::fs::create_dir_all(&trace_root).expect("gofmt trace directory");
+    std::fs::create_dir_all(&record).expect("gofmt trace record");
+    let shim = shim_dir.join("gofmt");
+    std::fs::write(&shim, "fixture shim\n").expect("gofmt shim");
+
+    for (name, value) in std::iter::once((PATH_ENV, GOFMT_CHILD_PATH))
+        .chain(std::iter::once(("TERM", "dumb")))
+        .chain(GOFMT_CONTROLLED_ENV.iter().copied())
+    {
+        std::fs::write(record.join(format!("env-{name}")), format!("{value}\n"))
+            .expect("controlled gofmt environment record");
+    }
+    for name in GOFMT_SCRUBBED_ENV.iter().chain(GOFMT_LOADER_SCRUBBED_ENV) {
+        std::fs::write(record.join(format!("env-{name}")), "\n")
+            .expect("scrubbed gofmt environment record");
+    }
+    std::fs::write(record.join("program"), format!("{}\n", shim.display()))
+        .expect("absolute gofmt shim record");
+    let harness = ToolTraceHarness {
+        shim_dir,
+        trace_root,
+        programs: BTreeMap::from([("gofmt".to_owned(), root.join("managed/bin/gofmt"))]),
+        cargo_clippy_toolchain: None,
+    };
+
+    let environment = verify_gofmt_trace_environment(&record, &harness)
+        .expect("isolated managed gofmt trace environment");
+    assert_eq!(
+        environment.get(PATH_ENV).map(String::as_str),
+        Some(GOFMT_CHILD_PATH)
+    );
+    assert_eq!(
+        environment.get("GOTELEMETRY").map(String::as_str),
+        Some("off")
+    );
+    assert!(
+        GOFMT_SCRUBBED_ENV
+            .iter()
+            .chain(GOFMT_LOADER_SCRUBBED_ENV)
+            .all(|name| environment.get(*name).is_some_and(String::is_empty))
+    );
+
+    std::fs::write(
+        record.join("env-GO_VELVET_GLOVE_POISON"),
+        format!("{GOFMT_POISON_ENV_VALUE}\n"),
+    )
+    .expect("poisoned dynamic Go environment record");
+    let error = verify_gofmt_trace_environment(&record, &harness)
+        .expect_err("an inherited future Go variable must fail closed");
+    assert!(error.contains("GO_VELVET_GLOVE_POISON"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn betterleaks_output_requires_adapter_canonicalization() {
     let suffix = "unable to load config, err: open does-not-exist.toml: no such file or directory";
     for clock in ["8:10AM", "12:59PM"] {
@@ -2641,6 +2869,18 @@ fn biome_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated gofmt adapter lifecycle; requires controlled Python"]
+fn gofmt_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("go-fmt")
+        .unwrap_or_else(|| panic!("builtin catalog has no gofmt spec"));
+    verify_gofmt_adapter_lifecycle(spec, timeout).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     let options = HarnessOptions::from_environment().unwrap_or_else(|error| panic!("{error}"));
@@ -2665,6 +2905,11 @@ fn run_all_tool_fixtures() {
         verify_biome_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("biome adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "go-fmt") {
+        verify_gofmt_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("gofmt adapter lifecycle probe: pass");
     }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -3503,25 +3748,25 @@ fn run_mutating_fixture_case_inner(
     pristine: &TreeSnapshot,
 ) -> Result<(), String> {
     validate_mutation_expected_tree(case, mutation)?;
-    let phase_trace = |remedy: &ResolvedContract| {
-        remedy
+    let phase_trace = |immediate: &ResolvedContract| {
+        let final_check = (!resolved_mutation.explicit_workflow)
+            .then_some(&resolved_mutation.final_check)
+            .into_iter()
+            .flat_map(|phase| phase.iter())
+            .flat_map(|phase| phase.trace_invocations.iter());
+        immediate
             .trace_invocations
             .iter()
-            .chain(
-                resolved_mutation
-                    .final_check
-                    .iter()
-                    .flat_map(|phase| phase.trace_invocations.iter()),
-            )
+            .chain(final_check)
             .cloned()
             .collect::<Vec<_>>()
     };
-    let immediate_trace = phase_trace(&resolved_mutation.remedy);
+    let immediate_trace = phase_trace(&resolved_mutation.immediate);
     let repeat_trace = phase_trace(
         resolved_mutation
-            .repeat_remedy
+            .repeat_immediate
             .as_ref()
-            .unwrap_or(&resolved_mutation.remedy),
+            .unwrap_or(&resolved_mutation.immediate),
     );
     let binary = env!("CARGO_BIN_EXE_velvet-glove");
     let mut command = Command::new(binary);
@@ -3814,7 +4059,7 @@ fn build_fixture_input(
     builder.build()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ResolvedContract {
     outer_program: String,
     trace_program: String,
@@ -3840,9 +4085,11 @@ struct ResolvedTraceInvocation {
 
 #[derive(Debug)]
 struct ResolvedMutatingContract {
+    immediate: ResolvedContract,
+    repeat_immediate: Option<ResolvedContract>,
     remedy: ResolvedContract,
-    repeat_remedy: Option<ResolvedContract>,
     final_check: Option<ResolvedContract>,
+    explicit_workflow: bool,
 }
 
 fn resolve_real_tool_contract(
@@ -3865,10 +4112,67 @@ fn resolve_real_tool_contract(
         .get(&case.tool)
         .ok_or_else(|| format!("evaluated fixture config omitted tool {}", case.tool))?;
     if !spec.workflows.is_empty() {
-        return Err(format!(
-            "{} contract expected a compatibility-translated deferred workflow, found explicit workflows",
-            case.tool
-        ));
+        if spec.workflow_order != vec![contract.phase_id.to_owned()] {
+            return Err(format!(
+                "{} explicit workflow order mismatch: expected {:?}, got {:?}",
+                case.tool,
+                [contract.phase_id],
+                spec.workflow_order
+            ));
+        }
+        let workflow = spec.workflows.get(contract.phase_id).ok_or_else(|| {
+            format!(
+                "{} explicit workflow {:?} is absent from evaluated config",
+                case.tool, contract.phase_id
+            )
+        })?;
+        if !workflow.enabled
+            || workflow.check_scope != CheckScope::TargetFiles
+            || workflow.invocation != InvocationGranularity::Batch
+        {
+            return Err(format!(
+                "{} explicit workflow {:?} must be enabled, target-files scoped, and batch invoked; got enabled={} scope={:?} invocation={:?}",
+                case.tool,
+                contract.phase_id,
+                workflow.enabled,
+                workflow.check_scope,
+                workflow.invocation
+            ));
+        }
+        let check = workflow.check.as_ref().ok_or_else(|| {
+            format!(
+                "{} explicit workflow {:?} omitted its checker",
+                case.tool, contract.phase_id
+            )
+        })?;
+        if check.writes != WriteBehavior::None || !check.issues_on_stdout {
+            return Err(format!(
+                "{} explicit workflow {:?} checker must be read-only and stdout-signaled; got writes={:?} issuesOnStdout={}",
+                case.tool, contract.phase_id, check.writes, check.issues_on_stdout
+            ));
+        }
+        let expected_extra_args = contract
+            .extra_args
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        if check.extra_args != expected_extra_args {
+            return Err(format!(
+                "{} explicit checker extra args mismatch: expected {:?}, evaluated {:?}",
+                case.tool, expected_extra_args, check.extra_args
+            ));
+        }
+        return resolve_workflow_invocations(
+            case,
+            spec,
+            check,
+            workflow.invocation,
+            contract.invocations,
+            contract.outcome,
+            contract.trace_plan,
+            project,
+            "explicit checker",
+        );
     }
     let phase = spec.phases.get(contract.phase_id).ok_or_else(|| {
         format!(
@@ -3997,26 +4301,26 @@ fn resolve_mutating_tool_contract(
         .tools
         .get(&case.tool)
         .ok_or_else(|| format!("evaluated fixture config omitted tool {}", case.tool))?;
-    let remedy_phase = spec.phases.get(mutation.remedy_phase_id).ok_or_else(|| {
+    let immediate_phase = spec.phases.get(mutation.remedy_phase_id).ok_or_else(|| {
         format!(
-            "{} mutating contract remedy phase {:?} is absent from evaluated config",
+            "{} mutating contract immediate phase {:?} is absent from evaluated config",
             case.tool, mutation.remedy_phase_id
         )
     })?;
-    if !remedy_phase.enabled || remedy_phase.mode != mutation.remedy_mode {
+    if !immediate_phase.enabled || immediate_phase.mode != mutation.remedy_mode {
         return Err(format!(
-            "{} mutating contract remedy {:?} expected enabled {:?} mode, got enabled={} mode={:?}",
+            "{} mutating contract immediate phase {:?} expected enabled {:?} mode, got enabled={} mode={:?}",
             case.tool,
             mutation.remedy_phase_id,
             mutation.remedy_mode,
-            remedy_phase.enabled,
-            remedy_phase.mode
+            immediate_phase.enabled,
+            immediate_phase.mode
         ));
     }
-    if remedy_phase.writes != mutation.remedy_writes {
+    if immediate_phase.writes != mutation.remedy_writes {
         return Err(format!(
-            "{} mutating contract remedy {:?} expected {:?} writes, got {:?}",
-            case.tool, mutation.remedy_phase_id, mutation.remedy_writes, remedy_phase.writes
+            "{} mutating contract immediate phase {:?} expected {:?} writes, got {:?}",
+            case.tool, mutation.remedy_phase_id, mutation.remedy_writes, immediate_phase.writes
         ));
     }
     if mutation.remedy_writes == WriteBehavior::None {
@@ -4043,61 +4347,147 @@ fn resolve_mutating_tool_contract(
         .iter()
         .map(|argument| (*argument).to_owned())
         .collect::<Vec<_>>();
-    if remedy_phase.extra_args != expected_extra_args {
+    if immediate_phase.extra_args != expected_extra_args {
         return Err(format!(
-            "{} remedy extra args mismatch: expected {:?}, evaluated {:?}",
-            case.tool, expected_extra_args, remedy_phase.extra_args
+            "{} immediate phase extra args mismatch: expected {:?}, evaluated {:?}",
+            case.tool, expected_extra_args, immediate_phase.extra_args
         ));
     }
-    let remedy = resolve_phase_invocations(
+    let immediate = resolve_phase_invocations(
         case,
         spec,
-        remedy_phase,
+        immediate_phase,
         mutation.remedy_invocations,
         contract.trace_plan,
         project,
     )?;
-    let repeat_remedy = mutation
+    let repeat_immediate = mutation
         .repeat_remedy_invocations
         .map(|invocations| {
             resolve_phase_invocations(
                 case,
                 spec,
-                remedy_phase,
+                immediate_phase,
                 invocations,
                 contract.trace_plan,
                 project,
             )
         })
         .transpose()?;
-    if repeat_remedy.is_some() && mutation.changed_targets.is_empty() {
+    if repeat_immediate.is_some() && mutation.changed_targets.is_empty() {
         return Err(format!(
             "{} declares a fixed-state repeat remedy without any expected mutations",
             case.tool
         ));
     }
 
-    let final_check = if mutation.final_invocations.is_empty() {
-        None
-    } else {
-        let phase = spec.phases.get(contract.phase_id).ok_or_else(|| {
+    let explicit_workflow = !spec.workflows.is_empty();
+    let (remedy, final_check) = if explicit_workflow {
+        let workflow = spec.workflows.get(contract.phase_id).ok_or_else(|| {
             format!(
-                "{} mutating contract final phase {:?} is absent from evaluated config",
+                "{} mutating contract explicit workflow {:?} is absent from evaluated config",
                 case.tool, contract.phase_id
             )
         })?;
-        Some(resolve_phase_invocations(
+        if !workflow.enabled
+            || workflow.check_scope != CheckScope::TargetFiles
+            || workflow.invocation != InvocationGranularity::Batch
+        {
+            return Err(format!(
+                "{} mutating explicit workflow {:?} must be enabled, target-files scoped, and batch invoked",
+                case.tool, contract.phase_id
+            ));
+        }
+        let remedy_command = workflow.remedy.as_ref().ok_or_else(|| {
+            format!(
+                "{} mutating explicit workflow {:?} omitted its remedy",
+                case.tool, contract.phase_id
+            )
+        })?;
+        if remedy_command.writes != mutation.remedy_writes
+            || remedy_command.issues_on_stdout
+            || remedy_command.extra_args != expected_extra_args
+        {
+            return Err(format!(
+                "{} mutating explicit remedy {:?} drifted: writes={:?} issuesOnStdout={} extraArgs={:?}",
+                case.tool,
+                contract.phase_id,
+                remedy_command.writes,
+                remedy_command.issues_on_stdout,
+                remedy_command.extra_args
+            ));
+        }
+        let remedy = resolve_workflow_invocations(
             case,
             spec,
-            phase,
-            mutation.final_invocations,
+            remedy_command,
+            workflow.invocation,
+            mutation.remedy_invocations,
+            mutation.immediate_outcome,
             contract.trace_plan,
             project,
-        )?)
+            "explicit remedy",
+        )?;
+        let final_check = if mutation.final_invocations.is_empty() {
+            None
+        } else {
+            let check = workflow.check.as_ref().ok_or_else(|| {
+                format!(
+                    "{} mutating explicit workflow {:?} omitted its final checker",
+                    case.tool, contract.phase_id
+                )
+            })?;
+            if check.writes != WriteBehavior::None
+                || !check.issues_on_stdout
+                || check.extra_args != expected_extra_args
+            {
+                return Err(format!(
+                    "{} mutating explicit checker {:?} drifted: writes={:?} issuesOnStdout={} extraArgs={:?}",
+                    case.tool,
+                    contract.phase_id,
+                    check.writes,
+                    check.issues_on_stdout,
+                    check.extra_args
+                ));
+            }
+            Some(resolve_workflow_invocations(
+                case,
+                spec,
+                check,
+                workflow.invocation,
+                mutation.final_invocations,
+                ExpectedOutcome::Clean,
+                contract.trace_plan,
+                project,
+                "explicit final checker",
+            )?)
+        };
+        (remedy, final_check)
+    } else {
+        let final_check = if mutation.final_invocations.is_empty() {
+            None
+        } else {
+            let phase = spec.phases.get(contract.phase_id).ok_or_else(|| {
+                format!(
+                    "{} mutating contract final phase {:?} is absent from evaluated config",
+                    case.tool, contract.phase_id
+                )
+            })?;
+            Some(resolve_phase_invocations(
+                case,
+                spec,
+                phase,
+                mutation.final_invocations,
+                contract.trace_plan,
+                project,
+            )?)
+        };
+        (immediate.clone(), final_check)
     };
 
-    for resolved in std::iter::once(&remedy)
-        .chain(repeat_remedy.iter())
+    for resolved in std::iter::once(&immediate)
+        .chain(repeat_immediate.iter())
+        .chain(std::iter::once(&remedy))
         .chain(final_check.iter())
     {
         if resolved.trace_program
@@ -4113,13 +4503,17 @@ fn resolve_mutating_tool_contract(
             ));
         }
     }
-    let aggregate = aggregate_resolved_outcome(
-        final_check
-            .as_ref()
-            .map_or(remedy.invocations.as_slice(), |final_check| {
-                final_check.invocations.as_slice()
-            }),
-    );
+    let aggregate = if explicit_workflow {
+        aggregate_resolved_outcome(&immediate.invocations)
+    } else {
+        aggregate_resolved_outcome(
+            final_check
+                .as_ref()
+                .map_or(immediate.invocations.as_slice(), |final_check| {
+                    final_check.invocations.as_slice()
+                }),
+        )
+    };
     if aggregate != mutation.immediate_outcome {
         return Err(format!(
             "{} mutating contract expected immediate {:?}, but final executed phase classifies as {aggregate:?}",
@@ -4139,9 +4533,11 @@ fn resolve_mutating_tool_contract(
         ));
     }
     Ok(ResolvedMutatingContract {
+        immediate,
+        repeat_immediate,
         remedy,
-        repeat_remedy,
         final_check,
+        explicit_workflow,
     })
 }
 
@@ -4211,6 +4607,104 @@ fn resolve_phase_invocations(
         outer_program,
         trace_program: trace_program
             .ok_or_else(|| format!("{} phase contract has no trace program", case.tool))?,
+        invocations,
+        trace_invocations,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_workflow_invocations(
+    case: &FixtureCase,
+    spec: &ToolSpec,
+    command: &WorkflowCommand,
+    invocation_granularity: InvocationGranularity,
+    expected_invocations: &[ExpectedInvocation],
+    expected_outcome: ExpectedOutcome,
+    trace_plan: TracePlan,
+    project: &Path,
+    context: &str,
+) -> Result<ResolvedContract, String> {
+    match invocation_granularity {
+        InvocationGranularity::PerFile
+            if expected_invocations
+                .iter()
+                .all(|invocation| invocation.targets.len() == 1) => {}
+        InvocationGranularity::Batch if expected_invocations.len() == 1 => {}
+        InvocationGranularity::Workspace if expected_invocations.len() == 1 => {}
+        actual => {
+            return Err(format!(
+                "{} {context} invocation groups do not match evaluated granularity {actual:?}",
+                case.tool
+            ));
+        }
+    }
+    if command.issues_on_stdout
+        && expected_outcome == ExpectedOutcome::Issues
+        && expected_invocations.len() != 1
+    {
+        return Err(format!(
+            "{} {context} stdout-signaled issue expectation is ambiguous across {} invocation groups",
+            case.tool,
+            expected_invocations.len()
+        ));
+    }
+    let outer_program = command
+        .program
+        .clone()
+        .unwrap_or_else(|| spec.executable.clone());
+    let mut invocations = Vec::with_capacity(expected_invocations.len());
+    let mut trace_program = None;
+    let mut trace_invocations = Vec::new();
+    for invocation in expected_invocations {
+        let targets = invocation
+            .targets
+            .iter()
+            .map(|relative| canonical_project(&project.join(relative)))
+            .collect::<Vec<_>>();
+        let arguments = render_expected_workflow_arguments(spec, command, project, &targets)?;
+        let mut outcome = classify_expected_exit_codes(&command.exit_codes, invocation.exit_code);
+        if command.issues_on_stdout
+            && expected_outcome == ExpectedOutcome::Issues
+            && outcome == ExpectedOutcome::Clean
+        {
+            outcome = ExpectedOutcome::Issues;
+        }
+        let (invocation_trace_program, mut invocation_traces) = resolve_trace_invocations(
+            trace_plan,
+            &outer_program,
+            &arguments,
+            &targets,
+            invocation.trace_exit_codes,
+        )?;
+        if let Some(expected) = &trace_program {
+            if expected != &invocation_trace_program {
+                return Err(format!(
+                    "{} {context} trace program changed between invocation groups",
+                    case.tool
+                ));
+            }
+        } else {
+            trace_program = Some(invocation_trace_program);
+        }
+        trace_invocations.append(&mut invocation_traces);
+        invocations.push(ResolvedInvocation {
+            targets,
+            arguments,
+            exit_code: invocation.exit_code,
+            outcome,
+        });
+    }
+    let aggregate = aggregate_resolved_outcome(&invocations);
+    if aggregate != expected_outcome {
+        return Err(format!(
+            "{} {context} expected {expected_outcome:?}, but evaluated exit/stdout policy classifies its invocations as {aggregate:?}",
+            case.tool
+        ));
+    }
+    Ok(ResolvedContract {
+        outer_program,
+        trace_program: trace_program
+            .ok_or_else(|| format!("{} {context} has no trace program", case.tool))?,
         invocations,
         trace_invocations,
     })
@@ -4469,6 +4963,105 @@ fn resolve_trace_invocations(
                     exit_code: expected_exit_codes[0],
                 }],
             ))
+        }
+        TracePlan::PreflightThenNestedModeFilesMarker {
+            nested_program_index,
+            adapter_prefix,
+            marker,
+            mode_arguments,
+        } => {
+            if nested_program_index != adapter_prefix.len() + 1 {
+                return Err(format!(
+                    "preflight-and-mode files adapter trace plan for {outer_program} must place exactly one script between its adapter prefix and nested tool"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "preflight-and-mode files adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode files adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(nested_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode files adapter {outer_program} has no nested tool at argument {nested_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let mode_index = nested_program_index + 1;
+            let mode = outer_arguments.get(mode_index).ok_or_else(|| {
+                format!(
+                    "preflight-and-mode files adapter {outer_program} has no phase mode: {outer_arguments:?}"
+                )
+            })?;
+            let commands = mode_arguments
+                .iter()
+                .find_map(|(name, arguments)| (*name == mode).then_some(*arguments))
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode files adapter {outer_program} has unsupported phase mode {mode:?}"
+                    )
+                })?;
+            if expected_exit_codes.is_empty() || expected_exit_codes.len() > commands.len() {
+                return Err(format!(
+                    "preflight-and-mode files adapter trace for {outer_program} mode {mode:?} expected one through {} exit codes, got {expected_exit_codes:?}",
+                    commands.len()
+                ));
+            }
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "preflight-and-mode files adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= mode_index {
+                return Err(format!(
+                    "preflight-and-mode files adapter {outer_program} places {marker:?} before phase mode: {outer_arguments:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let rendered_files = &outer_arguments[(*marker_index + 1)..];
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "preflight-and-mode files adapter {outer_program} file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let extra_arguments = &outer_arguments[(mode_index + 1)..*marker_index];
+            let traces = commands
+                .iter()
+                .zip(expected_exit_codes)
+                .map(|(command, exit_code)| ResolvedTraceInvocation {
+                    program: trace_program.clone(),
+                    targets: targets.to_vec(),
+                    arguments: command
+                        .iter()
+                        .map(|argument| (*argument).to_owned())
+                        .chain(extra_arguments.iter().cloned())
+                        .chain(expected_files.iter().cloned())
+                        .collect(),
+                    exit_code: *exit_code,
+                })
+                .collect();
+            Ok((trace_program, traces))
         }
         TracePlan::PreflightThenNestedModeWorkspaceMarker {
             nested_program_index,
@@ -4829,10 +5422,29 @@ fn render_expected_arguments(
     project: &Path,
     targets: &[PathBuf],
 ) -> Result<Vec<String>, String> {
+    render_expected_argv(spec, &phase.argv, &phase.extra_args, project, targets)
+}
+
+fn render_expected_workflow_arguments(
+    spec: &ToolSpec,
+    command: &WorkflowCommand,
+    project: &Path,
+    targets: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    render_expected_argv(spec, &command.argv, &command.extra_args, project, targets)
+}
+
+fn render_expected_argv(
+    spec: &ToolSpec,
+    argv: &[ArgvElement],
+    extra_args: &[String],
+    project: &Path,
+    targets: &[PathBuf],
+) -> Result<Vec<String>, String> {
     let project = canonical_project(project);
     let (workspace, workspace_indicator) = resolve_expected_workspace_job(spec, &project, targets)?;
     let mut arguments = Vec::new();
-    for element in &phase.argv {
+    for element in argv {
         match element {
             ArgvElement::Literal(value) => arguments.push(value.clone()),
             ArgvElement::Token(ArgToken::Files) => arguments.extend(
@@ -4841,7 +5453,7 @@ fn render_expected_arguments(
                     .map(|target| target.to_string_lossy().into_owned()),
             ),
             ArgvElement::Token(ArgToken::ExtraArgs) => {
-                arguments.extend(phase.extra_args.iter().cloned());
+                arguments.extend(extra_args.iter().cloned());
             }
             ArgvElement::Token(ArgToken::ProjectRoot) => {
                 arguments.push(project.to_string_lossy().into_owned());
@@ -4949,14 +5561,18 @@ fn nearest_fixture_workspace_indicator(
 }
 
 fn classify_expected_exit(phase: &Phase, code: i32) -> ExpectedOutcome {
-    if phase.exit_codes.clean.contains(&code) {
+    classify_expected_exit_codes(&phase.exit_codes, code)
+}
+
+fn classify_expected_exit_codes(exit_codes: &ExitCodes, code: i32) -> ExpectedOutcome {
+    if exit_codes.clean.contains(&code) {
         ExpectedOutcome::Clean
-    } else if phase.exit_codes.issues.contains(&code) {
+    } else if exit_codes.issues.contains(&code) {
         ExpectedOutcome::Issues
-    } else if phase.exit_codes.failure.contains(&code) {
+    } else if exit_codes.failure.contains(&code) {
         ExpectedOutcome::OperationalFailure
     } else {
-        match phase.exit_codes.unexpected {
+        match exit_codes.unexpected {
             UnexpectedExitPolicy::Failure => ExpectedOutcome::OperationalFailure,
             UnexpectedExitPolicy::Issues => ExpectedOutcome::Issues,
         }
@@ -5240,6 +5856,17 @@ impl ToolTraceHarness {
                 command.env(name, BUF_POISON_ENV_VALUE);
             }
         }
+        if self.programs.contains_key("gofmt") {
+            for (name, _) in GOFMT_CONTROLLED_ENV {
+                command.env(name, GOFMT_POISON_ENV_VALUE);
+            }
+            for name in GOFMT_SCRUBBED_ENV {
+                command.env(name, GOFMT_POISON_ENV_VALUE);
+            }
+            for name in GOFMT_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         if let Some(toolchain) = &self.cargo_clippy_toolchain {
             command
                 .env(DYLD_LIBRARY_PATH_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
@@ -5393,6 +6020,15 @@ fn verify_tool_trace_invocations(
         }
         if trace_program == "buf" {
             let controlled = verify_buf_trace_environment(&record, harness)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
+        if trace_program == "gofmt" {
+            let controlled = verify_gofmt_trace_environment(&record, harness)?;
             let environment = environment
                 .as_object_mut()
                 .expect("trace environment is a JSON object");
@@ -5641,6 +6277,54 @@ fn verify_buf_trace_environment(
     if observed_program != expected_program {
         return Err(format!(
             "Buf adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
+        ));
+    }
+    Ok(environment)
+}
+
+fn verify_gofmt_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    for (name, expected) in std::iter::once((PATH_ENV, GOFMT_CHILD_PATH))
+        .chain(std::iter::once(("TERM", "dumb")))
+        .chain(GOFMT_CONTROLLED_ENV.iter().copied())
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "gofmt trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in GOFMT_SCRUBBED_ENV.iter().chain(GOFMT_LOADER_SCRUBBED_ENV) {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "gofmt trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    let program = PathBuf::from(read_record(record, "program")?);
+    if !program.is_absolute() {
+        return Err(format!(
+            "gofmt adapter must execute an absolute managed tool path, got {program:?}"
+        ));
+    }
+    let observed_program = program
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced gofmt program {program:?}: {error}"))?;
+    let expected_program = harness
+        .shim_dir
+        .join("gofmt")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize managed gofmt trace shim: {error}"))?;
+    if observed_program != expected_program {
+        return Err(format!(
+            "gofmt adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
         ));
     }
     Ok(environment)
@@ -7482,8 +8166,8 @@ fn verify_outputs(
     } else {
         "{}".to_owned()
     };
-    let golden_stdout = normalize(&golden_stdout, &project_paths);
-    let actual_stdout_normalized = normalize(&actual_stdout, &project_paths);
+    let golden_stdout = normalize_fixture_output(case, &golden_stdout, &project_paths);
+    let actual_stdout_normalized = normalize_fixture_output(case, &actual_stdout, &project_paths);
     match (
         serde_json::from_str::<JsonValue>(&golden_stdout),
         serde_json::from_str::<JsonValue>(&actual_stdout_normalized),
@@ -7508,15 +8192,15 @@ fn verify_outputs(
     if stderr_golden_path.exists() {
         let expected = std::fs::read_to_string(&stderr_golden_path)
             .map_err(|error| format!("read {stderr_golden_path:?}: {error}"))?;
-        let expected = normalize(&expected, &project_paths);
-        let actual = normalize(&actual_stderr, &project_paths);
+        let expected = normalize_fixture_output(case, &expected, &project_paths);
+        let actual = normalize_fixture_output(case, &actual_stderr, &project_paths);
         if expected.trim() != actual.trim() {
             return Err(format!(
                 "stderr mismatch:\n  expected:\n{expected}\n  actual:\n{actual}"
             ));
         }
     } else {
-        let actual = normalize(&actual_stderr, &project_paths);
+        let actual = normalize_fixture_output(case, &actual_stderr, &project_paths);
         if !actual.trim().is_empty() {
             return Err(format!(
                 "stderr expected empty but got:\n{actual}\n(write {stderr_golden_path:?} to assert content)"
@@ -7789,6 +8473,294 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
     } else {
         Err(missing)
     }
+}
+
+fn verify_gofmt_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        const CHILD_PID_ENV: &str = "VELVET_GLOVE_GOFMT_LIFECYCLE_CHILD_PID";
+        const DESCENDANT_PID_ENV: &str = "VELVET_GLOVE_GOFMT_LIFECYCLE_DESCENDANT_PID";
+        const READY_ENV: &str = "VELVET_GLOVE_GOFMT_LIFECYCLE_READY";
+        const ARGV_ENV: &str = "VELVET_GLOVE_GOFMT_LIFECYCLE_ARGV";
+        const INVOKED_ENV: &str = "VELVET_GLOVE_GOFMT_LIFECYCLE_INVOKED";
+
+        let phase = spec
+            .phases
+            .get("format")
+            .ok_or_else(|| "gofmt lifecycle probe lacks a format phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err("gofmt lifecycle probe could not extract the evaluated adapter".to_owned());
+        };
+        if isolated != "-I" || command != "-c" || mode != "write" || marker != GOFMT_FILES_MARKER {
+            return Err(format!(
+                "gofmt lifecycle probe expected exact isolated write shape, got {isolated:?} {command:?} mode={mode:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "gofmt lifecycle probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("gofmt lifecycle probe cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofmt lifecycle Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-gofmt-lifecycle");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofmt lifecycle root: {error}"))?;
+        let result = (|| {
+            let target = root.join("selected.go");
+            std::fs::write(&target, "package main\n")
+                .map_err(|error| format!("write gofmt lifecycle target {target:?}: {error}"))?;
+            let fake_tool = root.join("gofmt-fake");
+            let child_pid_path = root.join("child.pid");
+            let descendant_pid_path = root.join("descendant.pid");
+            let ready_path = root.join("ready");
+            let argv_path = root.join("child.argv");
+            let fake_source = format!(
+                r#"#!/bin/sh
+set -eu
+: > "${{{ARGV_ENV}}}"
+for argument in "$@"; do
+  printf '%s\n' "$argument" >> "${{{ARGV_ENV}}}"
+done
+trap 'exit 0' HUP INT TERM
+(
+  trap '' HUP INT TERM
+  while :; do
+    :
+  done
+) &
+printf '%s\n' "$!" > "${{{DESCENDANT_PID_ENV}}}"
+printf '%s\n' "$$" > "${{{CHILD_PID_ENV}}}"
+: > "${{{READY_ENV}}}"
+while :; do
+  :
+done
+"#
+            );
+            write_executable_fixture(&fake_tool, &fake_source, "gofmt lifecycle fake")?;
+
+            let mut command = Command::new(&python);
+            command
+                .args(["-I", "-c", adapter])
+                .arg(&fake_tool)
+                .arg("write")
+                .arg(GOFMT_FILES_MARKER)
+                .arg(&target)
+                .current_dir(&root)
+                .env(CHILD_PID_ENV, &child_pid_path)
+                .env(DESCENDANT_PID_ENV, &descendant_pid_path)
+                .env(READY_ENV, &ready_path)
+                .env(ARGV_ENV, &argv_path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut outer = command
+                .spawn()
+                .map_err(|error| format!("spawn evaluated gofmt lifecycle adapter: {error}"))?;
+            let outer_pid = outer.id();
+            let startup_timeout = timeout.min(Duration::from_secs(5));
+            let startup_deadline = std::time::Instant::now() + startup_timeout;
+            while !ready_path.is_file() {
+                if let Some(status) = outer
+                    .try_wait()
+                    .map_err(|error| format!("poll gofmt lifecycle adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "gofmt lifecycle adapter exited {status:?} before its child became ready"
+                    ));
+                }
+                if std::time::Instant::now() >= startup_deadline {
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "gofmt lifecycle child did not become ready within {startup_timeout:?}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let child_pid = read_pid_file(&child_pid_path, "gofmt lifecycle child")?;
+            let descendant_pid = read_pid_file(&descendant_pid_path, "gofmt lifecycle descendant")?;
+            let observed_argv = std::fs::read_to_string(&argv_path)
+                .map_err(|error| format!("read gofmt lifecycle argv: {error}"))?;
+            let expected_argv = format!("-l\n{}\n", target.display());
+            if observed_argv != expected_argv {
+                let _ = signal_process_group(child_pid, "KILL");
+                let _ = signal_process(outer_pid, "KILL");
+                let _ = outer.wait();
+                return Err(format!(
+                    "gofmt lifecycle preflight argv mismatch: expected {expected_argv:?}, got {observed_argv:?}"
+                ));
+            }
+            if !signal_process(outer_pid, "TERM")?.success() {
+                let _ = signal_process_group(child_pid, "KILL");
+                let _ = signal_process(outer_pid, "KILL");
+                let _ = outer.wait();
+                return Err("send SIGTERM to gofmt lifecycle adapter".to_owned());
+            }
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = sender.send(outer.wait_with_output());
+            });
+            let completion_timeout = timeout.min(Duration::from_secs(5));
+            let output = match receiver.recv_timeout(completion_timeout) {
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => {
+                    let _ = signal_process_group(child_pid, "KILL");
+                    return Err(format!(
+                        "wait for terminated gofmt lifecycle adapter: {error}"
+                    ));
+                }
+                Err(error) => {
+                    let _ = signal_process_group(child_pid, "KILL");
+                    return Err(format!(
+                        "gofmt lifecycle adapter or descendant pipe remained open for {completion_timeout:?}: {error}"
+                    ));
+                }
+            };
+            let child_alive = signal_process(child_pid, "0")?.success();
+            let descendant_alive = signal_process(descendant_pid, "0")?.success();
+            if child_alive || descendant_alive {
+                let _ = signal_process_group(child_pid, "KILL");
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if output.status.code() != Some(2) {
+                return Err(format!(
+                    "SIGTERM gofmt lifecycle adapter exited {:?}, expected 2; stdout={stdout:?}; stderr={stderr:?}",
+                    output.status.code()
+                ));
+            }
+            if child_alive || descendant_alive {
+                return Err(format!(
+                    "SIGTERM gofmt lifecycle adapter left child={child_pid}:{child_alive} descendant={descendant_pid}:{descendant_alive} alive"
+                ));
+            }
+            if !stdout.is_empty()
+                || stderr != "velvet-glove-gofmt: received signal 15\n"
+                || stderr.matches("received signal").count() != 1
+            {
+                return Err(format!(
+                    "SIGTERM gofmt lifecycle output was not one stable diagnostic: stdout={stdout:?}; stderr={stderr:?}"
+                ));
+            }
+
+            let rejection_tool = root.join("gofmt-rejection-fake");
+            let invoked_path = root.join("rejection-invoked");
+            let rejection_source =
+                format!("#!/bin/sh\nset -eu\nprintf invoked > \"${{{INVOKED_ENV}}}\"\nexit 64\n");
+            write_executable_fixture(&rejection_tool, &rejection_source, "gofmt rejection fake")?;
+            let regular = root.join("regular.go");
+            let hardlink = root.join("hardlink.go");
+            let symlink = root.join("symlink.go");
+            let extra_target = root.join("extra.go");
+            std::fs::write(&regular, "package main\n")
+                .map_err(|error| format!("write gofmt hardlink target: {error}"))?;
+            std::fs::hard_link(&regular, &hardlink)
+                .map_err(|error| format!("create gofmt hardlink target: {error}"))?;
+            std::os::unix::fs::symlink(&regular, &symlink)
+                .map_err(|error| format!("create gofmt symlink target: {error}"))?;
+            std::fs::write(&extra_target, "package main\n")
+                .map_err(|error| format!("write gofmt extra-argument target: {error}"))?;
+            for (label, selected, extra, diagnostic) in [
+                (
+                    "symlink",
+                    symlink.as_path(),
+                    None,
+                    "selected path traverses a symlink",
+                ),
+                (
+                    "hardlink",
+                    hardlink.as_path(),
+                    None,
+                    "selected path is not a unique regular file",
+                ),
+                (
+                    "extra-argument",
+                    extra_target.as_path(),
+                    Some("-w"),
+                    "extra arguments are unsupported",
+                ),
+            ] {
+                let evidence = root.join(format!("rejection-{label}"));
+                std::fs::create_dir(&evidence)
+                    .map_err(|error| format!("create gofmt {label} rejection evidence: {error}"))?;
+                let mut rejection = Command::new(&python);
+                rejection
+                    .args(["-I", "-c", adapter])
+                    .arg(&rejection_tool)
+                    .arg("write");
+                if let Some(extra) = extra {
+                    rejection.arg(extra);
+                }
+                rejection
+                    .arg(GOFMT_FILES_MARKER)
+                    .arg(selected)
+                    .current_dir(&root)
+                    .env(INVOKED_ENV, &invoked_path);
+                let output = run_with_timeout(
+                    &mut rejection,
+                    b"",
+                    timeout.min(Duration::from_secs(5)),
+                    &evidence,
+                )
+                .map_err(|error| format!("run gofmt {label} rejection: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains(diagnostic)
+                    || invoked_path.exists()
+                {
+                    return Err(format!(
+                        "gofmt {label} rejection failed closed incorrectly: status={:?}; stdout={:?}; stderr={stderr:?}; invoked={}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        invoked_path.exists()
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn write_executable_fixture(path: &Path, contents: &str, label: &str) -> Result<(), String> {
+    std::fs::write(path, contents).map_err(|error| format!("write {label} {path:?}: {error}"))?;
+    let mut permissions = std::fs::metadata(path)
+        .map_err(|error| format!("inspect {label} {path:?}: {error}"))?
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(path, permissions)
+        .map_err(|error| format!("make {label} executable: {error}"))
+}
+
+#[cfg(unix)]
+fn read_pid_file(path: &Path, label: &str) -> Result<u32, String> {
+    let value = std::fs::read_to_string(path)
+        .map_err(|error| format!("read {label} PID {path:?}: {error}"))?;
+    value
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("parse {label} PID {value:?}: {error}"))
 }
 
 fn verify_betterleaks_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
@@ -8925,6 +9897,30 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
         .map(|line| line.trim_end_matches([' ', '\t']))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[String]) -> String {
+    let mut output = normalize(text, project_aliases);
+    if case.tool == "go-fmt" {
+        let adapter_scripts = case
+            .spec
+            .phases
+            .values()
+            .flat_map(|phase| phase.argv.iter())
+            .filter_map(|argument| match argument {
+                ArgvElement::Literal(script)
+                    if script.contains(GOFMT_FILES_MARKER) && script.contains('\n') =>
+                {
+                    Some(script)
+                }
+                ArgvElement::Literal(_) | ArgvElement::Token(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for script in adapter_scripts {
+            output = output.replace(script, "<inline-script>");
+        }
+    }
+    output
 }
 
 fn verify_tool_output_is_canonical(tool: &str, context: &str, text: &str) -> Result<(), String> {

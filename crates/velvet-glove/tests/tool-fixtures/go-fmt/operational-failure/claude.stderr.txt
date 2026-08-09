@@ -1,0 +1,12 @@
+error: gofmt: phase `format` failed; diagnostics: <workspace>/.velvet-glove/go-fmt-agent-hook/test-session_go-fmt-tool_go-fmt-tool-failure.txt
+gofmt failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: python -I -c <inline-script> gofmt write __VELVET_GLOVE_GOFMT_FILES__ <workspace>/example.go <workspace>/invalid.go
+status: Some(2)
+classification: Some(Failure)
+stdout:
+<workspace>/example.go
+stderr:
+<workspace>/invalid.go:3:15: expected ')', found '{'
+artifact: <workspace>/.velvet-glove/go-fmt-agent-hook/test-session_go-fmt-tool_go-fmt-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

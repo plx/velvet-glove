@@ -379,7 +379,10 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
 
 fn explicit_limitation(spec: &ToolSpec) -> String {
     match spec.id.as_str() {
-        "go-fmt" | "gofumpt" | "goimports" => {
+        "go-fmt" => {
+            "The isolated adapter rejects extra arguments, resolves the managed gofmt executable before fixing the child environment, and accepts only normalized absolute selected paths that are unique regular files with one link. Every verify runs `gofmt -l`; because native dirty output still exits zero, only complete ordered selected-path lines are accepted as source issues, while native status 2 dominates any partial stdout and remains operational failure. Every write is preceded by the same read-only list preflight, so a parse or read failure detected there cannot partially format an otherwise valid batch; successful writes must preserve file identities, and deferred writes are followed by the authoritative workflow check. Go, loader, and debug overrides are scrubbed, output and selected bytes are bounded, and cancellation forwards to a dedicated child process group with bounded cleanup. Symlinked and hard-linked selections are deliberately unsupported. Preflight/file snapshots cannot eliminate concurrent path-replacement races, and native multi-file `-w` is nontransactional, so a late write-time I/O failure may leave earlier files mutated. These semantics are pinned to Go 1.26.5.".into()
+        }
+        "gofumpt" | "goimports" => {
             "Read-only list mode reports dirty files through stdout with exit 0; parse failures depend on the installed tool version.".into()
         }
         "golines" => {

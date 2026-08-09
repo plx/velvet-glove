@@ -8,6 +8,7 @@ just tool-case jq multi-file-fragments
 just tool-case buf-format multi-file
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
+just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 ```
 
@@ -72,7 +73,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Buf data formats | Buf 1.72.0; Python 3.14.5; Apple diff | mise SHA-256; signed upstream checksum manifest; exact host-program probe | `buf-format/multi-file` |
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
-| Go | Go/gofmt 1.26.5 | mise SHA-256 | `go-fmt/unformatted` |
+| Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Cargo Clippy | Rust/Cargo 1.97.1; Clippy 0.1.97; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
@@ -244,6 +245,78 @@ module/symbol metadata; an exact v1.72.0 source scan finds it only at module
 level and not imported or called. This is a recorded scanner limitation, not
 an audit-clean or future-security claim. The release binary has only an ad-hoc
 linker signature rather than a Developer ID signature or notarization.
+
+### gofmt validation contract
+
+The Go environment pins the official
+[`go1.26.5.darwin-arm64.tar.gz`](https://dl.google.com/go/go1.26.5.darwin-arm64.tar.gz)
+archive at SHA-256
+`efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a`
+through the committed mise lock. The upstream
+[`go1.26.5` tag](https://go.googlesource.com/go/+/refs/tags/go1.26.5)
+resolves to commit
+[`c19862e5f8415b4f24b189d065ed739517c548ba`](https://go.googlesource.com/go/+/c19862e5f8415b4f24b189d065ed739517c548ba).
+The exact probe starts with the literal prefix `go version go1.26.5` followed
+by a space and the platform; `gofmt` ships in that same toolchain archive. The
+evaluated outer command also uses the shared pinned Python 3.14.5 interpreter
+in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> gofmt <write|verify> {extra-args} __VELVET_GLOVE_GOFMT_FILES__ {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The adapter rejects every extra argument because native gofmt flags can change
+selection, output, or mutation. Each selected path must be normalized,
+absolute, UTF-8, canonical, and a unique regular file with link count one;
+duplicate paths, symlinks, and hard links fail before the child starts. The
+managed gofmt executable is resolved first, then the child receives a fixed
+locale, timezone, color, scheduling, telemetry, and toolchain environment with
+`PATH=/usr/bin:/bin`. Every inherited `GO*`, `DYLD_*`, `LD_*`, and `DEBUG`
+override is removed.
+
+The native commands are deliberately narrow:
+
+```text
+ABS_GOFMT -l FILE...
+ABS_GOFMT -w FILE...
+```
+
+As implemented by the pinned
+[`gofmt` source](https://go.googlesource.com/go/+/refs/tags/go1.26.5/src/cmd/gofmt/gofmt.go),
+`-l` writes dirty filenames to stdout but still exits zero; parse and I/O
+failures exit two, and a batch can emit earlier dirty filenames before a later
+parse failure. The adapter therefore lets status two dominate all stdout.
+Status-zero checks accept only complete, unique, argv-ordered selected-path
+lines and empty stderr. The runner classifies a nonempty valid listing as a
+source formatting issue and empty output as clean.
+
+Every write first runs that same read-only `-l` preflight and confirms no file
+changed. A status-two preflight stops without invoking `-w`, preventing a dirty
+valid file earlier in the batch from being partially repaired before a later
+invalid file fails. A successful `-w` must be silent, exit zero, and preserve
+every selected device/inode identity; the explicit deferred workflow then runs
+the authoritative `-l` final check. Output and selected bytes are bounded at
+64 MiB, and cancellation is forwarded to a dedicated child process group with
+bounded TERM/KILL cleanup.
+
+The four-case matrix covers clean input, one-file formatting, a selected dirty
+plus selected clean batch with an unselected dirty sentinel, and a dirty-valid
+plus parse-invalid operational failure. Both immediate and explicit deferred
+surfaces run for Claude and Codex. Immediate mutation proves the exact complete
+workspace diff and a clean idempotent repeat; deferred mutation additionally
+proves the explicit final check and a verify-only clean retry. The operational
+case proves the preflight invoked only `-l` and preserved every byte despite
+mixed stdout and stderr. The remaining boundary is filesystem
+concurrency: canonical-path, identity, and byte snapshots reject demonstrated
+link aliases but cannot eliminate external path-replacement races between
+checks. Native multi-file `-w` is not transactional, so a late write-time I/O
+failure such as a permission change or storage failure can still leave earlier
+files mutated even though deterministic parse/read failures are caught by the
+preflight.
 
 ### Betterleaks validation contract
 
@@ -750,7 +823,7 @@ These thirteen smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
-Asciidoctor, Biome, and Cargo Clippy
+Asciidoctor, Biome, gofmt, and Cargo Clippy
 are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 
