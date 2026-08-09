@@ -65,6 +65,27 @@ if [ "$logical_program" = buf ]; then
   printf '%s\n' "${BUF_TOKEN-}" >"$record/env-BUF_TOKEN"
   printf '%s\n' "${BUF_VELVET_GLOVE_POISON-}" >"$record/env-BUF_VELVET_GLOVE_POISON"
 fi
+if [ "$logical_program" = gofmt ]; then
+  printf '%s\n' "${PATH-}" >"$record/env-PATH"
+  printf '%s\n' "${GODEBUG-}" >"$record/env-GODEBUG"
+  printf '%s\n' "${GOENV-}" >"$record/env-GOENV"
+  printf '%s\n' "${GOMAXPROCS-}" >"$record/env-GOMAXPROCS"
+  printf '%s\n' "${GOTELEMETRY-}" >"$record/env-GOTELEMETRY"
+  printf '%s\n' "${GOTOOLCHAIN-}" >"$record/env-GOTOOLCHAIN"
+  printf '%s\n' "${GOCACHE-}" >"$record/env-GOCACHE"
+  printf '%s\n' "${GOFLAGS-}" >"$record/env-GOFLAGS"
+  printf '%s\n' "${GONOSUMDB-}" >"$record/env-GONOSUMDB"
+  printf '%s\n' "${GOPATH-}" >"$record/env-GOPATH"
+  printf '%s\n' "${GOPROXY-}" >"$record/env-GOPROXY"
+  printf '%s\n' "${GOSUMDB-}" >"$record/env-GOSUMDB"
+  printf '%s\n' "${GOTMPDIR-}" >"$record/env-GOTMPDIR"
+  printf '%s\n' "${GOWORK-}" >"$record/env-GOWORK"
+  printf '%s\n' "${GO_VELVET_GLOVE_POISON-}" >"$record/env-GO_VELVET_GLOVE_POISON"
+  printf '%s\n' "${DYLD_INSERT_LIBRARIES-}" >"$record/env-DYLD_INSERT_LIBRARIES"
+  printf '%s\n' "${DYLD_PRINT_LIBRARIES-}" >"$record/env-DYLD_PRINT_LIBRARIES"
+  printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
+  printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
+fi
 if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
