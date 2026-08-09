@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "cargo clippy reports validated Rust source issues; inspect diagnostics at <workspace>/.velvet-glove/cargo-clippy-agent-hook/test-session_cargo-clippy-tool_cargo-clippy-tool-issues.txt."
+  }
+}

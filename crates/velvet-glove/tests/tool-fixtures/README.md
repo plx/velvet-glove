@@ -182,3 +182,22 @@ header mtimes were replaced with `<mtime>`. The multi-file case selects two
 candidates while also changing a workspace file outside that candidate set, so
 retained reports prove workspace write scope, conservative workspace attribution,
 and the full candidate-plus-changed file union.
+
+Cargo Clippy traces bind two distinct launchers from one case-only Rust 1.97.1
+toolchain: `cargo metadata` preflights the selected `Cargo.toml`, then the
+paired `cargo-clippy` performs a read-only, frozen JSON coverage probe with
+lint levels capped, followed by the authoritative `-Dwarnings` check. Fix and
+verify modes use those same native probes; mutation is adapter-internal. The
+adapter runs all children from a private target
+directory, preserves only a config-free controlled `CARGO_HOME`, binds the
+paired `cargo`/`rustc`/`rustdoc` executables, supplies an empty private Clippy
+configuration when the workspace has none, and scrubs Cargo, Rust, Clippy,
+cache-wrapper, loader, and debug overrides. The four-case matrix distinguishes
+clean completion, a persistent non-machine-applicable source lint, a semantic
+Clippy configuration failure, and a workspace-scoped autofix. The autofix case
+selects one dirty and one clean source while also repairing an unselected
+compiled source; its hostile `.cargo/config.toml` proves that ambient
+`rustflags` and forced tool/config variables cannot bypass the isolated check.
+The expected mirror is the complete two-file change allowlist, and the normal
+mutating lifecycle proves authoritative post-remedy verification plus
+immediate and compatibility-deferred idempotence.

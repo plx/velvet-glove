@@ -8,9 +8,10 @@ just tool-case jq multi-file-fragments
 just tool-case buf-format multi-file
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
+just tool-case cargo-clippy workspace-autofix
 ```
 
-Run all twelve behavior-rich representative contracts across nine environments
+Run all thirteen behavior-rich representative contracts across ten environments
 with:
 
 ```sh
@@ -73,6 +74,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5 | mise SHA-256 | `go-fmt/unformatted` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
+| Cargo Clippy | Rust/Cargo 1.97.1; Clippy 0.1.97; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
 | Security | Go 1.26.5; Betterleaks 1.7.3+velvet-glove.1 | mise SHA-256; source, patch, module closure, and built-artifact SHA-256 | `betterleaks/multi-file` |
 | native macOS | SwiftLint 0.65.0 | mise SHA-256 | `swiftlint/manual-issue` |
@@ -534,6 +536,129 @@ rejects reporter overrides, so that parser is not reachable through the
 validated command. This is a narrow reachability argument, not a claim that
 the upstream artifact is vulnerability-free or exempt from future advisories.
 
+### Cargo Clippy validation contract
+
+The dedicated Cargo Clippy environment installs selected components from the
+official dated
+[`rust-1.97.1-aarch64-apple-darwin.tar.xz`](https://static.rust-lang.org/dist/2026-07-16/rust-1.97.1-aarch64-apple-darwin.tar.xz)
+distribution archive at SHA-256
+`c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2`.
+That one archive supplies the paired Rust 1.97.1, Cargo 1.97.1, and Clippy
+0.1.97 closure. The exact probes are:
+
+```text
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+clippy 0.1.97 (8bab26f4f6 2026-07-14)
+```
+
+The archive checksum was independently cross-checked against the official
+[`channel-rust-1.97.1.toml`](https://static.rust-lang.org/dist/channel-rust-1.97.1.toml)
+manifest at SHA-256
+`03569b1886ceb5c05276b50c8431ab111de944cd6140fe1fa7d821dd8e0f29cf`.
+Its detached signature has SHA-256
+`14553bf89b963f1d1f0a92413b91510ed43f8d50c68fe665763747d815022017`
+and validates against the Rust release-key fingerprint
+`108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE`; the official HTTPS key file has
+SHA-256
+`e54b09a439647e006b4831eec9785cbaaf3e07ab371c3a6ee6a68e1bdb9fbc6b`.
+The pinned driver enforces the archive digest; the signed-manifest chain is an
+independent review-time cross-check, not a runtime PGP verification claim. The
+standalone Clippy component archive was also checked at SHA-256
+`5e44c0ac5ca9b6f14a3c9031a61f583348b902f908f46e95717aef1dbd2807db`;
+its `cargo-clippy` and `clippy-driver` bytes match the copies bundled in the
+full archive. Rust and Clippy sources are dual-licensed under MIT or
+Apache-2.0, while the binary distribution also contains third-party notices.
+
+Rust 1.97.1 is intentionally separate from the retained Rust 1.90/rustfmt
+environment. It avoids changing earlier rustfmt evidence and incorporates the
+Cargo fixes described by
+[CVE-2026-33056](https://blog.rust-lang.org/2026/03/21/cve-2026-33056/),
+[CVE-2026-5222 and CVE-2026-5223](https://blog.rust-lang.org/2026/05/25/cve-2026-5223/),
+plus the LLVM correctness fix in the
+[Rust 1.97.1 release](https://blog.rust-lang.org/2026/07/16/Rust-1.97.1/).
+
+Both phases use pinned Python 3.14.5 in isolated mode. The rendered outer
+commands are:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> cargo cargo-clippy fix {extra-args} __VELVET_GLOVE_CARGO_CLIPPY_WORKSPACE__ {workspace-indicator}
+python -I -c <adapter> cargo cargo-clippy verify {extra-args} __VELVET_GLOVE_CARGO_CLIPPY_WORKSPACE__ {workspace-indicator}
+```
+
+Each completed clean or source-result phase launches this exact sequence of
+three read-only children from a private invocation directory; an operational
+failure stops at the child that proves it:
+
+```text
+cargo metadata --format-version=1 --no-deps --manifest-path {workspace-indicator} --frozen --quiet --color=never
+cargo-clippy clippy --manifest-path {workspace-indicator} --workspace --all-targets --all-features --no-deps --frozen --quiet --jobs=1 --keep-going --color=never --message-format=json -- --cap-lints=allow
+cargo-clippy clippy --manifest-path {workspace-indicator} --workspace --all-targets --all-features --no-deps --frozen --quiet --jobs=1 --keep-going --color=never --message-format=json -- -Dwarnings
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The adapter rejects every configured extra argument. It requires one canonical
+`Cargo.toml`, a unique regular `Cargo.lock`, exactly one workspace package, no
+custom build target, and a same-toolchain closure for Cargo, rustc, rustdoc,
+`cargo-clippy`, and `clippy-driver`. Cargo runs from a private directory, so
+workspace `.cargo/config*` files do not participate; inherited Cargo-home and
+invocation-ancestor configuration are rejected. Compiler flags, wrappers,
+Clippy configuration overrides, loader injection, compiler caches, and debug
+inputs are cleared or replaced with exact values. The paired Cargo receives a
+private target directory, offline/frozen mode, one job, no incremental build,
+stable locale/color controls, and an explicit root Clippy configuration or an
+empty private sentinel that prevents ancestor config discovery.
+
+Cargo status 101 covers lint, compilation, configuration, and operational
+failures. The adapter therefore requires version-one metadata, then performs a
+coverage check whose lint levels are capped at `allow`. That check must finish
+cleanly and emit exact selected-package artifacts; only dependency-information
+rules targeting those artifacts may prove that every physical workspace Rust
+source participated. This prevents an unlinted path dependency from satisfying
+the source-coverage witness. The authoritative run then requires a terminal
+`build-finished` JSON record, bounded version-locked Cargo summary lines, and
+code-bearing primary diagnostics in a validated workspace `.rs` file. A
+completed clean check maps to outer status zero; validated source diagnostics
+map to one; configuration, dependency, incomplete output, source-coverage,
+signal, launch, cleanup, and every other failure map to two.
+
+Native `cargo clippy --fix` uses Cargo's local diagnostic server, which is
+incompatible with the lane's active network denial. The remedy instead parses
+the same read-only JSON, accepts only `MachineApplicable` byte replacements,
+deduplicates them, rejects conflicting or overlapping spans, revalidates file
+identity and content hashes, prepares all replacement files, then performs
+atomic per-file renames with best-effort rollback. The ordinary final phase is
+still the authoritative verification. Captured child output is drained
+concurrently with a combined 16 MiB limit, and handled HUP/INT/TERM signals are
+forwarded to the active process group before bounded termination and reap.
+
+The four cases cover a clean package, a persistent non-machine-applicable
+`clippy::ptr_arg` source issue, an invalid root `clippy.toml` that must map
+native status 101 to operational failure, and a workspace repair. The repair
+selects one dirty and one clean source while an unselected compiled module is
+also dirty; exactly the selected dirty source and that unselected module must
+change. A hostile workspace Cargo configuration attempts to cap lints and
+force compiler/Clippy environment overrides, but the two validated repairs
+remain visible. Immediate execution proves remedy then authoritative check and
+a mutation-free second run. Deferred execution starts independently from
+pristine bytes, proves initial issues, remedy, final clean verification, exact
+workspace mutation attribution, and a verify-only fixed-state repeat.
+
+This is deliberately narrower than general Cargo workspace support. Every
+physical `.rs` file must compile in the single package under the joint
+`--all-targets --all-features` configuration, so dormant, target-gated,
+compile-test, and mutually exclusive-feature layouts can fail operationally.
+Multi-package workspaces, workspace-local path dependencies, custom build
+targets, and projects that depend on workspace Cargo configuration are
+unsupported. Dependency and procedural macro code still executes inside the
+controlled offline/network-denied lane;
+the adapter is not a code sandbox. File, config, and executable preflights
+cannot eliminate replacement races, and a filesystem failure can leave a
+partially applied or incompletely rolled-back multi-file repair.
+
 ### Asciidoctor validation contract
 
 The Ruby environment pins the dependency-free, pure-Ruby
@@ -621,11 +746,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These twelve smoke contracts establish the reproducible environment substrate;
+These thirteen smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
-Asciidoctor, and Biome
+Asciidoctor, Biome, and Cargo Clippy
 are covered only after each complete case matrix passes. Linux, Intel, and
 full-catalog scheduling remain separate follow-up work.
 

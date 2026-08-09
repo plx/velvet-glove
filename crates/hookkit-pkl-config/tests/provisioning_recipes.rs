@@ -244,6 +244,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     assert_eq!(
         groups,
         BTreeSet::from([
+            "cargo-clippy",
             "data-formats",
             "go",
             "node",
@@ -382,6 +383,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "biome",
             "black",
             "buf-format",
+            "cargo-clippy",
             "go-fmt",
             "jq",
             "rubocop",
@@ -829,6 +831,15 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
                     assert_eq!(component.runtime_component_ids, ["rust"]);
                 }
+                "cargo-clippy-toolchain" => {
+                    assert_eq!(component.version, "1.97.1");
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2")
+                    );
+                    assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
+                    assert!(component.runtime_component_ids.is_empty());
+                }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");
                     assert_eq!(
@@ -914,6 +925,20 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert_eq!(component.integrity.component_id.as_deref(), Some("python"));
                     assert!(mise_lock.contains("[[tools.python]]\nversion = \"3.14.5\""));
                     assert_eq!(component.version, "26.1.1");
+                }
+                "cargo-clippy-cargo" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("cargo-clippy-toolchain")
+                    );
+                    assert_eq!(component.version, "1.97.1");
+                }
+                "clippy" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("cargo-clippy-toolchain")
+                    );
+                    assert_eq!(component.version, "0.1.97");
                 }
                 other => panic!("unexpected runtime-bundled component {other}"),
             }

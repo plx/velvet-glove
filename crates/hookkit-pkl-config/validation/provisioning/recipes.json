@@ -381,6 +381,66 @@
       "bootstrap": []
     },
     {
+      "id": "macos-arm64-cargo-clippy",
+      "provisioningGroup": "cargo-clippy",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "cargo-clippy-toolchain",
+          "version": "1.97.1",
+          "installationSource": "official dated Rust 1.97.1 distribution archive with bundled Cargo and Clippy for aarch64-apple-darwin, checksum-pinned and independently cross-checked against the Rust-signed channel manifest",
+          "integrity": {
+            "kind": "sha256-archive",
+            "url": "https://static.rust-lang.org/dist/2026-07-16/rust-1.97.1-aarch64-apple-darwin.tar.xz",
+            "sha256": "c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2",
+            "archiveFormat": "tar-xz",
+            "archiveRoot": "rust-1.97.1-aarch64-apple-darwin",
+            "minOsVersion": "11.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["rustc", "--version"],
+            "match": "exact",
+            "expected": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+          }
+        },
+        {
+          "id": "cargo-clippy-cargo",
+          "version": "1.97.1",
+          "installationSource": "Cargo bundled in the checksum-pinned Rust 1.97.1 distribution archive cross-checked against the Rust-signed channel manifest",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "cargo-clippy-toolchain"
+          },
+          "probe": {
+            "argv": ["cargo", "--version"],
+            "match": "exact",
+            "expected": "cargo 1.97.1 (c980f4866 2026-06-30)"
+          }
+        },
+        {
+          "id": "clippy",
+          "version": "0.1.97",
+          "installationSource": "Clippy bundled in the checksum-pinned Rust 1.97.1 distribution archive cross-checked against the Rust-signed channel manifest",
+          "integrity": {
+            "kind": "runtime-bundled",
+            "componentId": "cargo-clippy-toolchain"
+          },
+          "probe": {
+            "argv": ["clippy-driver", "--version"],
+            "match": "exact",
+            "expected": "clippy 0.1.97 (8bab26f4f6 2026-07-14)"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["cargo", "cargo-clippy", "clippy-driver", "rustc", "rustdoc"],
+      "bootstrap": []
+    },
+    {
       "id": "macos-arm64-ruby",
       "provisioningGroup": "ruby",
       "platform": "macos",
@@ -965,6 +1025,30 @@
       "caseExecutables": ["rustfmt"],
       "cases": ["clean", "unformatted"],
       "representativeCase": "unformatted"
+    },
+    {
+      "id": "cargo-clippy-macos-arm64",
+      "toolId": "cargo-clippy",
+      "environmentId": "macos-arm64-cargo-clippy",
+      "version": "clippy 0.1.97 (Rust/Cargo 1.97.1)",
+      "installationSource": "Clippy bundled in the official dated Rust 1.97.1 aarch64-apple-darwin archive, checksum-pinned and independently cross-checked against the Rust-signed channel manifest",
+      "integrity": {
+        "kind": "sha256-archive",
+        "url": "https://static.rust-lang.org/dist/2026-07-16/rust-1.97.1-aarch64-apple-darwin.tar.xz",
+        "sha256": "c9748cc86107734a2a024069908a895de7caa2d37062fb641eef9f756938ace2",
+        "archiveFormat": "tar-xz",
+        "archiveRoot": "rust-1.97.1-aarch64-apple-darwin",
+        "minOsVersion": "11.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["clippy-driver", "--version"],
+        "match": "exact",
+        "expected": "clippy 0.1.97 (8bab26f4f6 2026-07-14)"
+      },
+      "caseExecutables": ["cargo", "cargo-clippy", "clippy-driver", "python", "rustc", "rustdoc"],
+      "cases": ["clean", "source-issue", "workspace-autofix", "operational-failure"],
+      "representativeCase": "workspace-autofix"
     },
     {
       "id": "asciidoctor-macos-arm64",
