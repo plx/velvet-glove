@@ -26,9 +26,9 @@
   "sharedComponents": [
     {
       "id": "jq",
-      "version": "1.8.1",
-      "miseTool": "jq@1.8.1",
-      "installationSource": "mise aqua:jqlang/jq asset locked for macos-arm64",
+      "version": "1.8.2",
+      "miseTool": "jq@1.8.2",
+      "installationSource": "jqlang/jq 1.8.2 macOS arm64 release asset locked by SHA-256 with GitHub SLSA provenance",
       "integrity": {
         "kind": "mise-lock",
         "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
@@ -36,7 +36,7 @@
       "probe": {
         "argv": ["jq", "--version"],
         "match": "exact",
-        "expected": "jq-1.8.1"
+        "expected": "jq-1.8.2"
       }
     },
     {
@@ -145,6 +145,18 @@
     }
   ],
   "environments": [
+    {
+      "id": "macos-arm64-data-formats",
+      "provisioningGroup": "data-formats",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [],
+      "auxiliaryPrograms": [],
+      "bootstrap": []
+    },
     {
       "id": "macos-arm64-node",
       "provisioningGroup": "node",
@@ -505,6 +517,25 @@
     }
   ],
   "recipes": [
+    {
+      "id": "jq-macos-arm64",
+      "toolId": "jq",
+      "environmentId": "macos-arm64-data-formats",
+      "version": "1.8.2",
+      "installationSource": "jqlang/jq 1.8.2 macOS arm64 release asset locked by SHA-256 with GitHub SLSA provenance",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["jq", "--version"],
+        "match": "exact",
+        "expected": "jq-1.8.2"
+      },
+      "caseExecutables": ["jq"],
+      "cases": ["clean", "invalid", "multi-file-fragments", "operational-failure"],
+      "representativeCase": "multi-file-fragments"
+    },
     {
       "id": "sort-package-json-macos-arm64",
       "toolId": "sort-package-json",

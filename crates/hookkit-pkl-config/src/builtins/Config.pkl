@@ -192,6 +192,9 @@ class ToolSpec {
   installHint: String?
   files: FileSelection = new FileSelection {}
   workspaceIndicator: String?
+  /// Granularity used by the immediate phase pipeline and phase-derived
+  /// compatibility workflows. Explicit workflows declare their own.
+  phaseInvocation: "per-file" | "batch" | "workspace" = "batch"
   /// Preferred Stop-time check/remedy workflows. When empty, the deferred
   /// runner compatibility-translates `phases`; immediate PostToolUse continues
   /// to execute `phases` exactly as before.

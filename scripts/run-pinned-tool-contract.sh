@@ -135,8 +135,8 @@ install_tools() {
 }
 
 echo "==> Installing the checksum-locked selector parser (provisioning network enabled)"
-install_tools jq@1.8.1
-jq_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where jq@1.8.1)
+install_tools jq@1.8.2
+jq_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where jq@1.8.2)
 jq_bin="$jq_root/jq"
 case $jq_bin in
   "$state_dir"/*) ;;

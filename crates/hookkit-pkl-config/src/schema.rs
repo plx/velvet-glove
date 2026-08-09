@@ -484,6 +484,8 @@ pub struct ToolSpec {
     pub files: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Granularity used by the immediate pipeline and phase-derived workflows.
+    pub phase_invocation: InvocationGranularity,
     /// Named deferred workflows.
     pub workflows: BTreeMap<String, Workflow>,
     /// Deferred workflow identifiers in execution order.
@@ -511,6 +513,7 @@ impl Default for ToolSpec {
             install_hint: None,
             files: FileSelection::default(),
             workspace_indicator: None,
+            phase_invocation: InvocationGranularity::default(),
             workflows: BTreeMap::new(),
             workflow_order: Vec::new(),
             unverified_remedy_fallback: None,

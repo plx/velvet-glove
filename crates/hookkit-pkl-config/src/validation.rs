@@ -606,7 +606,7 @@ pub fn derived_surface_contracts(spec: &ToolSpec) -> SurfaceContracts {
     let immediate = if phases.is_empty() {
         None
     } else {
-        let mut capabilities = BTreeSet::from([Capability::Batch]);
+        let mut capabilities = BTreeSet::from([invocation_capability(spec.phase_invocation)]);
         if phases.iter().any(|(_, phase)| phase_is_checker(phase)) {
             capabilities.insert(Capability::Checker);
         }
@@ -620,7 +620,7 @@ pub fn derived_surface_contracts(spec: &ToolSpec) -> SurfaceContracts {
             "pipeline",
             CommandTargetKind::ImmediatePipeline,
             0,
-            InvocationGranularity::Batch,
+            spec.phase_invocation,
             None,
             spec,
             phases
@@ -743,7 +743,7 @@ pub fn minimum_required_cases(capabilities: &BTreeSet<Capability>) -> BTreeSet<C
         cases.extend([ContractCase::MultiFile, ContractCase::BatchAttribution]);
     }
     if capabilities.contains(&Capability::PerFile) {
-        cases.insert(ContractCase::PerFileInvocation);
+        cases.extend([ContractCase::MultiFile, ContractCase::PerFileInvocation]);
     }
     if capabilities.contains(&Capability::WorkspaceInvocation) {
         cases.extend([
@@ -820,7 +820,10 @@ fn compatibility_targets(spec: &ToolSpec, phases: &[(&String, &Phase)]) -> Vec<C
                     } else {
                         CheckScope::TargetFiles
                     };
-                let mut capabilities = BTreeSet::from([Capability::Mutator, Capability::Batch]);
+                let mut capabilities = BTreeSet::from([
+                    Capability::Mutator,
+                    invocation_capability(spec.phase_invocation),
+                ]);
                 let mut commands = Vec::new();
                 if let Some((check_id, check)) = verifier {
                     capabilities.insert(Capability::Checker);
@@ -846,7 +849,7 @@ fn compatibility_targets(spec: &ToolSpec, phases: &[(&String, &Phase)]) -> Vec<C
                     id,
                     CommandTargetKind::CompatibilityWorkflow,
                     order,
-                    InvocationGranularity::Batch,
+                    spec.phase_invocation,
                     Some(check_scope),
                     spec,
                     commands,
@@ -866,7 +869,10 @@ fn compatibility_targets(spec: &ToolSpec, phases: &[(&String, &Phase)]) -> Vec<C
             } else {
                 CheckScope::TargetFiles
             };
-            let mut capabilities = BTreeSet::from([Capability::Checker, Capability::Batch]);
+            let mut capabilities = BTreeSet::from([
+                Capability::Checker,
+                invocation_capability(spec.phase_invocation),
+            ]);
             if check_scope == CheckScope::Workspace {
                 capabilities.insert(Capability::WorkspaceScoped);
             }
@@ -874,7 +880,7 @@ fn compatibility_targets(spec: &ToolSpec, phases: &[(&String, &Phase)]) -> Vec<C
                 id,
                 CommandTargetKind::CompatibilityWorkflow,
                 order,
-                InvocationGranularity::Batch,
+                spec.phase_invocation,
                 Some(check_scope),
                 spec,
                 vec![phase_signature(
@@ -2659,6 +2665,44 @@ mod tests {
         assert!(cases.contains(&ContractCase::Idempotence));
         assert!(cases.contains(&ContractCase::StdoutIssue));
         assert!(cases.contains(&ContractCase::BatchAttribution));
+    }
+
+    #[test]
+    fn per_file_contract_requires_multiple_candidates() {
+        let cases =
+            minimum_required_cases(&BTreeSet::from([Capability::Checker, Capability::PerFile]));
+
+        assert!(cases.contains(&ContractCase::MultiFile));
+        assert!(cases.contains(&ContractCase::PerFileInvocation));
+    }
+
+    #[test]
+    fn phase_invocation_drives_immediate_and_compatibility_contracts() {
+        let spec = ToolSpec {
+            executable: "example".into(),
+            phase_invocation: InvocationGranularity::PerFile,
+            phases: BTreeMap::from([("verify".into(), Phase::default())]),
+            phase_order: vec!["verify".into()],
+            ..ToolSpec::default()
+        };
+
+        let contracts = derived_surface_contracts(&spec);
+        let immediate = contracts.immediate.expect("immediate contract");
+        let deferred = contracts.deferred.expect("compatibility contract");
+        assert_eq!(
+            immediate.targets[0].invocation,
+            InvocationGranularity::PerFile
+        );
+        assert_eq!(
+            deferred.targets[0].invocation,
+            InvocationGranularity::PerFile
+        );
+        assert!(immediate.capabilities.contains(&Capability::PerFile));
+        assert!(deferred.capabilities.contains(&Capability::PerFile));
+        assert_eq!(
+            deferred.targets[0].kind,
+            CommandTargetKind::CompatibilityWorkflow
+        );
     }
 
     #[test]

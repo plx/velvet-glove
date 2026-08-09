@@ -183,6 +183,13 @@ cargo test --locked --offline -p velvet-glove --test tool_fixtures \
   --manifest-path "$repository_root/Cargo.toml" \
   run_all_tool_fixtures -- --ignored --exact --nocapture
 
+fixture_report="$artifact_dir/fixtures/report.json"
+if [[ ! -f $fixture_report ]]; then
+  echo "error: fixture lane did not emit its stable machine-readable report" >&2
+  exit 1
+fi
+fixture_report_sha256=$(shasum -a 256 "$fixture_report" | awk '{print $1}')
+
 lock_sha256=$(shasum -a 256 "$provisioning_dir/mise.lock" | awk '{print $1}')
 generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 os_version=$(sw_vers -productVersion)
@@ -243,6 +250,7 @@ jq -n \
   --arg osVersionConstraint ">=26" \
   --arg architecture "$(uname -m)" \
   --arg cargoTargetDir "$CARGO_TARGET_DIR" \
+  --arg fixtureReportSha256 "$fixture_report_sha256" \
   --argjson recipeIds "$recipe_ids" \
   --argjson artifactDigests "$artifact_digests" \
   --slurpfile observedVersions "$observed_file" \
@@ -263,6 +271,10 @@ jq -n \
     neutralTemporaryHome: true,
     cargoInvocationDirectory: "/",
     cargoTargetDir: $cargoTargetDir,
+    fixtureReport: {
+      path: "fixtures/report.json",
+      sha256: $fixtureReportSha256
+    },
     sandboxBackend: "mise-deny-net",
     activeNetworkDenial: true,
     artifactDigests: $artifactDigests,

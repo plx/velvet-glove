@@ -71,6 +71,27 @@ fn assert_exit_codes(actual: &ExitCodes, clean: &[i32], issues: &[i32], failure:
     assert_eq!(actual.failure, failure, "failure codes");
 }
 
+#[test]
+fn jq_uses_per_file_parse_validation_and_distinguishes_tool_failures() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let jq = spec(&specs, "jq");
+
+    assert_eq!(jq.id, "jq");
+    assert_eq!(jq.phase_invocation, InvocationGranularity::PerFile);
+    assert!(jq.workflows.is_empty(), "jq uses compatibility translation");
+    let verify = jq.phases.get("verify").expect("jq verify phase");
+    assert_argv(
+        verify,
+        vec![
+            literal("empty"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&verify.exit_codes, &[0], &[5], &[1, 2, 3, 4]);
+}
+
 fn spec(specs: &std::collections::BTreeMap<String, ToolSpec>, key: &str) -> ToolSpec {
     specs
         .get(key)
