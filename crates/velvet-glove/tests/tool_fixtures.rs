@@ -103,9 +103,11 @@ const BUF_SCRUBBED_ENV: &[&str] = &[
 ];
 const CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT";
 const CARGO_CLIPPY_POISON_ENV_VALUE: &str = "velvet-glove-cargo-clippy-adapter-must-clear-this";
+const CARGO_FMT_POISON_ENV_VALUE: &str = "velvet-glove-cargo-fmt-adapter-must-clear-this";
 const CARGO_PROGRAM_ENV: &str = "CARGO";
 const RUSTC_ENV: &str = "RUSTC";
 const RUSTDOC_ENV: &str = "RUSTDOC";
+const RUSTFMT_ENV: &str = "RUSTFMT";
 const DYLD_LIBRARY_PATH_ENV: &str = "DYLD_LIBRARY_PATH";
 const CARGO_HOME_ENV: &str = "CARGO_HOME";
 const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
@@ -150,6 +152,42 @@ const CARGO_CLIPPY_PREFIX_POISON_ENV: &[&str] = &[
     "CARGO_VELVET_GLOVE_POISON",
     "RUST_VELVET_GLOVE_POISON",
     "CLIPPY_VELVET_GLOVE_POISON",
+    "SCCACHE_VELVET_GLOVE_POISON",
+    "CCACHE_VELVET_GLOVE_POISON",
+];
+const CARGO_FMT_EMPTY_ENV: &[&str] = &[
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTFLAGS",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+];
+const CARGO_FMT_SCRUBBED_ENV: &[&str] = &[
+    "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTDOC",
+    "CARGO_BUILD_TARGET",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
+    "CARGO_PROFILE_DEV_DEBUG",
+    "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
+    "RUSTC_BOOTSTRAP",
+    "RUST_LOG",
+    "RUSTDOCFLAGS",
+    "RUSTUP_TOOLCHAIN",
+    "SCCACHE_CACHE_SIZE",
+    "SCCACHE_DIR",
+    "SCCACHE_ENDPOINT",
+    "SCCACHE_ERROR_LOG",
+    "SCCACHE_LOG",
+    "CCACHE_CONFIGPATH",
+    "CCACHE_DIR",
+    "CCACHE_PREFIX",
+    DEBUG_ENV,
+    "SYSROOT",
+];
+const CARGO_FMT_PREFIX_POISON_ENV: &[&str] = &[
+    "CARGO_VELVET_GLOVE_POISON",
+    "RUST_VELVET_GLOVE_POISON",
     "SCCACHE_VELVET_GLOVE_POISON",
     "CCACHE_VELVET_GLOVE_POISON",
 ];
@@ -252,6 +290,12 @@ enum TracePlan {
         preflight_after_indicator: &'static [&'static str],
         command_before_indicator: &'static [&'static str],
         command_after_indicators: &'static [&'static [&'static str]],
+    },
+    CargoFmtWorkspaceIndicatorMarker {
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        target_roots: &'static [&'static str],
+        edition: &'static str,
     },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
@@ -402,6 +446,32 @@ const CARGO_CLIPPY_TRACE_PLAN: TracePlan =
                 "-Dwarnings",
             ],
         ],
+    };
+
+const CARGO_FMT_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_CARGO_FMT_WORKSPACE__";
+const CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER: &str = "<cargo-fmt-private>";
+const CARGO_FMT_TRACE_PLAN: TracePlan = TracePlan::CargoFmtWorkspaceIndicatorMarker {
+    adapter_prefix: &["-I", "-c"],
+    marker: CARGO_FMT_WORKSPACE_MARKER,
+    target_roots: &["src/example.rs"],
+    edition: "2024",
+};
+const CARGO_FMT_MULTI_TRACE_PLAN: TracePlan = TracePlan::CargoFmtWorkspaceIndicatorMarker {
+    adapter_prefix: &["-I", "-c"],
+    marker: CARGO_FMT_WORKSPACE_MARKER,
+    target_roots: &[
+        "alpha/src/example.rs",
+        "alpha/src/selected_clean.rs",
+        "beta/src/workspace_only.rs",
+    ],
+    edition: "2024",
+};
+const CARGO_FMT_COVERAGE_FAILURE_TRACE_PLAN: TracePlan =
+    TracePlan::CargoFmtWorkspaceIndicatorMarker {
+        adapter_prefix: &["-I", "-c"],
+        marker: CARGO_FMT_WORKSPACE_MARKER,
+        target_roots: &["src/example.rs"],
+        edition: "2024",
     };
 
 #[derive(Debug)]
@@ -815,6 +885,85 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &[],
             trace_plan: BUF_TRACE_PLAN,
         },
+        ("cargo-fmt", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: CARGO_FMT_TRACE_PLAN,
+        },
+        ("cargo-fmt", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 1, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"kind\":\"cargo-fmt\"",
+                "\"status\":\"issues\"",
+                "\"unformatted\":[\"src/example.rs\"]",
+            ],
+            diagnostic_excludes: &["\"status\":\"clean\""],
+            trace_plan: CARGO_FMT_TRACE_PLAN,
+        },
+        ("cargo-fmt", "workspace-multi") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["alpha/src/example.rs", "alpha/src/selected_clean.rs"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 1, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"packages\":2",
+                "\"unformatted\":[\"alpha/src/example.rs\",\"beta/src/workspace_only.rs\"]",
+            ],
+            diagnostic_excludes: &["alpha/src/selected_clean.rs\"]"],
+            trace_plan: CARGO_FMT_MULTI_TRACE_PLAN,
+        },
+        ("cargo-fmt", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 1, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "rustfmt.toml",
+                "max_width",
+                "velvet-glove-cargo-fmt: cargo-fmt coverage check exited 1 without a clean issue report",
+            ],
+            diagnostic_excludes: &["\"status\":\"issues\""],
+            trace_plan: CARGO_FMT_TRACE_PLAN,
+        },
+        ("cargo-fmt", "coverage-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 1, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "cargo-fmt does not cover the complete physical Rust source set",
+                "missing=['src/main.rs']",
+            ],
+            diagnostic_excludes: &["\"status\":\"issues\""],
+            trace_plan: CARGO_FMT_COVERAGE_FAILURE_TRACE_PLAN,
+        },
         ("cargo-clippy", "clean") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -934,7 +1083,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             trace_plan: GOFMT_TRACE_PLAN,
         },
         (
-            "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format"
+            "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
             | "cargo-clippy" | "go-fmt",
             other,
         ) => {
@@ -1106,6 +1255,96 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
+        ("cargo-fmt", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("cargo-fmt", "source-issue") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["src/example.rs"],
+        },
+        ("cargo-fmt", "workspace-multi") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["alpha/src/example.rs", "alpha/src/selected_clean.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["alpha/src/example.rs", "alpha/src/selected_clean.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["alpha/src/example.rs", "alpha/src/selected_clean.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 1, 0, 1, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["alpha/src/example.rs", "beta/src/workspace_only.rs"],
+        },
+        ("cargo-fmt", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 1, 0, 1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("cargo-fmt", "coverage-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 1, 0, 1],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
         ("cargo-clippy", "clean") => MutatingToolContractCase {
             remedy_phase_id: "fix",
             remedy_mode: PhaseMode::Fix,
@@ -1246,7 +1485,7 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
-        ("biome" | "buf-format" | "cargo-clippy" | "go-fmt", other) => {
+        ("biome" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "go-fmt", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
@@ -1779,6 +2018,56 @@ fn cargo_clippy_contract_registry_binds_workspace_fix_lifecycle() {
 }
 
 #[test]
+fn cargo_fmt_contract_registry_binds_workspace_format_and_coverage_failure() {
+    let multi = named_fixture_case("cargo-fmt", "workspace-multi");
+    let check = real_tool_contract_case(&multi)
+        .expect("cargo-fmt check contract lookup")
+        .expect("cargo-fmt check contract");
+    let mutation = mutating_tool_contract_case(&multi)
+        .expect("cargo-fmt mutation contract lookup")
+        .expect("cargo-fmt mutation contract");
+
+    assert_eq!(check.phase_id, "verify");
+    assert_eq!(check.invocations.len(), 1);
+    assert_eq!(check.invocations[0].exit_code, 1);
+    assert_eq!(
+        check.invocations[0].trace_exit_codes,
+        &[0, 0, 1, 0, 1, 1, 0, 1]
+    );
+    assert_eq!(check.trace_plan, CARGO_FMT_MULTI_TRACE_PLAN);
+    assert_eq!(mutation.remedy_phase_id, "format");
+    assert_eq!(mutation.remedy_mode, PhaseMode::Format);
+    assert_eq!(mutation.remedy_writes, WriteBehavior::Workspace);
+    assert_eq!(
+        mutation.changed_targets,
+        &["alpha/src/example.rs", "beta/src/workspace_only.rs"]
+    );
+    assert!(
+        !check.targets().contains(&"beta/src/workspace_only.rs"),
+        "workspace-only formatting mutation must remain outside event candidates"
+    );
+
+    let coverage = named_fixture_case("cargo-fmt", "coverage-failure");
+    let coverage_check = real_tool_contract_case(&coverage)
+        .expect("cargo-fmt coverage check lookup")
+        .expect("cargo-fmt coverage check contract");
+    let coverage_mutation = mutating_tool_contract_case(&coverage)
+        .expect("cargo-fmt coverage mutation lookup")
+        .expect("cargo-fmt coverage mutation contract");
+    assert_eq!(coverage_check.outcome, ExpectedOutcome::OperationalFailure);
+    assert_eq!(coverage_check.invocations[0].exit_code, 2);
+    assert_eq!(
+        coverage_check.invocations[0].trace_exit_codes,
+        &[0, 0, 1, 0, 1]
+    );
+    assert_eq!(
+        coverage_check.trace_plan,
+        CARGO_FMT_COVERAGE_FAILURE_TRACE_PLAN
+    );
+    assert!(coverage_mutation.final_invocations.is_empty());
+}
+
+#[test]
 fn changed_path_attribution_distinguishes_target_and_workspace_scopes() {
     let selected = PathBuf::from("/workspace/src/example.proto");
     let workspace_only = PathBuf::from("/workspace/src/workspace-only.proto");
@@ -2197,6 +2486,133 @@ fn mode_and_workspace_trace_plan_rejects_ambiguous_or_escaping_workspaces() {
 }
 
 #[test]
+fn cargo_fmt_trace_plan_binds_coverage_and_real_workspace_children() {
+    let root = unique_temp_dir("velvet-glove-cargo-fmt-trace-test");
+    let indicator = root.join("Cargo.lock");
+    let manifest = root.join("Cargo.toml");
+    let config = root.join("rustfmt.toml");
+    let target = root.join("src/example.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).expect("workspace source directory");
+    std::fs::write(&indicator, "# lock\n").expect("workspace indicator");
+    std::fs::write(&manifest, "[package]\nname = \"fixture\"\n").expect("workspace manifest");
+    std::fs::write(&config, "style_edition = \"2024\"\n").expect("rustfmt config");
+    std::fs::write(&target, "fn example() {}\n").expect("selected source");
+    let indicator = canonical_project(&indicator).to_string_lossy().into_owned();
+    let manifest = canonical_project(&manifest).to_string_lossy().into_owned();
+    let target = canonical_project(&target);
+    let outer_arguments = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "cargo".to_owned(),
+        "cargo-fmt".to_owned(),
+        "rustfmt".to_owned(),
+        "verify".to_owned(),
+        CARGO_FMT_WORKSPACE_MARKER.to_owned(),
+        indicator.clone(),
+    ];
+
+    let (program, invocations) = resolve_trace_invocations(
+        CARGO_FMT_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        std::slice::from_ref(&target),
+        &[0, 0, 1, 0, 1, 1, 0, 1],
+    )
+    .expect("resolve Cargo Fmt trace");
+
+    assert_eq!(program, "cargo");
+    assert_eq!(invocations.len(), 8);
+    assert_eq!(
+        invocations
+            .iter()
+            .map(|invocation| invocation.program.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "cargo",
+            "cargo",
+            "cargo-fmt",
+            "cargo",
+            "rustfmt",
+            "cargo-fmt",
+            "cargo",
+            "rustfmt",
+        ]
+    );
+    assert_eq!(
+        invocations[0].arguments,
+        [
+            "metadata",
+            "--format-version=1",
+            "--no-deps",
+            "--manifest-path",
+            &manifest,
+            "--locked",
+            "--offline",
+            "--quiet",
+        ]
+    );
+    assert_eq!(
+        invocations[3].arguments,
+        [
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+            "<cargo-fmt-private>/coverage-workspace/Cargo.toml",
+            "--offline",
+        ]
+    );
+    assert_eq!(
+        invocations[4].arguments,
+        [
+            "<cargo-fmt-private>/coverage-workspace/src/example.rs",
+            "--edition",
+            "2024",
+            "--config-path",
+            "<cargo-fmt-private>/coverage-workspace",
+            "--color",
+            "never",
+            "--files-with-diff",
+            "--check",
+        ]
+    );
+    assert_eq!(
+        invocations[7].arguments,
+        [
+            target.to_string_lossy().as_ref(),
+            "--edition",
+            "2024",
+            "--config-path",
+            canonical_project(&root).to_string_lossy().as_ref(),
+            "--color",
+            "never",
+            "--files-with-diff",
+            "--check",
+        ]
+    );
+    assert_eq!(
+        invocations
+            .iter()
+            .map(|invocation| invocation.exit_code)
+            .collect::<Vec<_>>(),
+        [0, 0, 1, 0, 1, 1, 0, 1]
+    );
+
+    let (_, coverage_only) = resolve_trace_invocations(
+        CARGO_FMT_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &[target],
+        &[0, 0, 1, 0, 1],
+    )
+    .expect("resolve coverage rejection trace");
+    assert_eq!(coverage_only.len(), 5);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn workspace_indicator_trace_plan_binds_preflight_and_read_only_remedy_probes() {
     let root = unique_temp_dir("velvet-glove-workspace-indicator-trace-test");
     let indicator = root.join("Cargo.toml");
@@ -2466,6 +2882,7 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
         trace_root: root.join("trace"),
         programs: BTreeMap::from([("astro".to_owned(), real_program)]),
         cargo_clippy_toolchain: None,
+        cargo_fmt_toolchain: None,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -2525,6 +2942,7 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
         trace_root: root.join("trace"),
         programs: BTreeMap::from([("astro".to_owned(), real_program)]),
         cargo_clippy_toolchain: None,
+        cargo_fmt_toolchain: None,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -2603,6 +3021,7 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         trace_root,
         programs: BTreeMap::from([("buf".to_owned(), root.join("managed/bin/buf"))]),
         cargo_clippy_toolchain: None,
+        cargo_fmt_toolchain: None,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -2666,6 +3085,7 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         trace_root,
         programs: BTreeMap::from([("gofmt".to_owned(), root.join("managed/bin/gofmt"))]),
         cargo_clippy_toolchain: None,
+        cargo_fmt_toolchain: None,
     };
 
     let environment = verify_gofmt_trace_environment(&record, &harness)
@@ -2881,6 +3301,69 @@ fn gofmt_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated Cargo Fmt adapter lifecycle; requires controlled Python"]
+fn cargo_fmt_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("cargo-fmt")
+        .unwrap_or_else(|| panic!("builtin catalog has no Cargo Fmt spec"));
+    verify_cargo_fmt_adapter_lifecycle(spec, timeout).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn cargo_fmt_failure_goldens_embed_the_evaluated_adapter() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("cargo-fmt")
+        .unwrap_or_else(|| panic!("builtin catalog has no Cargo Fmt spec"));
+    let phase = spec.phases.get("format").expect("Cargo Fmt format phase");
+    let ArgvElement::Literal(adapter) = &phase.argv[2] else {
+        panic!("Cargo Fmt format phase must embed one literal adapter")
+    };
+    let command_prefix = "[format] command: python -I -c ";
+    let command_suffix = " cargo cargo-fmt rustfmt format __VELVET_GLOVE_CARGO_FMT_WORKSPACE__ <workspace>/Cargo.lock";
+    for case in ["coverage-failure", "operational-failure"] {
+        for surface in ["claude", "codex"] {
+            let path = fixtures_root()
+                .join("cargo-fmt")
+                .join(case)
+                .join(format!("{surface}.stderr.txt"));
+            let golden = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert_eq!(
+                golden.matches(command_prefix).count(),
+                1,
+                "{}",
+                path.display()
+            );
+            assert_eq!(
+                golden.matches(command_suffix).count(),
+                1,
+                "{}",
+                path.display()
+            );
+            let embedded = golden
+                .split_once(command_prefix)
+                .expect("checked Cargo Fmt command prefix")
+                .1
+                .split_once(command_suffix)
+                .expect("checked Cargo Fmt command suffix")
+                .0;
+            assert_eq!(
+                embedded.as_bytes(),
+                adapter.as_bytes(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     let options = HarnessOptions::from_environment().unwrap_or_else(|error| panic!("{error}"));
@@ -2910,6 +3393,11 @@ fn run_all_tool_fixtures() {
         verify_gofmt_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("gofmt adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "cargo-fmt") {
+        verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("cargo-fmt adapter lifecycle probe: pass");
     }
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -5348,6 +5836,272 @@ fn resolve_trace_invocations(
             }
             Ok((preflight_program, traces))
         }
+        TracePlan::CargoFmtWorkspaceIndicatorMarker {
+            adapter_prefix,
+            marker,
+            target_roots,
+            edition,
+        } => {
+            if !matches!(expected_exit_codes.len(), 5 | 8) {
+                return Err(format!(
+                    "Cargo Fmt adapter trace for {outer_program} must declare the five coverage children and optionally the three real-workspace children, got {expected_exit_codes:?}"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "Cargo Fmt adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Cargo Fmt adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let cargo = outer_arguments.get(3).filter(|value| *value == "cargo").cloned().ok_or_else(|| {
+                format!("Cargo Fmt adapter has no fixed cargo launcher at argument 3: {outer_arguments:?}")
+            })?;
+            let cargo_fmt = outer_arguments
+                .get(4)
+                .filter(|value| *value == "cargo-fmt")
+                .cloned()
+                .ok_or_else(|| {
+                    format!("Cargo Fmt adapter has no fixed cargo-fmt companion at argument 4: {outer_arguments:?}")
+                })?;
+            let rustfmt = outer_arguments
+                .get(5)
+                .filter(|value| *value == "rustfmt")
+                .cloned()
+                .ok_or_else(|| {
+                    format!("Cargo Fmt adapter has no fixed rustfmt companion at argument 5: {outer_arguments:?}")
+                })?;
+            let phase = outer_arguments.get(6).ok_or_else(|| {
+                format!("Cargo Fmt adapter has no phase mode: {outer_arguments:?}")
+            })?;
+            if !matches!(phase.as_str(), "format" | "verify") {
+                return Err(format!(
+                    "Cargo Fmt adapter has unsupported phase mode {phase:?}"
+                ));
+            }
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "Cargo Fmt adapter requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index != 7 || !outer_arguments[7..*marker_index].is_empty() {
+                return Err(format!(
+                    "Cargo Fmt fixture trace rejects forwarded extra arguments: {outer_arguments:?}"
+                ));
+            }
+            let [indicator] = &outer_arguments[(*marker_index + 1)..] else {
+                return Err(format!(
+                    "Cargo Fmt adapter requires exactly one workspace indicator after {marker:?}: {outer_arguments:?}"
+                ));
+            };
+            let indicator_path = Path::new(indicator);
+            if !indicator_path.is_absolute()
+                || indicator_path.file_name() != Some(OsStr::new("Cargo.lock"))
+                || !indicator_path.is_file()
+            {
+                return Err(format!(
+                    "Cargo Fmt adapter rendered an invalid workspace indicator {indicator:?}"
+                ));
+            }
+            let workspace = indicator_path.parent().ok_or_else(|| {
+                format!("Cargo Fmt workspace indicator has no parent: {indicator:?}")
+            })?;
+            let manifest_path = canonical_project(&workspace.join("Cargo.toml"));
+            if !manifest_path.is_file() {
+                return Err(format!(
+                    "Cargo Fmt fixture trace requires a root Cargo.toml beside {indicator:?}"
+                ));
+            }
+            let manifest = manifest_path.to_string_lossy().into_owned();
+            if targets.iter().any(|target| !target.starts_with(workspace)) {
+                return Err(format!(
+                    "Cargo Fmt adapter targets escape indicator workspace {workspace:?}: {targets:?}"
+                ));
+            }
+            if !workspace.join("rustfmt.toml").is_file()
+                && !workspace.join(".rustfmt.toml").is_file()
+            {
+                return Err(format!(
+                    "Cargo Fmt fixture trace requires one root rustfmt configuration in {workspace:?}"
+                ));
+            }
+
+            let actual_targets = target_roots
+                .iter()
+                .map(|relative| canonical_project(&workspace.join(relative)))
+                .collect::<Vec<_>>();
+            for target in &actual_targets {
+                if !target.is_file() {
+                    return Err(format!(
+                        "Cargo Fmt trace target root is unavailable: {target:?}"
+                    ));
+                }
+            }
+            let private = |suffix: &str| {
+                format!(
+                    "{CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER}/{}",
+                    suffix.trim_start_matches('/')
+                )
+            };
+            let coverage_indicator = private("coverage-workspace/Cargo.toml");
+            let coverage_config = private("coverage-workspace");
+            let coverage_targets = target_roots
+                .iter()
+                .map(|relative| private(&format!("coverage-workspace/{relative}")))
+                .collect::<Vec<_>>();
+            let config = workspace.to_string_lossy().into_owned();
+            let metadata = |selected_indicator: String, locked: bool| {
+                let mut arguments = vec![
+                    "metadata".to_owned(),
+                    if locked {
+                        "--format-version=1".to_owned()
+                    } else {
+                        "--format-version".to_owned()
+                    },
+                ];
+                if !locked {
+                    arguments.push("1".to_owned());
+                }
+                arguments.extend([
+                    "--no-deps".to_owned(),
+                    "--manifest-path".to_owned(),
+                    selected_indicator,
+                ]);
+                if locked {
+                    arguments.extend([
+                        "--locked".to_owned(),
+                        "--offline".to_owned(),
+                        "--quiet".to_owned(),
+                    ]);
+                } else {
+                    arguments.push("--offline".to_owned());
+                }
+                arguments
+            };
+            let cargo_fmt_arguments =
+                |selected_indicator: String, selected_config: String, check: bool| {
+                    let mut arguments = vec![
+                        "fmt".to_owned(),
+                        "--all".to_owned(),
+                        "--manifest-path".to_owned(),
+                        selected_indicator,
+                    ];
+                    if check {
+                        arguments.push("--check".to_owned());
+                    }
+                    arguments.extend([
+                        "--".to_owned(),
+                        "--config-path".to_owned(),
+                        selected_config,
+                        "--color".to_owned(),
+                        "never".to_owned(),
+                        "--files-with-diff".to_owned(),
+                    ]);
+                    arguments
+                };
+            let rustfmt_arguments =
+                |selected_targets: Vec<String>, selected_config: String, check: bool| {
+                    let mut arguments = selected_targets;
+                    arguments.extend([
+                        "--edition".to_owned(),
+                        edition.to_owned(),
+                        "--config-path".to_owned(),
+                        selected_config,
+                        "--color".to_owned(),
+                        "never".to_owned(),
+                        "--files-with-diff".to_owned(),
+                    ]);
+                    if check {
+                        arguments.push("--check".to_owned());
+                    }
+                    arguments
+                };
+            let original_targets = actual_targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let coverage_candidate_targets = coverage_targets
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            let mut traces = vec![
+                ResolvedTraceInvocation {
+                    program: cargo.clone(),
+                    targets: targets.to_vec(),
+                    arguments: metadata(manifest.clone(), true),
+                    exit_code: expected_exit_codes[0],
+                },
+                ResolvedTraceInvocation {
+                    program: cargo.clone(),
+                    targets: coverage_candidate_targets.clone(),
+                    arguments: metadata(coverage_indicator.clone(), true),
+                    exit_code: expected_exit_codes[1],
+                },
+                ResolvedTraceInvocation {
+                    program: cargo_fmt.clone(),
+                    targets: coverage_candidate_targets.clone(),
+                    arguments: cargo_fmt_arguments(
+                        coverage_indicator.clone(),
+                        coverage_config.clone(),
+                        true,
+                    ),
+                    exit_code: expected_exit_codes[2],
+                },
+                ResolvedTraceInvocation {
+                    program: cargo.clone(),
+                    targets: coverage_candidate_targets.clone(),
+                    arguments: metadata(coverage_indicator.clone(), false),
+                    exit_code: expected_exit_codes[3],
+                },
+                ResolvedTraceInvocation {
+                    program: rustfmt.clone(),
+                    targets: coverage_candidate_targets,
+                    arguments: rustfmt_arguments(coverage_targets, coverage_config, true),
+                    exit_code: expected_exit_codes[4],
+                },
+            ];
+            if expected_exit_codes.len() == 8 {
+                traces.extend([
+                    ResolvedTraceInvocation {
+                        program: cargo_fmt,
+                        targets: actual_targets.clone(),
+                        arguments: cargo_fmt_arguments(
+                            manifest.clone(),
+                            config.clone(),
+                            phase == "verify",
+                        ),
+                        exit_code: expected_exit_codes[5],
+                    },
+                    ResolvedTraceInvocation {
+                        program: cargo.clone(),
+                        targets: actual_targets.clone(),
+                        arguments: metadata(manifest, false),
+                        exit_code: expected_exit_codes[6],
+                    },
+                    ResolvedTraceInvocation {
+                        program: rustfmt,
+                        targets: actual_targets,
+                        arguments: rustfmt_arguments(original_targets, config, phase == "verify"),
+                        exit_code: expected_exit_codes[7],
+                    },
+                ]);
+            }
+            Ok((cargo, traces))
+        }
         TracePlan::TrailingOptionsAdapter {
             preflight,
             validation,
@@ -5687,6 +6441,108 @@ impl CargoClippyToolchain {
     }
 }
 
+struct CargoFmtToolchain {
+    root: PathBuf,
+    bin: PathBuf,
+    library: PathBuf,
+    cargo: PathBuf,
+    cargo_fmt: PathBuf,
+    rustfmt: PathBuf,
+    rustc: PathBuf,
+    cargo_home: PathBuf,
+    temporary: PathBuf,
+}
+
+impl CargoFmtToolchain {
+    fn resolve() -> Result<Self, String> {
+        let requested_root =
+            std::env::var_os(CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV).ok_or_else(|| {
+                format!("cargo-fmt real-tool fixtures require {CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV}")
+            })?;
+        let requested_root = PathBuf::from(requested_root);
+        if !requested_root.is_absolute() {
+            return Err(format!(
+                "{CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV} must be an absolute directory, got {requested_root:?}"
+            ));
+        }
+        let root = requested_root.canonicalize().map_err(|error| {
+            format!(
+                "canonicalize {CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV} root {requested_root:?}: {error}"
+            )
+        })?;
+        if !root.is_dir() {
+            return Err(format!(
+                "cargo-fmt toolchain root is not a directory: {root:?}"
+            ));
+        }
+        let bin = root.join("bin");
+        let library = root.join("lib");
+        if !library.is_dir() {
+            return Err(format!(
+                "cargo-fmt toolchain root lacks its library directory: {library:?}"
+            ));
+        }
+        let cargo = require_executable(&bin.join("cargo"), "cargo-fmt cargo")?;
+        let cargo_fmt = require_executable(&bin.join("cargo-fmt"), "cargo-fmt driver")?;
+        let rustfmt = require_executable(&bin.join("rustfmt"), "rustfmt driver")?;
+        let rustc = require_executable(&bin.join("rustc"), "cargo-fmt rustc")?;
+        let cargo_home = PathBuf::from(std::env::var_os(CARGO_HOME_ENV).ok_or_else(|| {
+            format!("cargo-fmt real-tool fixtures require controlled {CARGO_HOME_ENV}")
+        })?);
+        if !cargo_home.is_absolute() {
+            return Err(format!(
+                "cargo-fmt real-tool fixtures require an absolute {CARGO_HOME_ENV}, got {cargo_home:?}"
+            ));
+        }
+        let cargo_home = cargo_home.canonicalize().map_err(|error| {
+            format!("canonicalize controlled {CARGO_HOME_ENV} {cargo_home:?}: {error}")
+        })?;
+        for config_name in ["config", "config.toml"] {
+            let config = cargo_home.join(config_name);
+            match std::fs::symlink_metadata(&config) {
+                Ok(_) => {
+                    return Err(format!(
+                        "cargo-fmt real-tool fixtures reject ambient Cargo configuration at {config:?}"
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "inspect controlled Cargo configuration path {config:?}: {error}"
+                    ));
+                }
+            }
+        }
+        let temporary = PathBuf::from(std::env::var_os(TMPDIR_ENV).ok_or_else(|| {
+            format!("cargo-fmt real-tool fixtures require controlled {TMPDIR_ENV}")
+        })?);
+        if !temporary.is_absolute() {
+            return Err(format!(
+                "cargo-fmt real-tool fixtures require an absolute {TMPDIR_ENV}, got {temporary:?}"
+            ));
+        }
+        let temporary = temporary.canonicalize().map_err(|error| {
+            format!("canonicalize controlled {TMPDIR_ENV} {temporary:?}: {error}")
+        })?;
+        if !temporary.is_dir() {
+            return Err(format!(
+                "cargo-fmt real-tool fixture {TMPDIR_ENV} is not a directory: {temporary:?}"
+            ));
+        }
+        Ok(Self {
+            root,
+            bin,
+            library,
+            cargo,
+            cargo_fmt,
+            rustfmt,
+            rustc,
+            cargo_home,
+            temporary,
+        })
+    }
+}
+
 fn require_executable(path: &Path, description: &str) -> Result<PathBuf, String> {
     let canonical = path
         .canonicalize()
@@ -5708,6 +6564,7 @@ struct ToolTraceHarness {
     trace_root: PathBuf,
     programs: BTreeMap<String, PathBuf>,
     cargo_clippy_toolchain: Option<CargoClippyToolchain>,
+    cargo_fmt_toolchain: Option<CargoFmtToolchain>,
 }
 
 impl ToolTraceHarness {
@@ -5729,11 +6586,34 @@ impl ToolTraceHarness {
         let cargo_clippy_toolchain =
             (case.tool == "cargo-clippy").then(CargoClippyToolchain::resolve);
         let cargo_clippy_toolchain = cargo_clippy_toolchain.transpose()?;
+        let cargo_fmt_toolchain = (case.tool == "cargo-fmt").then(CargoFmtToolchain::resolve);
+        let cargo_fmt_toolchain = cargo_fmt_toolchain.transpose()?;
         let mut programs = BTreeMap::new();
         for logical_program in logical_programs {
-            let real_program = match (logical_program.as_str(), &cargo_clippy_toolchain) {
-                ("cargo", Some(toolchain)) => toolchain.cargo.clone(),
-                ("cargo-clippy", Some(toolchain)) => toolchain.cargo_clippy.clone(),
+            let real_program = match logical_program.as_str() {
+                "cargo" if cargo_fmt_toolchain.is_some() => {
+                    cargo_fmt_toolchain.as_ref().expect("checked").cargo.clone()
+                }
+                "cargo-fmt" if cargo_fmt_toolchain.is_some() => cargo_fmt_toolchain
+                    .as_ref()
+                    .expect("checked")
+                    .cargo_fmt
+                    .clone(),
+                "rustfmt" if cargo_fmt_toolchain.is_some() => cargo_fmt_toolchain
+                    .as_ref()
+                    .expect("checked")
+                    .rustfmt
+                    .clone(),
+                "cargo" if cargo_clippy_toolchain.is_some() => cargo_clippy_toolchain
+                    .as_ref()
+                    .expect("checked")
+                    .cargo
+                    .clone(),
+                "cargo-clippy" if cargo_clippy_toolchain.is_some() => cargo_clippy_toolchain
+                    .as_ref()
+                    .expect("checked")
+                    .cargo_clippy
+                    .clone(),
                 _ => resolve_program(logical_program).ok_or_else(|| {
                     format!("contract could not resolve pinned {logical_program} before tracing")
                 })?,
@@ -5797,6 +6677,7 @@ impl ToolTraceHarness {
             trace_root,
             programs,
             cargo_clippy_toolchain,
+            cargo_fmt_toolchain,
         })
     }
 
@@ -5804,6 +6685,9 @@ impl ToolTraceHarness {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let mut path_entries = vec![self.shim_dir.clone()];
         if let Some(toolchain) = &self.cargo_clippy_toolchain {
+            path_entries.push(toolchain.bin.clone());
+        }
+        if let Some(toolchain) = &self.cargo_fmt_toolchain {
             path_entries.push(toolchain.bin.clone());
         }
         path_entries.extend(std::env::split_paths(&inherited));
@@ -5889,6 +6773,29 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
+        if let Some(toolchain) = &self.cargo_fmt_toolchain {
+            command
+                .env(DYLD_LIBRARY_PATH_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(CARGO_HOME_ENV, &toolchain.cargo_home)
+                .env(CARGO_TARGET_DIR_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(CARGO_NET_OFFLINE_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(CARGO_BUILD_JOBS_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(CARGO_TERM_COLOR_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(CARGO_PROGRAM_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(RUSTC_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(RUSTDOC_ENV, CARGO_FMT_POISON_ENV_VALUE)
+                .env(RUSTFMT_ENV, CARGO_FMT_POISON_ENV_VALUE);
+            for name in CARGO_FMT_EMPTY_ENV
+                .iter()
+                .chain(CARGO_FMT_SCRUBBED_ENV)
+                .chain(CARGO_FMT_PREFIX_POISON_ENV)
+            {
+                command.env(name, CARGO_FMT_POISON_ENV_VALUE);
+            }
+            for name in CARGO_CLIPPY_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         Ok(())
     }
 }
@@ -5957,8 +6864,10 @@ fn verify_tool_trace_invocations(
             real_program.to_string_lossy().as_ref(),
         )?;
         let recorded_cwd = read_record(&record, "cwd")?;
-        if !matches!(trace_program, "cargo" | "cargo-clippy")
-            && recorded_cwd != cwd.to_string_lossy().trim_end()
+        if !matches!(
+            trace_program,
+            "cargo" | "cargo-clippy" | "cargo-fmt" | "rustfmt"
+        ) && recorded_cwd != cwd.to_string_lossy().trim_end()
         {
             return Err(format!(
                 "{trace_program} {label} trace expected cwd {cwd:?}, got {recorded_cwd:?}"
@@ -5966,7 +6875,8 @@ fn verify_tool_trace_invocations(
         }
         assert_record(&record, "argc", &expected.arguments.len().to_string())?;
         for (index, argument) in expected.arguments.iter().enumerate() {
-            assert_record(&record, &format!("argv-{index}"), argument)?;
+            let argument = resolve_dynamic_trace_argument(argument, &recorded_cwd)?;
+            assert_record(&record, &format!("argv-{index}"), &argument)?;
         }
         assert_record(&record, "status", &expected.exit_code.to_string())?;
         assert_record(&record, "execution", "pass-through")?;
@@ -6036,7 +6946,35 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        if matches!(trace_program, "cargo" | "cargo-clippy") {
+        if harness.cargo_fmt_toolchain.is_some()
+            && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
+        {
+            if trace_program == "cargo"
+                && expected
+                    .arguments
+                    .iter()
+                    .any(|argument| argument == "--format-version=1")
+                && !expected
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains(CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER))
+            {
+                cargo_target_dir = None;
+            }
+            let controlled = verify_cargo_fmt_trace_environment(
+                &record,
+                harness,
+                project,
+                &recorded_cwd,
+                &mut cargo_target_dir,
+            )?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        } else if matches!(trace_program, "cargo" | "cargo-clippy") {
             if trace_program == "cargo" {
                 cargo_target_dir = None;
                 clippy_conf_dir = None;
@@ -6058,6 +6996,10 @@ fn verify_tool_trace_invocations(
         }
         let prerequisites = if trace_program == "buf" {
             serde_json::json!({"diff": BUF_DIFF_PROGRAM})
+        } else if harness.cargo_fmt_toolchain.is_some()
+            && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
+        {
+            cargo_fmt_trace_prerequisites(harness)?
         } else if matches!(trace_program, "cargo" | "cargo-clippy") {
             cargo_clippy_trace_prerequisites(harness)?
         } else {
@@ -6084,6 +7026,34 @@ fn verify_tool_trace_invocations(
             "invocations": records,
         }),
     )
+}
+
+fn resolve_dynamic_trace_argument(argument: &str, recorded_cwd: &str) -> Result<String, String> {
+    let Some(suffix) = argument.strip_prefix(CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER) else {
+        return Ok(argument.to_owned());
+    };
+    let cwd = Path::new(recorded_cwd);
+    if cwd.file_name() != Some(OsStr::new("invocation")) {
+        return Err(format!(
+            "Cargo Fmt dynamic trace path requires an invocation cwd, got {cwd:?}"
+        ));
+    }
+    let private_root = cwd
+        .parent()
+        .ok_or_else(|| format!("Cargo Fmt invocation cwd has no private parent: {cwd:?}"))?;
+    if !private_root
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with("velvet-glove-cargo-fmt-"))
+    {
+        return Err(format!(
+            "Cargo Fmt dynamic trace path has an unexpected private root: {private_root:?}"
+        ));
+    }
+    Ok(private_root
+        .join(suffix.trim_start_matches('/'))
+        .to_string_lossy()
+        .into_owned())
 }
 
 fn verify_astro_trace_environment(
@@ -6501,6 +7471,149 @@ fn verify_cargo_clippy_trace_environment(
     Ok(environment)
 }
 
+fn verify_cargo_fmt_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    project: &Path,
+    recorded_cwd: &str,
+    expected_target_dir: &mut Option<PathBuf>,
+) -> Result<BTreeMap<String, String>, String> {
+    let toolchain = harness
+        .cargo_fmt_toolchain
+        .as_ref()
+        .ok_or_else(|| "cargo-fmt trace has no managed toolchain binding".to_owned())?;
+    let mut environment = BTreeMap::new();
+    let logical_program = read_record(record, "logical-program")?;
+    if !matches!(logical_program.as_str(), "cargo" | "cargo-fmt" | "rustfmt") {
+        return Err(format!(
+            "cargo-fmt trace recorded an unexpected logical program {logical_program:?}"
+        ));
+    }
+    let observed_shim = PathBuf::from(read_record(record, "program")?)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced {logical_program} shim: {error}"))?;
+    let expected_shim = harness
+        .shim_dir
+        .join(&logical_program)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize expected {logical_program} shim: {error}"))?;
+    if observed_shim != expected_shim {
+        return Err(format!(
+            "cargo-fmt adapter escaped its {logical_program} trace shim: expected {expected_shim:?}, got {observed_shim:?}"
+        ));
+    }
+
+    for (name, expected) in [
+        (
+            DYLD_LIBRARY_PATH_ENV,
+            // macOS strips DYLD_* while resolving the trace shim's /bin/sh
+            // interpreter. The paired library is asserted as a prerequisite.
+            String::new(),
+        ),
+        (
+            CARGO_PROGRAM_ENV,
+            harness
+                .shim_dir
+                .join("cargo")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (RUSTC_ENV, toolchain.rustc.to_string_lossy().into_owned()),
+        (RUSTDOC_ENV, String::new()),
+        (
+            RUSTFMT_ENV,
+            harness
+                .shim_dir
+                .join("rustfmt")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            CARGO_HOME_ENV,
+            toolchain.cargo_home.to_string_lossy().into_owned(),
+        ),
+        (
+            TMPDIR_ENV,
+            toolchain.temporary.to_string_lossy().into_owned(),
+        ),
+        (CARGO_NET_OFFLINE_ENV, "true".to_owned()),
+        (CARGO_BUILD_JOBS_ENV, "1".to_owned()),
+        ("CARGO_INCREMENTAL", "0".to_owned()),
+        (CARGO_TERM_COLOR_ENV, "never".to_owned()),
+        ("RUST_BACKTRACE", "0".to_owned()),
+        ("RUST_LIB_BACKTRACE", "0".to_owned()),
+        ("TERM", "dumb".to_owned()),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "cargo-fmt trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+
+    let expected_path = std::env::join_paths([
+        harness.shim_dir.as_path(),
+        toolchain.bin.as_path(),
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .map_err(|error| format!("construct cargo-fmt child PATH: {error}"))?;
+    let path = read_record(record, &format!("env-{PATH_ENV}"))?;
+    if OsStr::new(&path) != expected_path {
+        return Err(format!(
+            "cargo-fmt trace expected controlled PATH {expected_path:?}, got {path:?}"
+        ));
+    }
+    environment.insert(PATH_ENV.to_owned(), path);
+
+    let project = canonical_project(project);
+    let target_dir = controlled_private_trace_directory(
+        record,
+        CARGO_TARGET_DIR_ENV,
+        &project,
+        expected_target_dir,
+    )?;
+    environment.insert(
+        CARGO_TARGET_DIR_ENV.to_owned(),
+        target_dir.to_string_lossy().into_owned(),
+    );
+    if target_dir.parent() != Some(toolchain.temporary.as_path())
+        || !target_dir
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with("velvet-glove-cargo-fmt-"))
+    {
+        return Err(format!(
+            "cargo-fmt trace target is not a direct private child of {:?}: {target_dir:?}",
+            toolchain.temporary
+        ));
+    }
+    let invocation_dir = target_dir.join("invocation");
+    if Path::new(recorded_cwd) != invocation_dir {
+        return Err(format!(
+            "cargo-fmt trace must run from its private invocation directory {invocation_dir:?}, got {recorded_cwd:?}"
+        ));
+    }
+
+    for name in CARGO_FMT_EMPTY_ENV
+        .iter()
+        .chain(CARGO_FMT_SCRUBBED_ENV)
+        .chain(CARGO_FMT_PREFIX_POISON_ENV)
+        .chain(CARGO_CLIPPY_LOADER_SCRUBBED_ENV)
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "cargo-fmt trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    Ok(environment)
+}
+
 fn controlled_private_trace_directory(
     record: &Path,
     name: &str,
@@ -6515,19 +7628,19 @@ fn controlled_private_trace_directory(
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(format!(
-            "cargo-clippy trace requires an absolute normalized {name}, got {value:?}"
+            "Cargo trace requires an absolute normalized {name}, got {value:?}"
         ));
     }
     assert_record(record, &format!("env-{name}-kind"), "directory")?;
     if name == CARGO_TARGET_DIR_ENV && path.starts_with(project) {
         return Err(format!(
-            "cargo-clippy trace must keep its build target outside the project, got {path:?}"
+            "Cargo trace must keep its build target outside the project, got {path:?}"
         ));
     }
     if let Some(expected) = expected {
         if path != *expected {
             return Err(format!(
-                "cargo-clippy trace changed {name} between child processes: expected {expected:?}, got {path:?}"
+                "Cargo trace changed {name} between child processes: expected {expected:?}, got {path:?}"
             ));
         }
     } else {
@@ -6550,6 +7663,24 @@ fn cargo_clippy_trace_prerequisites(harness: &ToolTraceHarness) -> Result<JsonVa
         "rustdoc": toolchain.rustdoc,
         "cargoClippy": toolchain.cargo_clippy,
         "clippyDriver": toolchain.clippy_driver,
+        "cargoHome": toolchain.cargo_home,
+        "temporaryRoot": toolchain.temporary,
+    }))
+}
+
+fn cargo_fmt_trace_prerequisites(harness: &ToolTraceHarness) -> Result<JsonValue, String> {
+    let toolchain = harness
+        .cargo_fmt_toolchain
+        .as_ref()
+        .ok_or_else(|| "cargo-fmt trace has no managed toolchain prerequisites".to_owned())?;
+    Ok(serde_json::json!({
+        "toolchainRoot": toolchain.root,
+        "bin": toolchain.bin,
+        "library": toolchain.library,
+        "cargo": toolchain.cargo,
+        "cargoFmt": toolchain.cargo_fmt,
+        "rustfmt": toolchain.rustfmt,
+        "rustc": toolchain.rustc,
         "cargoHome": toolchain.cargo_home,
         "temporaryRoot": toolchain.temporary,
     }))
@@ -8472,6 +9603,1247 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
         Ok(())
     } else {
         Err(missing)
+    }
+}
+
+fn verify_cargo_fmt_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        const MODE_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_MODE";
+        const CHILD_PID_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_CHILD_PID";
+        const DESCENDANT_PID_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_DESCENDANT_PID";
+        const ORPHAN_PID_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_ORPHAN_PID";
+        const READY_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_READY";
+        const INVOKED_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_INVOKED";
+        const CLEANUP_READY_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_CLEANUP_READY";
+        const CUTOFF_READY_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_CUTOFF_READY";
+        const CUTOFF_RELEASE_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_CUTOFF_RELEASE";
+        const INIT_READY_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_INIT_READY";
+        const INIT_RELEASE_ENV: &str = "VELVET_GLOVE_CARGO_FMT_LIFECYCLE_INIT_RELEASE";
+
+        let phase = spec
+            .phases
+            .get("format")
+            .ok_or_else(|| "Cargo Fmt lifecycle probe lacks a format phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(cargo_fmt),
+            ArgvElement::Literal(rustfmt),
+            ArgvElement::Literal(mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "Cargo Fmt lifecycle probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I"
+            || command != "-c"
+            || cargo_fmt != "cargo-fmt"
+            || rustfmt != "rustfmt"
+            || mode != "format"
+            || marker != CARGO_FMT_WORKSPACE_MARKER
+        {
+            return Err(format!(
+                "Cargo Fmt lifecycle probe expected exact isolated format shape, got {isolated:?} {command:?} cargo-fmt={cargo_fmt:?} rustfmt={rustfmt:?} mode={mode:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "Cargo Fmt lifecycle probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("Cargo Fmt lifecycle probe cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Cargo Fmt lifecycle Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-cargo-fmt-lifecycle");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Cargo Fmt lifecycle root: {error}"))?;
+        let result = (|| {
+            let bin = root.join("bin");
+            let cargo_home = root.join("cargo-home");
+            let adapter_tmp = root.join("adapter-tmp");
+            let home = root.join("home");
+            for directory in [&bin, &cargo_home, &adapter_tmp, &home] {
+                std::fs::create_dir(directory).map_err(|error| {
+                    format!("create Cargo Fmt lifecycle directory {directory:?}: {error}")
+                })?;
+            }
+
+            let cargo_source = r#"#!/bin/sh
+set -eu
+mode=${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_MODE:-}
+case "$mode" in
+  signal)
+    trap 'exit 0' HUP INT TERM
+    (
+      trap '' HUP INT TERM
+      while :; do /bin/sleep 1; done
+    ) &
+    printf '%s\n' "$!" > "${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_DESCENDANT_PID:?}"
+    printf '%s\n' "$$" > "${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_CHILD_PID:?}"
+    : > "${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_READY:?}"
+    while :; do /bin/sleep 1; done
+    ;;
+  output-cap)
+    /usr/bin/yes x | /usr/bin/head -c 16777217
+    exit 0
+    ;;
+  rollback-success|rollback-failure|chmod-format|mtime-only|directory-add|directory-chmod|directory-remove|normal-exit-orphan|cleanup-signal|cutoff-format)
+    manifest=
+    take_manifest=false
+    for argument in "$@"; do
+      if [ "$take_manifest" = true ]; then
+        manifest=$argument
+        take_manifest=false
+      elif [ "$argument" = --manifest-path ]; then
+        take_manifest=true
+      fi
+    done
+    [ -n "$manifest" ] || exit 65
+    workspace=${manifest%/Cargo.toml}
+    printf '{"version":1,"workspace_root":"%s","target_directory":"%s","build_directory":"%s","workspace_members":["member"],"packages":[{"id":"member","manifest_path":"%s","dependencies":[],"targets":[{"src_path":"%s/src/example.rs"}]}]}\n' "$workspace" "${CARGO_TARGET_DIR:?}" "${CARGO_TARGET_DIR:?}" "$manifest" "$workspace"
+    ;;
+  *)
+    : > "${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_INVOKED:?}"
+    exit 64
+    ;;
+esac
+"#;
+            write_executable_fixture(&bin.join("cargo"), cargo_source, "Cargo lifecycle fake")?;
+
+            let cargo_fmt_source = r#"#!/bin/sh
+set -eu
+mode=${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_MODE:-}
+manifest=
+take_manifest=false
+for argument in "$@"; do
+  if [ "$take_manifest" = true ]; then
+    manifest=$argument
+    take_manifest=false
+  elif [ "$argument" = --manifest-path ]; then
+    take_manifest=true
+  fi
+done
+[ -n "$manifest" ] || exit 65
+workspace=${manifest%/Cargo.toml}
+case "$workspace" in
+  */coverage-workspace)
+    printf '%s\n' "$workspace/src/example.rs" "$workspace/src/other.rs"
+    exit 1
+    ;;
+esac
+case "$mode" in
+  rollback-success)
+    printf 'pub fn example() { }\n' > "$workspace/src/example.rs"
+    ;;
+  rollback-failure)
+    /bin/rm -f "$workspace/src/example.rs"
+    /bin/mkdir -p "$workspace/src/example.rs/target"
+    : > "$workspace/src/example.rs/target/blocker"
+    ;;
+  chmod-format)
+    printf 'pub fn example() { }\n' > "$workspace/src/example.rs"
+    /bin/chmod 755 "$workspace/src/example.rs"
+    printf '%s\n' "$workspace/src/example.rs"
+    exit 0
+    ;;
+  mtime-only)
+    /usr/bin/touch -t 200001010000 "$workspace/src/example.rs"
+    exit 0
+    ;;
+  directory-add)
+    /bin/mkdir "$workspace/empty-leak"
+    exit 0
+    ;;
+  directory-chmod)
+    /bin/chmod 000 "$workspace/empty-baseline"
+    exit 0
+    ;;
+  directory-remove)
+    /bin/rmdir "$workspace/empty-baseline"
+    exit 0
+    ;;
+  normal-exit-orphan)
+    printf 'pub fn example() { }\n' > "$workspace/src/example.rs"
+    (
+      trap '' HUP INT TERM
+      exec </dev/null >/dev/null 2>&1
+      /bin/sleep 1
+      /bin/mkdir "$workspace/late-leak"
+    ) &
+    printf '%s\n' "$!" > "${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_ORPHAN_PID:?}"
+    printf '%s\n' "$workspace/src/example.rs"
+    exit 0
+    ;;
+  cleanup-signal)
+    delay=${CARGO_TARGET_DIR:?}/cleanup-delay
+    /bin/mkdir "$delay"
+    index=0
+    while [ "$index" -lt 4000 ]; do
+      : > "$delay/$index"
+      index=$((index + 1))
+    done
+    printf 'pub fn example() { }\n' > "$workspace/src/example.rs"
+    printf '%s\n' "$workspace/src/example.rs"
+    : > "${VELVET_GLOVE_CARGO_FMT_LIFECYCLE_CLEANUP_READY:?}"
+    while :; do /bin/sleep 1; done
+    ;;
+  cutoff-format)
+    printf 'pub fn example() { }\n' > "$workspace/src/example.rs"
+    printf '%s\n' "$workspace/src/example.rs"
+    exit 0
+    ;;
+  *)
+    exit 66
+    ;;
+esac
+printf '%s\n' "$workspace/src/example.rs"
+exit 2
+"#;
+            write_executable_fixture(
+                &bin.join("cargo-fmt"),
+                cargo_fmt_source,
+                "cargo-fmt lifecycle fake",
+            )?;
+            for companion in ["rustfmt", "rustc"] {
+                write_executable_fixture(
+                    &bin.join(companion),
+                    "#!/bin/sh\nexit 64\n",
+                    &format!("Cargo Fmt lifecycle {companion} fake"),
+                )?;
+            }
+
+            let workspace = root.join("workspace");
+            write_cargo_fmt_lifecycle_workspace(&workspace, true)?;
+            let child_path = format!("{}:/usr/bin:/bin", bin.display());
+            let adapter_command_with_script =
+                |script: &str,
+                 selected_workspace: &Path,
+                 lifecycle_mode: &str,
+                 extra_argument: Option<&str>| {
+                    let mut command = Command::new(&python);
+                    command
+                        .env_clear()
+                        .args(["-I", "-c", script])
+                        .arg("cargo")
+                        .arg("cargo-fmt")
+                        .arg("rustfmt")
+                        .arg("format");
+                    if let Some(extra_argument) = extra_argument {
+                        command.arg(extra_argument);
+                    }
+                    command
+                        .arg(CARGO_FMT_WORKSPACE_MARKER)
+                        .arg(selected_workspace.join("Cargo.lock"))
+                        .current_dir(selected_workspace)
+                        .env(HOME_ENV, &home)
+                        .env(TMPDIR_ENV, &adapter_tmp)
+                        .env(CARGO_HOME_ENV, &cargo_home)
+                        .env(PATH_ENV, &child_path)
+                        .env(MODE_ENV, lifecycle_mode)
+                        .env("LANG", "C")
+                        .env("LC_ALL", "C")
+                        .env("TERM", "dumb");
+                    command
+                };
+            let adapter_command =
+                |selected_workspace: &Path, lifecycle_mode: &str, extra_argument: Option<&str>| {
+                    adapter_command_with_script(
+                        adapter,
+                        selected_workspace,
+                        lifecycle_mode,
+                        extra_argument,
+                    )
+                };
+
+            for (signal_name, signal_number) in [("HUP", 1), ("INT", 2), ("TERM", 15)] {
+                let child_pid_path = root.join(format!("{signal_name}.child.pid"));
+                let descendant_pid_path = root.join(format!("{signal_name}.descendant.pid"));
+                let ready_path = root.join(format!("{signal_name}.ready"));
+                let mut command = adapter_command(&workspace, "signal", None);
+                command
+                    .env(CHILD_PID_ENV, &child_pid_path)
+                    .env(DESCENDANT_PID_ENV, &descendant_pid_path)
+                    .env(READY_ENV, &ready_path)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                let mut outer = command.spawn().map_err(|error| {
+                    format!("spawn evaluated Cargo Fmt {signal_name} adapter: {error}")
+                })?;
+                let outer_pid = outer.id();
+                let startup_timeout = timeout.min(Duration::from_secs(5));
+                let startup_deadline = std::time::Instant::now() + startup_timeout;
+                while !ready_path.is_file() {
+                    if let Some(status) = outer
+                        .try_wait()
+                        .map_err(|error| format!("poll Cargo Fmt {signal_name} adapter: {error}"))?
+                    {
+                        return Err(format!(
+                            "Cargo Fmt {signal_name} adapter exited {status:?} before its child became ready"
+                        ));
+                    }
+                    if std::time::Instant::now() >= startup_deadline {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!(
+                            "Cargo Fmt {signal_name} child did not become ready within {startup_timeout:?}"
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let child_pid =
+                    read_pid_file(&child_pid_path, &format!("Cargo Fmt {signal_name} child"))?;
+                let descendant_pid = read_pid_file(
+                    &descendant_pid_path,
+                    &format!("Cargo Fmt {signal_name} descendant"),
+                )?;
+                if !signal_process_group(child_pid, "0")?.success() {
+                    let _ = signal_process(descendant_pid, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "Cargo Fmt {signal_name} child {child_pid} did not lead an isolated process group"
+                    ));
+                }
+                if !signal_process(outer_pid, signal_name)?.success() {
+                    let _ = signal_process_group(child_pid, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "send SIG{signal_name} to Cargo Fmt lifecycle adapter"
+                    ));
+                }
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send(outer.wait_with_output());
+                });
+                let completion_timeout = timeout.min(Duration::from_secs(5));
+                let output = match receiver.recv_timeout(completion_timeout) {
+                    Ok(Ok(output)) => output,
+                    Ok(Err(error)) => {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        return Err(format!(
+                            "wait for terminated Cargo Fmt {signal_name} adapter: {error}"
+                        ));
+                    }
+                    Err(error) => {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        let _ = signal_process(outer_pid, "KILL");
+                        return Err(format!(
+                            "Cargo Fmt {signal_name} adapter or descendant pipe remained open for {completion_timeout:?}: {error}"
+                        ));
+                    }
+                };
+                let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+                if child_alive || descendant_alive || group_alive {
+                    let _ = signal_process_group(child_pid, "KILL");
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let expected_stderr =
+                    format!("velvet-glove-cargo-fmt: received signal {signal_number}\n");
+                if output.status.code() != Some(2)
+                    || child_alive
+                    || descendant_alive
+                    || group_alive
+                    || !stdout.is_empty()
+                    || stderr != expected_stderr
+                {
+                    return Err(format!(
+                        "Cargo Fmt SIG{signal_name} lifecycle mismatch: status={:?}; child={child_pid}:{child_alive}; descendant={descendant_pid}:{descendant_alive}; group={group_alive}; stdout={stdout:?}; stderr={stderr:?}",
+                        output.status.code()
+                    ));
+                }
+                assert_cargo_fmt_private_roots_removed(&adapter_tmp, &format!("SIG{signal_name}"))?;
+            }
+
+            let mut output_cap = adapter_command(&workspace, "output-cap", None);
+            let output = run_with_timeout(
+                &mut output_cap,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("output-cap-evidence"),
+            )
+            .map_err(|error| format!("run Cargo Fmt output-cap probe: {error}"))?;
+            let output_cap_stdout = String::from_utf8_lossy(&output.stdout);
+            let output_cap_stderr = String::from_utf8_lossy(&output.stderr);
+            if output.status.code() != Some(2)
+                || !output_cap_stdout.is_empty()
+                || !output_cap_stderr.contains("combined output exceeded 16777216 bytes")
+            {
+                return Err(format!(
+                    "Cargo Fmt output cap did not fail closed: status={:?}; stdout={output_cap_stdout:?}; stderr={output_cap_stderr:?}",
+                    output.status.code()
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "output-cap")?;
+
+            for (label, alias_kind, extra_argument, diagnostic) in [
+                (
+                    "symlink",
+                    Some("symlink"),
+                    None,
+                    "path is not a unique regular file",
+                ),
+                (
+                    "hardlink",
+                    Some("hardlink"),
+                    None,
+                    "path is not a unique regular file",
+                ),
+                (
+                    "extra-argument",
+                    None,
+                    Some("--check"),
+                    "extra arguments are unsupported",
+                ),
+            ] {
+                let rejected_workspace = root.join(format!("reject-{label}"));
+                write_cargo_fmt_lifecycle_workspace(&rejected_workspace, false)?;
+                match alias_kind {
+                    Some("symlink") => {
+                        std::os::unix::fs::symlink(
+                            rejected_workspace.join("src/example.rs"),
+                            rejected_workspace.join("src/alias.rs"),
+                        )
+                        .map_err(|error| format!("create Cargo Fmt source symlink: {error}"))?;
+                    }
+                    Some("hardlink") => {
+                        std::fs::hard_link(
+                            rejected_workspace.join("src/example.rs"),
+                            rejected_workspace.join("src/alias.rs"),
+                        )
+                        .map_err(|error| format!("create Cargo Fmt source hardlink: {error}"))?;
+                    }
+                    None => {}
+                    Some(other) => return Err(format!("unknown Cargo Fmt alias probe {other}")),
+                }
+                let invoked = root.join(format!("{label}.invoked"));
+                let mut rejection = adapter_command(&rejected_workspace, "reject", extra_argument);
+                rejection.env(INVOKED_ENV, &invoked);
+                let output = run_with_timeout(
+                    &mut rejection,
+                    b"",
+                    timeout.min(Duration::from_secs(5)),
+                    &root.join(format!("{label}-evidence")),
+                )
+                .map_err(|error| format!("run Cargo Fmt {label} rejection: {error}"))?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !stdout.is_empty()
+                    || !stderr.contains(diagnostic)
+                    || invoked.exists()
+                {
+                    return Err(format!(
+                        "Cargo Fmt {label} rejection failed closed incorrectly: status={:?}; stdout={stdout:?}; stderr={stderr:?}; invoked={}",
+                        output.status.code(),
+                        invoked.exists()
+                    ));
+                }
+                assert_cargo_fmt_private_roots_removed(&adapter_tmp, label)?;
+            }
+
+            let set_lifecycle_directory_mode =
+                |directory: &Path, mode: u32, context: &str| -> Result<(), String> {
+                    let mut permissions = std::fs::metadata(directory)
+                        .map_err(|error| format!("inspect {context}: {error}"))?
+                        .permissions();
+                    permissions.set_mode(mode);
+                    std::fs::set_permissions(directory, permissions)
+                        .map_err(|error| format!("chmod {context} to {mode:o}: {error}"))
+                };
+
+            let init_workspace = root.join("initialization-failure");
+            write_cargo_fmt_lifecycle_workspace(&init_workspace, true)?;
+            let init_tmp = root.join("initialization-unwritable-tmp");
+            std::fs::create_dir(&init_tmp)
+                .map_err(|error| format!("create Cargo Fmt unwritable TMPDIR: {error}"))?;
+            set_lifecycle_directory_mode(&init_tmp, 0o500, "Cargo Fmt unwritable TMPDIR")?;
+            let init_invoked = root.join("initialization-failure.invoked");
+            let mut init_command = adapter_command(&init_workspace, "reject", None);
+            init_command
+                .env(TMPDIR_ENV, &init_tmp)
+                .env(INVOKED_ENV, &init_invoked);
+            let init_output_result = run_with_timeout(
+                &mut init_command,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("initialization-failure-evidence"),
+            );
+            set_lifecycle_directory_mode(&init_tmp, 0o700, "Cargo Fmt unwritable TMPDIR")?;
+            let init_output = init_output_result
+                .map_err(|error| format!("run Cargo Fmt initialization failure probe: {error}"))?;
+            let init_stdout = String::from_utf8_lossy(&init_output.stdout);
+            let init_stderr = String::from_utf8_lossy(&init_output.stderr);
+            let init_tmp_text = init_tmp.to_string_lossy();
+            if init_output.status.code() != Some(2)
+                || !init_stdout.is_empty()
+                || !init_stderr.contains("cannot initialize controlled Cargo Fmt execution")
+                || !init_stderr.contains("<cargo-fmt-private>")
+                || init_stderr.contains(init_tmp_text.as_ref())
+                || init_stderr.contains("velvet-glove-cargo-fmt-")
+                || init_invoked.exists()
+            {
+                return Err(format!(
+                    "Cargo Fmt unwritable TMPDIR was not normalized and rejected before child execution: status={:?}; stdout={init_stdout:?}; stderr={init_stderr:?}; invoked={}",
+                    init_output.status.code(),
+                    init_invoked.exists(),
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&init_tmp, "initialization failure")?;
+
+            let initialization_anchor = "initialization_mask = signal.pthread_sigmask(\n                signal.SIG_BLOCK, handled_signals\n            )\n";
+            if adapter.matches(initialization_anchor).count() != 1 {
+                return Err(
+                    "Cargo Fmt initialization cutoff probe requires one exact SIG_BLOCK anchor"
+                        .to_owned(),
+                );
+            }
+            let initialization_offset = adapter
+                .find(initialization_anchor)
+                .expect("checked Cargo Fmt initialization cutoff anchor");
+            let initialization_line = adapter[..initialization_offset]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            let initialization_indent = &adapter[initialization_line..initialization_offset];
+            if !initialization_indent
+                .chars()
+                .all(|character| character == ' ')
+            {
+                return Err(format!(
+                    "Cargo Fmt initialization cutoff anchor has unexpected indentation {initialization_indent:?}"
+                ));
+            }
+            let initialization_hook = format!(
+                "{initialization_anchor}{initialization_indent}ready_descriptor = os.open(os.environ[{INIT_READY_ENV:?}], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n{initialization_indent}os.close(ready_descriptor)\n{initialization_indent}release_descriptor = os.open(os.environ[{INIT_RELEASE_ENV:?}], os.O_RDONLY)\n{initialization_indent}os.close(release_descriptor)\n"
+            );
+            let initialization_adapter =
+                adapter.replacen(initialization_anchor, &initialization_hook, 1);
+            let initialization_tmp = root.join("initialization-cutoff-unwritable-tmp");
+            std::fs::create_dir(&initialization_tmp).map_err(|error| {
+                format!("create Cargo Fmt initialization cutoff TMPDIR: {error}")
+            })?;
+            set_lifecycle_directory_mode(
+                &initialization_tmp,
+                0o500,
+                "Cargo Fmt initialization cutoff TMPDIR",
+            )?;
+            let initialization_ready = root.join("initialization-cutoff.ready");
+            let initialization_release = root.join("initialization-cutoff.release");
+            let initialization_invoked = root.join("initialization-cutoff.invoked");
+            let mkfifo = Command::new("/usr/bin/mkfifo")
+                .arg(&initialization_release)
+                .status()
+                .map_err(|error| {
+                    let _ = set_lifecycle_directory_mode(
+                        &initialization_tmp,
+                        0o700,
+                        "Cargo Fmt initialization cutoff TMPDIR",
+                    );
+                    format!("create Cargo Fmt initialization cutoff FIFO: {error}")
+                })?;
+            if !mkfifo.success() {
+                set_lifecycle_directory_mode(
+                    &initialization_tmp,
+                    0o700,
+                    "Cargo Fmt initialization cutoff TMPDIR",
+                )?;
+                return Err(format!(
+                    "create Cargo Fmt initialization cutoff FIFO exited {mkfifo:?}"
+                ));
+            }
+            let mut initialization_command = adapter_command_with_script(
+                &initialization_adapter,
+                &init_workspace,
+                "reject",
+                None,
+            );
+            initialization_command
+                .env(TMPDIR_ENV, &initialization_tmp)
+                .env(INVOKED_ENV, &initialization_invoked)
+                .env(INIT_READY_ENV, &initialization_ready)
+                .env(INIT_RELEASE_ENV, &initialization_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let initialization_spawn = initialization_command.spawn();
+            let mut initialization_outer = match initialization_spawn {
+                Ok(child) => child,
+                Err(error) => {
+                    set_lifecycle_directory_mode(
+                        &initialization_tmp,
+                        0o700,
+                        "Cargo Fmt initialization cutoff TMPDIR",
+                    )?;
+                    return Err(format!(
+                        "spawn Cargo Fmt initialization cutoff adapter: {error}"
+                    ));
+                }
+            };
+            let initialization_outer_pid = initialization_outer.id();
+            let initialization_startup_timeout = timeout.min(Duration::from_secs(5));
+            let initialization_startup_deadline =
+                std::time::Instant::now() + initialization_startup_timeout;
+            while !initialization_ready.is_file() {
+                if let Some(status) = initialization_outer.try_wait().map_err(|error| {
+                    let _ = set_lifecycle_directory_mode(
+                        &initialization_tmp,
+                        0o700,
+                        "Cargo Fmt initialization cutoff TMPDIR",
+                    );
+                    format!("poll Cargo Fmt initialization cutoff adapter: {error}")
+                })? {
+                    set_lifecycle_directory_mode(
+                        &initialization_tmp,
+                        0o700,
+                        "Cargo Fmt initialization cutoff TMPDIR",
+                    )?;
+                    return Err(format!(
+                        "Cargo Fmt initialization cutoff adapter exited {status:?} before the post-block hook"
+                    ));
+                }
+                if std::time::Instant::now() >= initialization_startup_deadline {
+                    let _ = signal_process(initialization_outer_pid, "KILL");
+                    let _ = initialization_outer.wait();
+                    set_lifecycle_directory_mode(
+                        &initialization_tmp,
+                        0o700,
+                        "Cargo Fmt initialization cutoff TMPDIR",
+                    )?;
+                    return Err(format!(
+                        "Cargo Fmt initialization cutoff adapter did not reach its post-block hook within {initialization_startup_timeout:?}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            set_lifecycle_directory_mode(
+                &initialization_tmp,
+                0o700,
+                "Cargo Fmt initialization cutoff TMPDIR",
+            )?;
+            if !signal_process(initialization_outer_pid, "TERM")?.success() {
+                let _ = signal_process(initialization_outer_pid, "KILL");
+                let _ = initialization_outer.wait();
+                return Err(
+                    "send post-block initialization SIGTERM to Cargo Fmt adapter".to_owned(),
+                );
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&initialization_release)
+                .map_err(|error| {
+                    format!("release Cargo Fmt initialization cutoff hook: {error}")
+                })?;
+            let (initialization_sender, initialization_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = initialization_sender.send(initialization_outer.wait_with_output());
+            });
+            let initialization_output = initialization_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(5)))
+                .map_err(|error| {
+                    let _ = signal_process(initialization_outer_pid, "KILL");
+                    format!("wait for Cargo Fmt initialization cutoff adapter: {error}")
+                })?
+                .map_err(|error| {
+                    format!("collect Cargo Fmt initialization cutoff output: {error}")
+                })?;
+            let initialization_stdout = String::from_utf8_lossy(&initialization_output.stdout);
+            let initialization_stderr = String::from_utf8_lossy(&initialization_output.stderr);
+            let initialization_tmp_text = initialization_tmp.to_string_lossy();
+            if initialization_output.status.code() != Some(2)
+                || !initialization_stdout.is_empty()
+                || !initialization_stderr
+                    .contains("cannot initialize controlled Cargo Fmt execution")
+                || !initialization_stderr.contains("<cargo-fmt-private>")
+                || initialization_stderr.matches("received signal 15").count() != 1
+                || initialization_stderr.contains(initialization_tmp_text.as_ref())
+                || initialization_stderr.contains("velvet-glove-cargo-fmt-")
+                || initialization_invoked.exists()
+            {
+                return Err(format!(
+                    "Cargo Fmt initialization cutoff signal was not folded after normalized failure: status={:?}; stdout={initialization_stdout:?}; stderr={initialization_stderr:?}; invoked={}",
+                    initialization_output.status.code(),
+                    initialization_invoked.exists(),
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&initialization_tmp, "initialization cutoff")?;
+
+            let chmod_workspace = root.join("chmod-format");
+            write_cargo_fmt_lifecycle_workspace(&chmod_workspace, true)?;
+            let chmod_source = chmod_workspace.join("src/example.rs");
+            let chmod_original = std::fs::read(&chmod_source)
+                .map_err(|error| format!("read Cargo Fmt chmod baseline: {error}"))?;
+            let chmod_original_mode = std::fs::metadata(&chmod_source)
+                .map_err(|error| format!("inspect Cargo Fmt chmod baseline: {error}"))?
+                .permissions()
+                .mode();
+            let mut chmod = adapter_command(&chmod_workspace, "chmod-format", None);
+            let output = run_with_timeout(
+                &mut chmod,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("chmod-format-evidence"),
+            )
+            .map_err(|error| format!("run Cargo Fmt chmod probe: {error}"))?;
+            let chmod_stderr = String::from_utf8_lossy(&output.stderr);
+            let chmod_restored = std::fs::read(&chmod_source)
+                .map_err(|error| format!("read restored Cargo Fmt chmod source: {error}"))?;
+            let chmod_restored_mode = std::fs::metadata(&chmod_source)
+                .map_err(|error| format!("inspect restored Cargo Fmt chmod source: {error}"))?
+                .permissions()
+                .mode();
+            if output.status.code() != Some(2)
+                || chmod_restored != chmod_original
+                || chmod_restored_mode != chmod_original_mode
+                || !chmod_stderr.contains("changed workspace structure or metadata")
+                || !chmod_stderr.contains("src/example.rs")
+            {
+                return Err(format!(
+                    "Cargo Fmt chmod+format was not rejected and rolled back: status={:?}; bytes_restored={}; mode_before={chmod_original_mode:o}; mode_after={chmod_restored_mode:o}; stderr={chmod_stderr:?}",
+                    output.status.code(),
+                    chmod_restored == chmod_original
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "chmod-format")?;
+
+            let mtime_workspace = root.join("mtime-only");
+            write_cargo_fmt_lifecycle_workspace(&mtime_workspace, true)?;
+            let mtime_source = mtime_workspace.join("src/example.rs");
+            let mtime_original = std::fs::read(&mtime_source)
+                .map_err(|error| format!("read Cargo Fmt mtime baseline: {error}"))?;
+            let mtime_original_metadata = std::fs::metadata(&mtime_source)
+                .map_err(|error| format!("inspect Cargo Fmt mtime baseline: {error}"))?;
+            let mtime_original_mode = mtime_original_metadata.permissions().mode();
+            let mtime_original_value = mtime_original_metadata
+                .modified()
+                .map_err(|error| format!("read Cargo Fmt baseline mtime: {error}"))?;
+            let mut mtime = adapter_command(&mtime_workspace, "mtime-only", None);
+            let output = run_with_timeout(
+                &mut mtime,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("mtime-only-evidence"),
+            )
+            .map_err(|error| format!("run Cargo Fmt mtime-only probe: {error}"))?;
+            let mtime_stderr = String::from_utf8_lossy(&output.stderr);
+            let mtime_restored = std::fs::read(&mtime_source)
+                .map_err(|error| format!("read restored Cargo Fmt mtime source: {error}"))?;
+            let mtime_restored_metadata = std::fs::metadata(&mtime_source)
+                .map_err(|error| format!("inspect restored Cargo Fmt mtime source: {error}"))?;
+            let mtime_restored_mode = mtime_restored_metadata.permissions().mode();
+            let mtime_restored_value = mtime_restored_metadata
+                .modified()
+                .map_err(|error| format!("read restored Cargo Fmt mtime: {error}"))?;
+            if output.status.code() != Some(2)
+                || mtime_restored != mtime_original
+                || mtime_restored_mode != mtime_original_mode
+                || mtime_restored_value != mtime_original_value
+                || !mtime_stderr.contains("changed workspace structure or metadata")
+                || !mtime_stderr.contains("src/example.rs")
+            {
+                return Err(format!(
+                    "Cargo Fmt mtime-only mutation was not rejected and rolled back: status={:?}; bytes_restored={}; mode_before={mtime_original_mode:o}; mode_after={mtime_restored_mode:o}; mtime_before={mtime_original_value:?}; mtime_after={mtime_restored_value:?}; stderr={mtime_stderr:?}",
+                    output.status.code(),
+                    mtime_restored == mtime_original
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "mtime-only")?;
+
+            for (directory_mode, diagnostic, diagnostic_path) in [
+                ("directory-add", "added_directories", "empty-leak"),
+                ("directory-chmod", "cannot walk workspace", ""),
+                ("directory-remove", "removed_directories", "empty-baseline"),
+            ] {
+                let directory_workspace = root.join(directory_mode);
+                write_cargo_fmt_lifecycle_workspace(&directory_workspace, true)?;
+                let baseline_directory = directory_workspace.join("empty-baseline");
+                let baseline_directory_mode = std::fs::metadata(&baseline_directory)
+                    .map_err(|error| {
+                        format!("inspect Cargo Fmt {directory_mode} baseline directory: {error}")
+                    })?
+                    .permissions()
+                    .mode();
+                let directory_source = directory_workspace.join("src/example.rs");
+                let directory_original = std::fs::read(&directory_source).map_err(|error| {
+                    format!("read Cargo Fmt {directory_mode} baseline source: {error}")
+                })?;
+                let directory_source_metadata =
+                    std::fs::metadata(&directory_source).map_err(|error| {
+                        format!("inspect Cargo Fmt {directory_mode} baseline source: {error}")
+                    })?;
+                let directory_original_mode = directory_source_metadata.permissions().mode();
+                let directory_original_mtime =
+                    directory_source_metadata.modified().map_err(|error| {
+                        format!("read Cargo Fmt {directory_mode} baseline mtime: {error}")
+                    })?;
+                let mut directory_command =
+                    adapter_command(&directory_workspace, directory_mode, None);
+                let output = run_with_timeout(
+                    &mut directory_command,
+                    b"",
+                    timeout.min(Duration::from_secs(10)),
+                    &root.join(format!("{directory_mode}-evidence")),
+                )
+                .map_err(|error| format!("run Cargo Fmt {directory_mode} probe: {error}"))?;
+                let directory_stdout = String::from_utf8_lossy(&output.stdout);
+                let directory_stderr = String::from_utf8_lossy(&output.stderr);
+                let restored_directory_metadata =
+                    std::fs::metadata(&baseline_directory).map_err(|error| {
+                        format!("inspect restored Cargo Fmt {directory_mode} directory: {error}")
+                    })?;
+                let restored_directory_mode = restored_directory_metadata.permissions().mode();
+                let restored_directory_empty = std::fs::read_dir(&baseline_directory)
+                    .map_err(|error| {
+                        format!("read restored Cargo Fmt {directory_mode} directory: {error}")
+                    })?
+                    .next()
+                    .is_none();
+                let directory_restored = std::fs::read(&directory_source).map_err(|error| {
+                    format!("read restored Cargo Fmt {directory_mode} source: {error}")
+                })?;
+                let directory_restored_metadata =
+                    std::fs::metadata(&directory_source).map_err(|error| {
+                        format!("inspect restored Cargo Fmt {directory_mode} source: {error}")
+                    })?;
+                let directory_restored_mode = directory_restored_metadata.permissions().mode();
+                let directory_restored_mtime =
+                    directory_restored_metadata.modified().map_err(|error| {
+                        format!("read restored Cargo Fmt {directory_mode} mtime: {error}")
+                    })?;
+                let leak_exists = directory_workspace.join("empty-leak").exists();
+                if output.status.code() != Some(2)
+                    || !directory_stdout.is_empty()
+                    || directory_restored != directory_original
+                    || directory_restored_mode != directory_original_mode
+                    || directory_restored_mtime != directory_original_mtime
+                    || restored_directory_mode != baseline_directory_mode
+                    || !restored_directory_empty
+                    || leak_exists
+                    || !directory_stderr.contains(diagnostic)
+                    || (!diagnostic_path.is_empty() && !directory_stderr.contains(diagnostic_path))
+                    || directory_stderr.contains("rollback failed")
+                {
+                    return Err(format!(
+                        "Cargo Fmt {directory_mode} mutation was not rejected and rolled back: status={:?}; stdout={directory_stdout:?}; bytes_restored={}; file_mode_before={directory_original_mode:o}; file_mode_after={directory_restored_mode:o}; file_mtime_before={directory_original_mtime:?}; file_mtime_after={directory_restored_mtime:?}; dir_mode_before={baseline_directory_mode:o}; dir_mode_after={restored_directory_mode:o}; dir_empty={restored_directory_empty}; leak_exists={leak_exists}; stderr={directory_stderr:?}",
+                        output.status.code(),
+                        directory_restored == directory_original,
+                    ));
+                }
+                assert_cargo_fmt_private_roots_removed(&adapter_tmp, directory_mode)?;
+            }
+
+            let orphan_workspace = root.join("normal-exit-orphan");
+            write_cargo_fmt_lifecycle_workspace(&orphan_workspace, true)?;
+            let orphan_source = orphan_workspace.join("src/example.rs");
+            let orphan_original = std::fs::read(&orphan_source)
+                .map_err(|error| format!("read Cargo Fmt orphan baseline: {error}"))?;
+            let orphan_original_metadata = std::fs::metadata(&orphan_source)
+                .map_err(|error| format!("inspect Cargo Fmt orphan baseline: {error}"))?;
+            let orphan_original_mode = orphan_original_metadata.permissions().mode();
+            let orphan_original_mtime = orphan_original_metadata
+                .modified()
+                .map_err(|error| format!("read Cargo Fmt orphan baseline mtime: {error}"))?;
+            let orphan_pid_path = root.join("normal-exit-orphan.pid");
+            let mut orphan_command = adapter_command(&orphan_workspace, "normal-exit-orphan", None);
+            orphan_command.env(ORPHAN_PID_ENV, &orphan_pid_path);
+            let orphan_output = run_with_timeout(
+                &mut orphan_command,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("normal-exit-orphan-evidence"),
+            )
+            .map_err(|error| format!("run Cargo Fmt normal-exit orphan probe: {error}"))?;
+            let orphan_pid = read_pid_file(&orphan_pid_path, "Cargo Fmt normal-exit orphan")?;
+            let orphan_alive = process_survives(orphan_pid, Duration::from_secs(1))?;
+            if orphan_alive {
+                let _ = signal_process(orphan_pid, "KILL");
+            }
+            std::thread::sleep(Duration::from_millis(1100));
+            let orphan_stdout = String::from_utf8_lossy(&orphan_output.stdout);
+            let orphan_stderr = String::from_utf8_lossy(&orphan_output.stderr);
+            let orphan_restored = std::fs::read(&orphan_source)
+                .map_err(|error| format!("read restored Cargo Fmt orphan source: {error}"))?;
+            let orphan_restored_metadata = std::fs::metadata(&orphan_source)
+                .map_err(|error| format!("inspect restored Cargo Fmt orphan source: {error}"))?;
+            let orphan_restored_mode = orphan_restored_metadata.permissions().mode();
+            let orphan_restored_mtime = orphan_restored_metadata
+                .modified()
+                .map_err(|error| format!("read restored Cargo Fmt orphan mtime: {error}"))?;
+            let late_leak_exists = orphan_workspace.join("late-leak").exists();
+            if orphan_output.status.code() != Some(2)
+                || orphan_alive
+                || !orphan_stdout.is_empty()
+                || orphan_restored != orphan_original
+                || orphan_restored_mode != orphan_original_mode
+                || orphan_restored_mtime != orphan_original_mtime
+                || late_leak_exists
+                || !orphan_stderr.contains("child left same-group descendants after leader exit")
+                || orphan_stderr.contains("rollback failed")
+            {
+                return Err(format!(
+                    "Cargo Fmt normal-exit orphan was not swept and rolled back: status={:?}; orphan={orphan_pid}:{orphan_alive}; stdout={orphan_stdout:?}; bytes_restored={}; mode_before={orphan_original_mode:o}; mode_after={orphan_restored_mode:o}; mtime_before={orphan_original_mtime:?}; mtime_after={orphan_restored_mtime:?}; late_leak={late_leak_exists}; stderr={orphan_stderr:?}",
+                    orphan_output.status.code(),
+                    orphan_restored == orphan_original,
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "normal-exit-orphan")?;
+
+            let cleanup_workspace = root.join("cleanup-signal");
+            write_cargo_fmt_lifecycle_workspace(&cleanup_workspace, true)?;
+            let cleanup_source = cleanup_workspace.join("src/example.rs");
+            let cleanup_original = std::fs::read(&cleanup_source)
+                .map_err(|error| format!("read Cargo Fmt cleanup-signal baseline: {error}"))?;
+            let cleanup_original_mode = std::fs::metadata(&cleanup_source)
+                .map_err(|error| format!("inspect Cargo Fmt cleanup-signal baseline: {error}"))?
+                .permissions()
+                .mode();
+            let cleanup_ready = root.join("cleanup-signal.ready");
+            let mut cleanup_command = adapter_command(&cleanup_workspace, "cleanup-signal", None);
+            cleanup_command
+                .env(CLEANUP_READY_ENV, &cleanup_ready)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut cleanup_outer = cleanup_command
+                .spawn()
+                .map_err(|error| format!("spawn Cargo Fmt cleanup-signal adapter: {error}"))?;
+            let cleanup_outer_pid = cleanup_outer.id();
+            let cleanup_startup_timeout = timeout.min(Duration::from_secs(10));
+            let cleanup_startup_deadline = std::time::Instant::now() + cleanup_startup_timeout;
+            while !cleanup_ready.is_file() {
+                if let Some(status) = cleanup_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll Cargo Fmt cleanup-signal adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "Cargo Fmt cleanup-signal adapter exited {status:?} before its real formatter became ready"
+                    ));
+                }
+                if std::time::Instant::now() >= cleanup_startup_deadline {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    let _ = cleanup_outer.wait();
+                    return Err(format!(
+                        "Cargo Fmt cleanup-signal formatter did not become ready within {cleanup_startup_timeout:?}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let private_roots = sorted_entries(&adapter_tmp)?
+                .into_iter()
+                .filter_map(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("velvet-glove-cargo-fmt-"))
+                        .then(|| entry.path())
+                })
+                .collect::<Vec<_>>();
+            let [cleanup_private_root] = private_roots.as_slice() else {
+                let _ = signal_process(cleanup_outer_pid, "KILL");
+                let _ = cleanup_outer.wait();
+                return Err(format!(
+                    "Cargo Fmt cleanup-signal expected one private root, got {private_roots:?}"
+                ));
+            };
+            let cleanup_deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(10));
+            let mut cleanup_signal_count = 0usize;
+            loop {
+                let source_restored =
+                    std::fs::read(&cleanup_source).is_ok_and(|content| content == cleanup_original);
+                if !cleanup_private_root.exists() && source_restored {
+                    break;
+                }
+                if std::time::Instant::now() >= cleanup_deadline {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    let _ = cleanup_outer.wait();
+                    return Err(format!(
+                        "Cargo Fmt cleanup-signal adapter did not finish owned cleanup and rollback after {cleanup_signal_count} SIGTERMs"
+                    ));
+                }
+                if !signal_process(cleanup_outer_pid, "TERM")?.success() {
+                    break;
+                }
+                cleanup_signal_count += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let (cleanup_sender, cleanup_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = cleanup_sender.send(cleanup_outer.wait_with_output());
+            });
+            let cleanup_output = cleanup_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(10)))
+                .map_err(|error| {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    format!("wait for Cargo Fmt cleanup-signal adapter: {error}")
+                })?
+                .map_err(|error| format!("collect Cargo Fmt cleanup-signal output: {error}"))?;
+            let cleanup_stdout = String::from_utf8_lossy(&cleanup_output.stdout);
+            let cleanup_stderr = String::from_utf8_lossy(&cleanup_output.stderr);
+            let cleanup_restored = std::fs::read(&cleanup_source).map_err(|error| {
+                format!("read restored Cargo Fmt cleanup-signal source: {error}")
+            })?;
+            let cleanup_restored_mode = std::fs::metadata(&cleanup_source)
+                .map_err(|error| {
+                    format!("inspect restored Cargo Fmt cleanup-signal source: {error}")
+                })?
+                .permissions()
+                .mode();
+            if cleanup_output.status.code() != Some(2)
+                || cleanup_signal_count < 2
+                || cleanup_restored != cleanup_original
+                || cleanup_restored_mode != cleanup_original_mode
+                || cleanup_stderr != "velvet-glove-cargo-fmt: received signal 15\n"
+                || !cleanup_stdout.is_empty()
+            {
+                return Err(format!(
+                    "Cargo Fmt cleanup-window signal was not contained: status={:?}; signals={cleanup_signal_count}; bytes_restored={}; mode_before={cleanup_original_mode:o}; mode_after={cleanup_restored_mode:o}; stdout={cleanup_stdout:?}; stderr={cleanup_stderr:?}",
+                    cleanup_output.status.code(),
+                    cleanup_restored == cleanup_original
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "cleanup-signal")?;
+
+            let cutoff_anchor =
+                "blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n";
+            if adapter.matches(cutoff_anchor).count() != 1 {
+                return Err(
+                    "Cargo Fmt cutoff probe requires one exact live SIG_BLOCK anchor".to_owned(),
+                );
+            }
+            let cutoff_offset = adapter
+                .find(cutoff_anchor)
+                .expect("checked Cargo Fmt cutoff anchor");
+            let cutoff_line = adapter[..cutoff_offset]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            let cutoff_indent = &adapter[cutoff_line..cutoff_offset];
+            if !cutoff_indent.chars().all(|character| character == ' ') {
+                return Err(format!(
+                    "Cargo Fmt cutoff anchor has unexpected indentation {cutoff_indent:?}"
+                ));
+            }
+            let cutoff_hook = format!(
+                "{cutoff_anchor}{cutoff_indent}ready_descriptor = os.open(os.environ[{CUTOFF_READY_ENV:?}], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n{cutoff_indent}os.close(ready_descriptor)\n{cutoff_indent}release_descriptor = os.open(os.environ[{CUTOFF_RELEASE_ENV:?}], os.O_RDONLY)\n{cutoff_indent}os.close(release_descriptor)\n"
+            );
+            let cutoff_adapter = adapter.replacen(cutoff_anchor, &cutoff_hook, 1);
+            let cutoff_workspace = root.join("cutoff-format");
+            write_cargo_fmt_lifecycle_workspace(&cutoff_workspace, true)?;
+            let cutoff_source = cutoff_workspace.join("src/example.rs");
+            let cutoff_original = std::fs::read(&cutoff_source)
+                .map_err(|error| format!("read Cargo Fmt cutoff baseline: {error}"))?;
+            let cutoff_original_mode = std::fs::metadata(&cutoff_source)
+                .map_err(|error| format!("inspect Cargo Fmt cutoff baseline: {error}"))?
+                .permissions()
+                .mode();
+            let cutoff_ready = root.join("cutoff.ready");
+            let cutoff_release = root.join("cutoff.release");
+            let mkfifo = Command::new("/usr/bin/mkfifo")
+                .arg(&cutoff_release)
+                .status()
+                .map_err(|error| format!("create Cargo Fmt cutoff release FIFO: {error}"))?;
+            if !mkfifo.success() {
+                return Err(format!(
+                    "create Cargo Fmt cutoff release FIFO exited {mkfifo:?}"
+                ));
+            }
+            let mut cutoff_command = adapter_command_with_script(
+                &cutoff_adapter,
+                &cutoff_workspace,
+                "cutoff-format",
+                None,
+            );
+            cutoff_command
+                .env(CUTOFF_READY_ENV, &cutoff_ready)
+                .env(CUTOFF_RELEASE_ENV, &cutoff_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut cutoff_outer = cutoff_command
+                .spawn()
+                .map_err(|error| format!("spawn Cargo Fmt cutoff adapter: {error}"))?;
+            let cutoff_outer_pid = cutoff_outer.id();
+            let cutoff_startup_timeout = timeout.min(Duration::from_secs(10));
+            let cutoff_startup_deadline = std::time::Instant::now() + cutoff_startup_timeout;
+            while !cutoff_ready.is_file() {
+                if let Some(status) = cutoff_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll Cargo Fmt cutoff adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "Cargo Fmt cutoff adapter exited {status:?} before the post-block hook"
+                    ));
+                }
+                if std::time::Instant::now() >= cutoff_startup_deadline {
+                    let _ = signal_process(cutoff_outer_pid, "KILL");
+                    let _ = cutoff_outer.wait();
+                    return Err(format!(
+                        "Cargo Fmt cutoff adapter did not reach its post-block hook within {cutoff_startup_timeout:?}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "post-block cutoff")?;
+            if std::fs::read(&cutoff_source).is_ok_and(|content| content == cutoff_original) {
+                let _ = signal_process(cutoff_outer_pid, "KILL");
+                let _ = cutoff_outer.wait();
+                return Err("Cargo Fmt cutoff hook ran before the real mutation".to_owned());
+            }
+            if !signal_process(cutoff_outer_pid, "TERM")?.success() {
+                let _ = signal_process(cutoff_outer_pid, "KILL");
+                let _ = cutoff_outer.wait();
+                return Err("send post-block SIGTERM to Cargo Fmt cutoff adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&cutoff_release)
+                .map_err(|error| format!("release Cargo Fmt cutoff hook: {error}"))?;
+            let (cutoff_sender, cutoff_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = cutoff_sender.send(cutoff_outer.wait_with_output());
+            });
+            let cutoff_output = cutoff_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(10)))
+                .map_err(|error| {
+                    let _ = signal_process(cutoff_outer_pid, "KILL");
+                    format!("wait for Cargo Fmt cutoff adapter: {error}")
+                })?
+                .map_err(|error| format!("collect Cargo Fmt cutoff output: {error}"))?;
+            let cutoff_stdout = String::from_utf8_lossy(&cutoff_output.stdout);
+            let cutoff_stderr = String::from_utf8_lossy(&cutoff_output.stderr);
+            let cutoff_restored = std::fs::read(&cutoff_source)
+                .map_err(|error| format!("read restored Cargo Fmt cutoff source: {error}"))?;
+            let cutoff_restored_mode = std::fs::metadata(&cutoff_source)
+                .map_err(|error| format!("inspect restored Cargo Fmt cutoff source: {error}"))?
+                .permissions()
+                .mode();
+            if cutoff_output.status.code() != Some(2)
+                || cutoff_restored != cutoff_original
+                || cutoff_restored_mode != cutoff_original_mode
+                || cutoff_stderr != "velvet-glove-cargo-fmt: received signal 15\n"
+                || !cutoff_stdout.contains("src/example.rs")
+            {
+                return Err(format!(
+                    "Cargo Fmt post-block signal was not folded into exact rollback: status={:?}; bytes_restored={}; mode_before={cutoff_original_mode:o}; mode_after={cutoff_restored_mode:o}; stdout={cutoff_stdout:?}; stderr={cutoff_stderr:?}",
+                    cutoff_output.status.code(),
+                    cutoff_restored == cutoff_original
+                ));
+            }
+            assert_cargo_fmt_private_roots_removed(&adapter_tmp, "cutoff-format")?;
+
+            for (lifecycle_mode, rollback_must_succeed) in
+                [("rollback-success", true), ("rollback-failure", false)]
+            {
+                let rollback_workspace = root.join(lifecycle_mode);
+                write_cargo_fmt_lifecycle_workspace(&rollback_workspace, true)?;
+                let original = std::fs::read(rollback_workspace.join("src/example.rs"))
+                    .map_err(|error| format!("read Cargo Fmt rollback baseline: {error}"))?;
+                let mut rollback = adapter_command(&rollback_workspace, lifecycle_mode, None);
+                let output = run_with_timeout(
+                    &mut rollback,
+                    b"",
+                    timeout.min(Duration::from_secs(10)),
+                    &root.join(format!("{lifecycle_mode}-evidence")),
+                )
+                .map_err(|error| format!("run Cargo Fmt {lifecycle_mode} probe: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2) {
+                    return Err(format!(
+                        "Cargo Fmt {lifecycle_mode} exited {:?}, expected 2; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+                let source = rollback_workspace.join("src/example.rs");
+                if rollback_must_succeed {
+                    let restored = std::fs::read(&source).map_err(|error| {
+                        format!("read restored Cargo Fmt lifecycle source: {error}")
+                    })?;
+                    if restored != original || !stderr.contains("cargo-fmt format exited 2") {
+                        return Err(format!(
+                            "Cargo Fmt rollback did not restore exact bytes: restored={}; stderr={stderr:?}",
+                            restored == original
+                        ));
+                    }
+                } else if !source.is_dir() || !stderr.contains("rollback failed") {
+                    return Err(format!(
+                        "Cargo Fmt deterministic rollback failure was not reported: source_is_dir={}; stderr={stderr:?}",
+                        source.is_dir()
+                    ));
+                }
+                assert_cargo_fmt_private_roots_removed(&adapter_tmp, lifecycle_mode)?;
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn write_cargo_fmt_lifecycle_workspace(root: &Path, include_other: bool) -> Result<(), String> {
+    let sources = root.join("src");
+    std::fs::create_dir_all(&sources)
+        .map_err(|error| format!("create Cargo Fmt lifecycle workspace {sources:?}: {error}"))?;
+    std::fs::create_dir(root.join("empty-baseline"))
+        .map_err(|error| format!("create Cargo Fmt lifecycle empty directory: {error}"))?;
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"cargo-fmt-lifecycle\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/example.rs\"\n",
+    )
+    .map_err(|error| format!("write Cargo Fmt lifecycle Cargo.toml: {error}"))?;
+    std::fs::write(
+        root.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"cargo-fmt-lifecycle\"\nversion = \"0.0.0\"\n",
+    )
+    .map_err(|error| format!("write Cargo Fmt lifecycle Cargo.lock: {error}"))?;
+    std::fs::write(root.join("rustfmt.toml"), "edition = \"2024\"\n")
+        .map_err(|error| format!("write Cargo Fmt lifecycle rustfmt.toml: {error}"))?;
+    std::fs::write(
+        sources.join("example.rs"),
+        "pub fn example(){println!(\"example\");}\n",
+    )
+    .map_err(|error| format!("write Cargo Fmt lifecycle example.rs: {error}"))?;
+    if include_other {
+        std::fs::write(
+            sources.join("other.rs"),
+            "pub fn other(){println!(\"other\");}\n",
+        )
+        .map_err(|error| format!("write Cargo Fmt lifecycle other.rs: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assert_cargo_fmt_private_roots_removed(root: &Path, label: &str) -> Result<(), String> {
+    let retained = sorted_entries(root)?
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("velvet-glove-cargo-fmt-"))
+                .then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Cargo Fmt {label} lifecycle retained private roots: {retained:?}"
+        ))
     }
 }
 

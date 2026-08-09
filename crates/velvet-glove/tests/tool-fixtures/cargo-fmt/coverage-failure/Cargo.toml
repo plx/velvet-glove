@@ -1,0 +1,10 @@
+[package]
+name = "cargo-fmt-coverage-failure"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[lib]
+path = "src/example.rs"
+
+[workspace]
