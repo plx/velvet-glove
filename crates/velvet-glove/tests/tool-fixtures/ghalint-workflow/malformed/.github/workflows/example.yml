@@ -1,5 +1,10 @@
-name: malformed
+name: malformed permissions
 on:
   push:
+permissions: execute
 jobs:
-  test: [
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo unreachable

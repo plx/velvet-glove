@@ -870,6 +870,25 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             ],
             trace_plan: GHALINT_TRACE_PLAN,
         },
+        ("ghalint-workflow", "policy-grammar") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &[".github/workflows/example.yml"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"message\":\"secret should not be set to workflow's env\"",
+                "\"message\":\"github.token should not be set to workflow's env\"",
+                "\"policy\":\"action_ref_should_be_full_length_commit_sha\"",
+                "\"policy\":\"github_app_should_limit_permissions\"",
+                "\"file\":\".github/workflows/example.yml\"",
+            ],
+            diagnostic_excludes: &["Aug ", "reference=", "env_name=", "action="],
+            trace_plan: GHALINT_TRACE_PLAN,
+        },
         ("ghalint-workflow", "config-failure") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -13881,8 +13900,20 @@ if [ -f mode-source ]; then
   printf '%s\n' 'Jan  1 00:00:00.001 ERR the job violates policies program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=job_timeout_minutes_is_required reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/012.md job_name=test error="job'\''s timeout-minutes is required"' >&2
   exit 1
 fi
+if [ -f mode-policy-grammar ]; then
+  printf '%s\n' 'Jan  1 00:00:00.000 ERR secret should not be set to workflow'\''s env program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=workflow_secrets reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/005.md env_name=GLOBAL_SECRET' >&2
+  printf '%s\n' 'Jan  1 00:00:00.001 ERR github.token should not be set to workflow'\''s env program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=workflow_secrets reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/005.md env_name=GLOBAL_TOKEN' >&2
+  printf '%s\n' 'Jan  1 00:00:00.002 ERR the job violates policies program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=action_ref_should_be_full_length_commit_sha reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/008.md job_name=reusable action=example/reusable/.github/workflows/check.yml error="action ref should be full length SHA"' >&2
+  printf '%s\n' 'Jan  1 00:00:00.003 ERR the step violates policies program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml policy_name=github_app_should_limit_permissions reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/policies/010.md job_name=test step_id=app-token step_name="under-scoped app token" action=actions/create-github-app-token error="an input `permission-*` is required"' >&2
+  exit 1
+fi
 if [ -f mode-parse ]; then
   printf '%s\n' 'Jan  1 00:00:00.000 ERR read a workflow file program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml reference=https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/codes/001.md error="parse a workflow file as YAML: fixture parse failure"' >&2
+  exit 1
+fi
+if [ -f mode-parse-fields ]; then
+  printf '%s\n' 'Jan  1 00:00:00.000 ERR read a workflow file program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml permission=execute error="parse a workflow file as YAML: unknown permissions"' >&2
+  printf '%s\n' 'Jan  1 00:00:00.001 ERR read a workflow file program=ghalint version=1.5.6+velvet-glove.1 workflow_file_path=.github/workflows/example.yml secrets=everything error="parse a workflow file as YAML: job secrets must be a map or `inherit`"' >&2
   exit 1
 fi
 if [ -f mode-config ]; then
@@ -13894,6 +13925,28 @@ if [ -f mode-config ]; then
   done
   [ -n "$config" ]
   printf 'Jan  1 00:00:00.000 ERR ghalint failed program=ghalint version=1.5.6+velvet-glove.1 config_file=%s error="read a configuration file: EOF"\n' "$config" >&2
+  exit 1
+fi
+if [ -f mode-config-pattern ]; then
+  config=
+  for argument in "$@"; do
+    case "$argument" in
+      --config=*) config=${argument#--config=} ;;
+    esac
+  done
+  [ -n "$config" ]
+  printf 'Jan  1 00:00:00.000 ERR ghalint failed program=ghalint version=1.5.6+velvet-glove.1 pattern_reference=https://pkg.go.dev/path#Match config_file=%s error="validate a configuration file: syntax error in pattern"\n' "$config" >&2
+  exit 1
+fi
+if [ -f mode-config-policy ]; then
+  config=
+  for argument in "$@"; do
+    case "$argument" in
+      --config=*) config=${argument#--config=} ;;
+    esac
+  done
+  [ -n "$config" ]
+  printf 'Jan  1 00:00:00.000 ERR ghalint failed program=ghalint version=1.5.6+velvet-glove.1 policy_name=unknown-policy config_file=%s error="validate a configuration file: the policy can'\''t be excluded"\n' "$config" >&2
   exit 1
 fi
 if [ -f mode-mutate ]; then
@@ -13990,6 +14043,23 @@ exit 0
                 ));
             }
 
+            let (policy_project, policy_workflow) =
+                create_case("policy-grammar", "policy-grammar", true)?;
+            let policy = run_case("policy-grammar", &policy_project, &policy_workflow)?;
+            assert_status("policy-grammar", &policy, 1)?;
+            let policy_stdout = String::from_utf8_lossy(&policy.stdout);
+            if !policy_stdout.contains("\"message\":\"secret should not be set to workflow's env\"")
+                || !policy_stdout
+                    .contains("\"policy\":\"action_ref_should_be_full_length_commit_sha\"")
+                || !policy_stdout.contains("\"policy\":\"github_app_should_limit_permissions\"")
+                || !policy.stderr.is_empty()
+            {
+                return Err(format!(
+                    "ghalint policy-grammar lifecycle was not canonical: {policy_stdout:?} {:?}",
+                    String::from_utf8_lossy(&policy.stderr)
+                ));
+            }
+
             let (parse_project, parse_workflow) = create_case("parse", "parse", true)?;
             let parse = run_case("parse", &parse_project, &parse_workflow)?;
             assert_status("parse", &parse, 1)?;
@@ -13997,6 +14067,24 @@ exit 0
                 || !parse.stderr.is_empty()
             {
                 return Err("ghalint parse lifecycle was not source-classified".to_owned());
+            }
+
+            let (parse_fields_project, parse_fields_workflow) =
+                create_case("parse-fields", "parse-fields", true)?;
+            let parse_fields = run_case(
+                "parse-fields",
+                &parse_fields_project,
+                &parse_fields_workflow,
+            )?;
+            assert_status("parse-fields", &parse_fields, 1)?;
+            let parse_fields_stdout = String::from_utf8_lossy(&parse_fields.stdout);
+            if !parse_fields_stdout.contains("unknown permissions")
+                || !parse_fields_stdout.contains("job secrets must be a map or `inherit`")
+                || !parse_fields.stderr.is_empty()
+            {
+                return Err(
+                    "ghalint structured parse lifecycle was not source-classified".to_owned(),
+                );
             }
 
             let (config_project, config_workflow) = create_case("config", "config", true)?;
@@ -14009,6 +14097,33 @@ exit 0
                     .contains("ghalint configuration is invalid")
             {
                 return Err("ghalint config lifecycle was not failure-classified".to_owned());
+            }
+
+            for (name, mode, config_body) in [
+                (
+                    "config-pattern",
+                    "config-pattern",
+                    "excludes:\n  - policy_name: action_ref_should_be_full_length_commit_sha\n    action_name: \"[\"\n",
+                ),
+                (
+                    "config-policy",
+                    "config-policy",
+                    "excludes:\n  - policy_name: unknown-policy\n",
+                ),
+            ] {
+                let (project, workflow) = create_case(name, mode, true)?;
+                std::fs::write(project.join("ghalint.yaml"), config_body)
+                    .map_err(|error| format!("write {name} lifecycle config: {error}"))?;
+                let output = run_case(name, &project, &workflow)?;
+                assert_status(name, &output, 2)?;
+                if !output.stdout.is_empty()
+                    || !String::from_utf8_lossy(&output.stderr)
+                        .contains("ghalint configuration is invalid")
+                {
+                    return Err(format!(
+                        "ghalint {name} lifecycle was not failure-classified"
+                    ));
+                }
             }
 
             let (version_project, version_workflow) =

@@ -4,6 +4,6 @@ ghalint (workflow) diagnostics:
 status: Some(1)
 classification: Some(Issues)
 stdout:
-{"issues":[{"error":"parse a workflow file as YAML: yaml: line 5: did not find expected node content","file":".github/workflows/example.yml","job":null,"kind":"parse","message":"read a workflow file","policy":null,"step":null}],"status":"issues"}
+{"issues":[{"error":"parse a workflow file as YAML: job secrets must be a map or `inherit`","file":".github/workflows/selected.yaml","job":null,"kind":"parse","message":"read a workflow file","policy":null,"step":null},{"error":"parse a workflow file as YAML: unknown permissions","file":".github/workflows/example.yml","job":null,"kind":"parse","message":"read a workflow file","policy":null,"step":null}],"status":"issues"}
 artifact: <workspace>/.velvet-glove/ghalint-workflow-agent-hook/test-session_ghalint-workflow-tool_ghalint-workflow-tool-issues.txt
 hookkit: redirected user notices and diagnostics to protocol stderr

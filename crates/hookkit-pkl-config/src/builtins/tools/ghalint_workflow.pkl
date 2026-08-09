@@ -59,20 +59,19 @@ ghalintWorkflowAdapter: String = #"""
       "job_timeout_minutes_is_required": "012",
       "checkout_persist_credentials_should_be_false": "013",
   }
+  DIRECT_POLICY_MESSAGES = {
+      "secret should not be set to workflow's env": "workflow_secrets",
+      "github.token should not be set to workflow's env": "workflow_secrets",
+  }
   POLICY_MESSAGES = frozenset((
-      "the workflow violates policies",
+      *DIRECT_POLICY_MESSAGES,
       "the job violates policies",
       "the step violates policies",
   ))
-  POLICY_OPTIONAL_FIELDS = frozenset((
-      "action_name",
-      "env_name",
-      "image",
-      "input_key",
-      "permission",
-      "repositories",
-      "step_id",
-      "step_name",
+  ACTION_POLICIES = frozenset((
+      "action_ref_should_be_full_length_commit_sha",
+      "github_app_should_limit_repositories",
+      "github_app_should_limit_permissions",
   ))
   TIMESTAMP = re.compile(
       r"^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
@@ -641,13 +640,17 @@ ghalintWorkflowAdapter: String = #"""
           common_fields(fields)
           common = {"program", "version"}
           if message in POLICY_MESSAGES:
-              allowed = common | {
-                  "workflow_file_path",
-                  "policy_name",
-                  "reference",
-                  "job_name",
-                  "error",
-              } | POLICY_OPTIONAL_FIELDS
+              policy_common = common | {
+                  "workflow_file_path", "policy_name", "reference",
+              }
+              if message in DIRECT_POLICY_MESSAGES:
+                  allowed = policy_common | {"env_name"}
+              elif message == "the job violates policies":
+                  allowed = policy_common | {"job_name", "error", "action", "env_name"}
+              else:
+                  allowed = policy_common | {
+                      "job_name", "error", "action", "step_id", "step_name",
+                  }
               if set(fields) - allowed:
                   reject(f"ghalint policy log has unknown fields: {sorted(set(fields) - allowed)!r}")
               policy = fields.get("policy_name")
@@ -658,11 +661,26 @@ ghalintWorkflowAdapter: String = #"""
                   "https://github.com/suzuki-shunsuke/ghalint/blob/main/"
                   f"docs/policies/{policy_id}.md"
               )
-              if fields.get("reference") != expected_reference or not fields.get("error"):
-                  reject("ghalint policy log has inconsistent reference or error fields")
+              if fields.get("reference") != expected_reference:
+                  reject("ghalint policy log has an inconsistent reference")
               path = workflow_path(fields, inventory_relatives)
-              if message != "the workflow violates policies" and not fields.get("job_name"):
+              direct_policy = DIRECT_POLICY_MESSAGES.get(message)
+              if direct_policy is not None:
+                  if policy != direct_policy or not fields.get("env_name"):
+                      reject("ghalint direct workflow-policy log has inconsistent fields")
+                  error = message
+              elif not fields.get("error"):
+                  reject("ghalint wrapped policy log omits its error")
+              else:
+                  error = fields["error"]
+              if direct_policy is None and not fields.get("job_name"):
                   reject("ghalint job or step policy log omits job_name")
+              action = fields.get("action")
+              if (policy in ACTION_POLICIES) != bool(action):
+                  reject("ghalint action-policy log has inconsistent action fields")
+              env_name = fields.get("env_name")
+              if direct_policy is None and (policy == "job_secrets") != bool(env_name):
+                  reject("ghalint job-secrets policy log has inconsistent env fields")
               records.append({
                   "kind": "policy",
                   "file": path,
@@ -670,15 +688,22 @@ ghalintWorkflowAdapter: String = #"""
                   "policy": policy,
                   "job": fields.get("job_name"),
                   "step": fields.get("step_id") or fields.get("step_name"),
-                  "error": fields["error"],
+                  "error": error,
               })
           elif message == "read a workflow file":
-              allowed = common | {"workflow_file_path", "reference", "error"}
+              allowed = common | {
+                  "workflow_file_path", "reference", "permission", "secrets", "error",
+              }
               if set(fields) - allowed:
                   reject(f"ghalint parse log has unknown fields: {sorted(set(fields) - allowed)!r}")
               path = workflow_path(fields, inventory_relatives)
               error = fields.get("error", "")
               reference = fields.get("reference")
+              structured = [
+                  name for name in ("permission", "secrets") if fields.get(name)
+              ]
+              if len(structured) > 1:
+                  reject("ghalint workflow parse log has multiple structured fields")
               if not error.startswith("parse a workflow file as YAML:"):
                   operational.append(f"cannot read {path}")
               elif reference not in (
@@ -697,16 +722,35 @@ ghalintWorkflowAdapter: String = #"""
                       "error": error,
                   })
           else:
-              allowed = common | {"config_file", "reference", "error"}
+              allowed = common | {
+                  "config_file", "reference", "pattern_reference", "policy_name", "error",
+              }
               if set(fields) - allowed:
                   reject(f"ghalint failure log has unknown fields: {sorted(set(fields) - allowed)!r}")
               error = fields.get("error", "")
+              reference = fields.get("reference")
+              pattern_reference = fields.get("pattern_reference")
+              policy_name = fields.get("policy_name")
+              if reference not in (
+                  None,
+                  "https://github.com/suzuki-shunsuke/ghalint/blob/main/docs/codes/002.md",
+              ):
+                  reject("ghalint configuration log has an unexpected reference")
+              if pattern_reference not in (None, "https://pkg.go.dev/path#Match"):
+                  reject("ghalint configuration log has an unexpected pattern reference")
+              if policy_name is not None and not policy_name:
+                  reject("ghalint configuration log has an empty policy name")
+              if sum(value is not None for value in (reference, pattern_reference, policy_name)) > 1:
+                  reject("ghalint configuration log has inconsistent structured fields")
               if (
                   fields.get("config_file") != private_config_path
                   or not error.startswith((
                       "read a configuration file:",
                       "validate a configuration file:",
                   ))
+                  or (reference is not None and not error.startswith("read a configuration file:"))
+                  or (pattern_reference is not None and not error.startswith("validate a configuration file:"))
+                  or (policy_name is not None and not error.startswith("validate a configuration file:"))
               ):
                   operational.append("native ghalint failed outside its configuration grammar")
               else:
