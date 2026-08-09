@@ -38,8 +38,6 @@ const REPORT_PREFIX: &str = "VELVET_GLOVE_FIXTURE_JSON=";
 const PROBE_SENTINEL_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_SENTINEL";
 const PROBE_DIR_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_DIR";
 const TOOL_TRACE_DIR_ENV: &str = "VELVET_GLOVE_TOOL_TRACE_DIR";
-const TOOL_REAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_REAL_PROGRAM";
-const TOOL_LOGICAL_PROGRAM_ENV: &str = "VELVET_GLOVE_TOOL_LOGICAL_PROGRAM";
 const TOOL_TRACE_SENTINEL_ENV: &str = "VELVET_GLOVE_TOOL_TRACE_SENTINEL";
 const TOOL_TRACE_SENTINEL: &str = "real-tool-fixture";
 const PATH_ENV: &str = "PATH";
@@ -75,6 +73,67 @@ const BUF_SCRUBBED_ENV: &[&str] = &[
     "BUF_TOKEN",
     "BUF_VELVET_GLOVE_POISON",
     DEBUG_ENV,
+];
+const CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT";
+const CARGO_CLIPPY_POISON_ENV_VALUE: &str = "velvet-glove-cargo-clippy-adapter-must-clear-this";
+const CARGO_PROGRAM_ENV: &str = "CARGO";
+const RUSTC_ENV: &str = "RUSTC";
+const RUSTDOC_ENV: &str = "RUSTDOC";
+const DYLD_LIBRARY_PATH_ENV: &str = "DYLD_LIBRARY_PATH";
+const CARGO_HOME_ENV: &str = "CARGO_HOME";
+const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+const CARGO_NET_OFFLINE_ENV: &str = "CARGO_NET_OFFLINE";
+const CARGO_BUILD_JOBS_ENV: &str = "CARGO_BUILD_JOBS";
+const CARGO_TERM_COLOR_ENV: &str = "CARGO_TERM_COLOR";
+const CLIPPY_CONF_DIR_ENV: &str = "CLIPPY_CONF_DIR";
+const CARGO_CLIPPY_EMPTY_ENV: &[&str] = &[
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTFLAGS",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+];
+const CARGO_CLIPPY_SCRUBBED_ENV: &[&str] = &[
+    "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTDOC",
+    "CARGO_BUILD_TARGET",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
+    "CARGO_PROFILE_DEV_DEBUG",
+    "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
+    "CLIPPY_ARGS",
+    "CLIPPY_DRIVER_DISABLE_DOCS_LINKS",
+    "CLIPPY_TERMINAL_WIDTH",
+    "RUSTC_BOOTSTRAP",
+    "RUST_LOG",
+    "RUSTDOCFLAGS",
+    "RUSTUP_TOOLCHAIN",
+    "SCCACHE_CACHE_SIZE",
+    "SCCACHE_DIR",
+    "SCCACHE_ENDPOINT",
+    "SCCACHE_ERROR_LOG",
+    "SCCACHE_LOG",
+    "CCACHE_CONFIGPATH",
+    "CCACHE_DIR",
+    "CCACHE_PREFIX",
+    DEBUG_ENV,
+    "SYSROOT",
+];
+const CARGO_CLIPPY_PREFIX_POISON_ENV: &[&str] = &[
+    "CARGO_VELVET_GLOVE_POISON",
+    "RUST_VELVET_GLOVE_POISON",
+    "CLIPPY_VELVET_GLOVE_POISON",
+    "SCCACHE_VELVET_GLOVE_POISON",
+    "CCACHE_VELVET_GLOVE_POISON",
+];
+const CARGO_CLIPPY_LOADER_SCRUBBED_ENV: &[&str] = &[
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
 ];
 const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
 const BIOME_SCRUBBED_ENV: &[&str] = &[
@@ -149,6 +208,17 @@ enum TracePlan {
         leading: &'static [&'static str],
         mode_arguments: &'static [(&'static str, &'static [&'static str])],
         before_workspace: &'static [&'static str],
+    },
+    PreflightThenNestedModeWorkspaceIndicatorMarker {
+        preflight_program_index: usize,
+        command_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        modes: &'static [&'static str],
+        preflight_before_indicator: &'static [&'static str],
+        preflight_after_indicator: &'static [&'static str],
+        command_before_indicator: &'static [&'static str],
+        command_after_indicators: &'static [&'static [&'static str]],
     },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
@@ -239,6 +309,54 @@ const BUF_TRACE_PLAN: TracePlan = TracePlan::PreflightThenNestedModeWorkspaceMar
     before_workspace: &[],
 };
 
+const CARGO_CLIPPY_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_CARGO_CLIPPY_WORKSPACE__";
+const CARGO_CLIPPY_TRACE_PLAN: TracePlan =
+    TracePlan::PreflightThenNestedModeWorkspaceIndicatorMarker {
+        preflight_program_index: 3,
+        command_program_index: 4,
+        adapter_prefix: &["-I", "-c"],
+        marker: CARGO_CLIPPY_WORKSPACE_MARKER,
+        modes: &["fix", "verify"],
+        preflight_before_indicator: &[
+            "metadata",
+            "--format-version=1",
+            "--no-deps",
+            "--manifest-path",
+        ],
+        preflight_after_indicator: &["--frozen", "--quiet", "--color=never"],
+        command_before_indicator: &["clippy", "--manifest-path"],
+        command_after_indicators: &[
+            &[
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--no-deps",
+                "--frozen",
+                "--quiet",
+                "--jobs=1",
+                "--keep-going",
+                "--color=never",
+                "--message-format=json",
+                "--",
+                "--cap-lints=allow",
+            ],
+            &[
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--no-deps",
+                "--frozen",
+                "--quiet",
+                "--jobs=1",
+                "--keep-going",
+                "--color=never",
+                "--message-format=json",
+                "--",
+                "-Dwarnings",
+            ],
+        ],
+    };
+
 #[derive(Debug)]
 struct ExpectedInvocation {
     targets: &'static [&'static str],
@@ -263,6 +381,7 @@ struct MutatingToolContractCase {
     remedy_mode: PhaseMode,
     remedy_writes: WriteBehavior,
     remedy_invocations: &'static [ExpectedInvocation],
+    repeat_remedy_invocations: Option<&'static [ExpectedInvocation]>,
     final_invocations: &'static [ExpectedInvocation],
     immediate_outcome: ExpectedOutcome,
     changed_targets: &'static [&'static str],
@@ -649,7 +768,77 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &[],
             trace_plan: BUF_TRACE_PLAN,
         },
-        ("jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format", other) => {
+        ("cargo-clippy", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: CARGO_CLIPPY_TRACE_PLAN,
+        },
+        ("cargo-clippy", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 101],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"code\":\"clippy::ptr_arg\"",
+                "\"file\":\"src/example.rs\"",
+                "\"fixable\":false",
+                "writing `&Vec` instead of `&[_]`",
+            ],
+            diagnostic_excludes: &["\"status\":\"fixed\""],
+            trace_plan: CARGO_CLIPPY_TRACE_PLAN,
+        },
+        ("cargo-clippy", "workspace-autofix") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs", "src/selected_clean.rs"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 101],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "\"code\":\"clippy::useless_vec\"",
+                "\"file\":\"src/example.rs\"",
+                "\"file\":\"src/workspace_only.rs\"",
+                "\"fixable\":true",
+            ],
+            diagnostic_excludes: &["\"file\":\"src/selected_clean.rs\""],
+            trace_plan: CARGO_CLIPPY_TRACE_PLAN,
+        },
+        ("cargo-clippy", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 101],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "error reading Clippy's configuration file",
+                "expected u64",
+                "velvet-glove-cargo-clippy: Cargo reported a non-source or dependency compilation error",
+            ],
+            diagnostic_excludes: &["\"status\":\"issues\""],
+            trace_plan: CARGO_CLIPPY_TRACE_PLAN,
+        },
+        (
+            "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format"
+            | "cargo-clippy",
+            other,
+        ) => {
             return Err(format!(
                 "{} fixture {other:?} has no real-tool contract declaration",
                 case.tool
@@ -673,6 +862,7 @@ fn mutating_tool_contract_case(
                 exit_code: 0,
                 trace_exit_codes: &[0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 0,
@@ -690,6 +880,7 @@ fn mutating_tool_contract_case(
                 exit_code: 0,
                 trace_exit_codes: &[0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 0,
@@ -707,6 +898,7 @@ fn mutating_tool_contract_case(
                 exit_code: 1,
                 trace_exit_codes: &[1],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js"],
                 exit_code: 1,
@@ -724,6 +916,7 @@ fn mutating_tool_contract_case(
                 exit_code: 0,
                 trace_exit_codes: &[0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["src/example.js", "src/selected-two.js"],
                 exit_code: 0,
@@ -741,6 +934,7 @@ fn mutating_tool_contract_case(
                 exit_code: 2,
                 trace_exit_codes: &[1],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[],
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
@@ -754,6 +948,7 @@ fn mutating_tool_contract_case(
                 exit_code: 0,
                 trace_exit_codes: &[0, 0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["example.proto"],
                 exit_code: 0,
@@ -771,6 +966,7 @@ fn mutating_tool_contract_case(
                 exit_code: 0,
                 trace_exit_codes: &[0, 0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["example.proto"],
                 exit_code: 0,
@@ -788,6 +984,7 @@ fn mutating_tool_contract_case(
                 exit_code: 0,
                 trace_exit_codes: &[0, 0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[ExpectedInvocation {
                 targets: &["example.proto", "proto/selected-clean.proto"],
                 exit_code: 0,
@@ -805,11 +1002,84 @@ fn mutating_tool_contract_case(
                 exit_code: 2,
                 trace_exit_codes: &[0],
             }],
+            repeat_remedy_invocations: None,
             final_invocations: &[],
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
-        ("biome" | "buf-format", other) => {
+        ("cargo-clippy", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("cargo-clippy", "source-issue") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 101],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 101],
+            }],
+            immediate_outcome: ExpectedOutcome::Issues,
+            changed_targets: &[],
+        },
+        ("cargo-clippy", "workspace-autofix") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs", "src/selected_clean.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 101],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["src/example.rs", "src/selected_clean.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs", "src/selected_clean.rs"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["src/example.rs", "src/workspace_only.rs"],
+        },
+        ("cargo-clippy", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "fix",
+            remedy_mode: PhaseMode::Fix,
+            remedy_writes: WriteBehavior::Workspace,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["src/example.rs"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 101],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
+        ("biome" | "buf-format" | "cargo-clippy", other) => {
             return Err(format!(
                 "{} fixture {other:?} has no mutating-tool contract declaration",
                 case.tool
@@ -1298,6 +1568,50 @@ fn buf_contract_registry_binds_workspace_format_lifecycle() {
 }
 
 #[test]
+fn cargo_clippy_contract_registry_binds_workspace_fix_lifecycle() {
+    let multi = named_fixture_case("cargo-clippy", "workspace-autofix");
+    let check = real_tool_contract_case(&multi)
+        .expect("cargo-clippy check contract lookup")
+        .expect("cargo-clippy check contract");
+    let mutation = mutating_tool_contract_case(&multi)
+        .expect("cargo-clippy mutation contract lookup")
+        .expect("cargo-clippy mutation contract");
+
+    assert_eq!(check.phase_id, "verify");
+    assert_eq!(check.invocations.len(), 1);
+    assert_eq!(
+        check.invocations[0].targets,
+        &["src/example.rs", "src/selected_clean.rs"]
+    );
+    assert_eq!(check.invocations[0].exit_code, 1);
+    assert_eq!(check.invocations[0].trace_exit_codes, &[0, 0, 101]);
+    assert_eq!(check.trace_plan, CARGO_CLIPPY_TRACE_PLAN);
+    assert_eq!(mutation.remedy_phase_id, "fix");
+    assert_eq!(mutation.remedy_mode, PhaseMode::Fix);
+    assert_eq!(mutation.remedy_writes, WriteBehavior::Workspace);
+    let repeat_remedy = mutation
+        .repeat_remedy_invocations
+        .expect("workspace autofix binds a fixed-state repeat remedy");
+    assert_eq!(repeat_remedy.len(), 1);
+    assert_eq!(repeat_remedy[0].trace_exit_codes, &[0, 0, 0]);
+    assert_eq!(
+        mutation.changed_targets,
+        &["src/example.rs", "src/workspace_only.rs"]
+    );
+    assert!(
+        !check.targets().contains(&"src/workspace_only.rs"),
+        "workspace-only Clippy mutation must remain outside the event candidates"
+    );
+
+    let operational = named_fixture_case("cargo-clippy", "operational-failure");
+    let operational_check = real_tool_contract_case(&operational)
+        .expect("cargo-clippy operational check lookup")
+        .expect("cargo-clippy operational check contract");
+    assert_eq!(operational_check.invocations[0].exit_code, 2);
+    assert_eq!(operational_check.invocations[0].trace_exit_codes, &[0, 101]);
+}
+
+#[test]
 fn changed_path_attribution_distinguishes_target_and_workspace_scopes() {
     let selected = PathBuf::from("/workspace/src/example.proto");
     let workspace_only = PathBuf::from("/workspace/src/workspace-only.proto");
@@ -1321,6 +1635,98 @@ fn changed_path_attribution_distinguishes_target_and_workspace_scopes() {
         );
     }
     assert!(expected_invocation_changed_paths(WriteBehavior::None, &changed, &[]).is_empty());
+}
+
+#[test]
+fn expected_arguments_render_the_nearest_workspace_job() {
+    let root = unique_temp_dir("velvet-glove-workspace-argument-test");
+    let project = root.join("project");
+    let workspace = project.join("member");
+    let source = workspace.join("src");
+    std::fs::create_dir_all(&source).expect("workspace source directory");
+    std::fs::write(project.join("Cargo.toml"), "[workspace]\n").expect("outer workspace marker");
+    std::fs::write(
+        workspace.join("Cargo.toml"),
+        "[package]\nname = \"member\"\n",
+    )
+    .expect("nearest workspace marker");
+    let first = source.join("example.rs");
+    let second = source.join("selected.rs");
+    std::fs::write(&first, "fn example() {}\n").expect("first selected source");
+    std::fs::write(&second, "fn selected() {}\n").expect("second selected source");
+
+    let spec = ToolSpec {
+        id: "workspace-tool".to_owned(),
+        executable: "workspace-tool".to_owned(),
+        workspace_indicator: Some("Cargo.toml".to_owned()),
+        ..ToolSpec::default()
+    };
+    let phase = Phase {
+        argv: vec![
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+            ArgvElement::Token(ArgToken::Workspace),
+            ArgvElement::Token(ArgToken::WorkspaceFiles),
+            ArgvElement::Token(ArgToken::ProjectRoot),
+        ],
+        ..Phase::default()
+    };
+    let project = canonical_project(&project);
+    let workspace = canonical_project(&workspace);
+    let targets = [canonical_project(&first), canonical_project(&second)];
+
+    let arguments = render_expected_arguments(&spec, &phase, &project, &targets)
+        .expect("render nearest workspace arguments");
+
+    assert_eq!(
+        arguments,
+        vec![
+            workspace.join("Cargo.toml").to_string_lossy().into_owned(),
+            workspace.to_string_lossy().into_owned(),
+            "src/example.rs".to_owned(),
+            "src/selected.rs".to_owned(),
+            project.to_string_lossy().into_owned(),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn expected_workspace_job_rejects_split_or_missing_markers() {
+    let root = unique_temp_dir("velvet-glove-workspace-partition-test");
+    let project = root.join("project");
+    let first = project.join("first/src/example.rs");
+    let second = project.join("second/src/example.rs");
+    let missing = project.join("missing/src/example.rs");
+    for target in [&first, &second, &missing] {
+        std::fs::create_dir_all(target.parent().unwrap()).expect("workspace source directory");
+        std::fs::write(target, "fn example() {}\n").expect("selected source");
+    }
+    for member in ["first", "second"] {
+        std::fs::write(
+            project.join(member).join("Cargo.toml"),
+            format!("[package]\nname = \"{member}\"\n"),
+        )
+        .expect("workspace marker");
+    }
+    let spec = ToolSpec {
+        id: "workspace-tool".to_owned(),
+        workspace_indicator: Some("Cargo.toml".to_owned()),
+        ..ToolSpec::default()
+    };
+    let project = canonical_project(&project);
+
+    let split = resolve_expected_workspace_job(
+        &spec,
+        &project,
+        &[canonical_project(&first), canonical_project(&second)],
+    )
+    .expect_err("one invocation must not span workspace partitions");
+    assert!(split.contains("spans multiple"));
+
+    let absent = resolve_expected_workspace_job(&spec, &project, &[canonical_project(&missing)])
+        .expect_err("workspace marker is required");
+    assert!(absent.contains("found no"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1624,6 +2030,243 @@ fn mode_and_workspace_trace_plan_rejects_ambiguous_or_escaping_workspaces() {
 }
 
 #[test]
+fn workspace_indicator_trace_plan_binds_preflight_and_read_only_remedy_probes() {
+    let root = unique_temp_dir("velvet-glove-workspace-indicator-trace-test");
+    let indicator = root.join("Cargo.toml");
+    let target = root.join("src/example.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).expect("workspace source directory");
+    std::fs::write(&indicator, "[package]\nname = \"fixture\"\n").expect("workspace indicator");
+    std::fs::write(&target, "fn example() {}\n").expect("selected source");
+    let indicator = canonical_project(&indicator).to_string_lossy().into_owned();
+    let outer_arguments = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "cargo".to_owned(),
+        "cargo-clippy".to_owned(),
+        "fix".to_owned(),
+        "__WORKSPACE_INDICATOR__".to_owned(),
+        indicator.clone(),
+    ];
+    let targets = [canonical_project(&target)];
+    let plan = TracePlan::PreflightThenNestedModeWorkspaceIndicatorMarker {
+        preflight_program_index: 3,
+        command_program_index: 4,
+        adapter_prefix: &["-I", "-c"],
+        marker: "__WORKSPACE_INDICATOR__",
+        modes: &["fix", "verify"],
+        preflight_before_indicator: &["metadata", "--metadata-control", "--manifest-path"],
+        preflight_after_indicator: &["--metadata-after-indicator"],
+        command_before_indicator: &["clippy", "--manifest-path"],
+        command_after_indicators: &[
+            &[
+                "--checker-control",
+                "--message-format=json",
+                "--",
+                "--cap-lints=allow",
+            ],
+            &[
+                "--checker-control",
+                "--message-format=json",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        ],
+    };
+
+    let (program, invocations) =
+        resolve_trace_invocations(plan, "python", &outer_arguments, &targets, &[0, 0, 101])
+            .expect("resolve workspace-indicator trace");
+
+    assert_eq!(program, "cargo");
+    assert_eq!(invocations.len(), 3);
+    assert_eq!(invocations[0].program, "cargo");
+    assert_eq!(
+        invocations[0].arguments,
+        [
+            "metadata",
+            "--metadata-control",
+            "--manifest-path",
+            &indicator,
+            "--metadata-after-indicator",
+        ]
+    );
+    assert_eq!(invocations[0].exit_code, 0);
+    assert_eq!(invocations[1].program, "cargo-clippy");
+    assert_eq!(
+        invocations[1].arguments,
+        [
+            "clippy",
+            "--manifest-path",
+            &indicator,
+            "--checker-control",
+            "--message-format=json",
+            "--",
+            "--cap-lints=allow",
+        ]
+    );
+    assert_eq!(invocations[1].exit_code, 0);
+    assert_eq!(invocations[2].program, "cargo-clippy");
+    assert_eq!(
+        invocations[2].arguments,
+        [
+            "clippy",
+            "--manifest-path",
+            &indicator,
+            "--checker-control",
+            "--message-format=json",
+            "--",
+            "-D",
+            "warnings",
+        ]
+    );
+    assert!(
+        invocations[1..]
+            .iter()
+            .flat_map(|invocation| &invocation.arguments)
+            .all(|argument| argument != "--fix"),
+        "adapter fix mode must remain a read-only native Clippy probe"
+    );
+    assert_eq!(invocations[2].exit_code, 101);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn workspace_indicator_trace_plan_can_stop_after_preflight_or_coverage_and_rejects_forwarding() {
+    let root = unique_temp_dir("velvet-glove-workspace-indicator-trace-failure-test");
+    let indicator = root.join("Cargo.toml");
+    let target = root.join("src/example.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).expect("workspace source directory");
+    std::fs::write(&indicator, "not a valid manifest\n").expect("workspace indicator");
+    std::fs::write(&target, "fn example() {}\n").expect("selected source");
+    let indicator = canonical_project(&indicator).to_string_lossy().into_owned();
+    let plan = TracePlan::PreflightThenNestedModeWorkspaceIndicatorMarker {
+        preflight_program_index: 3,
+        command_program_index: 4,
+        adapter_prefix: &["-I", "-c"],
+        marker: "__WORKSPACE_INDICATOR__",
+        modes: &["fix", "verify"],
+        preflight_before_indicator: &["metadata", "--manifest-path"],
+        preflight_after_indicator: &[],
+        command_before_indicator: &["clippy", "--manifest-path"],
+        command_after_indicators: &[&["--", "--cap-lints=allow"], &["--", "-Dwarnings"]],
+    };
+    let targets = [canonical_project(&target)];
+    let preflight_failure = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "cargo".to_owned(),
+        "cargo-clippy".to_owned(),
+        "verify".to_owned(),
+        "__WORKSPACE_INDICATOR__".to_owned(),
+        indicator.clone(),
+    ];
+
+    let (_, invocations) =
+        resolve_trace_invocations(plan, "python", &preflight_failure, &targets, &[101])
+            .expect("resolve preflight-only failure");
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].program, "cargo");
+    assert_eq!(
+        invocations[0].arguments,
+        ["metadata", "--manifest-path", &indicator]
+    );
+    assert_eq!(invocations[0].exit_code, 101);
+
+    let (_, invocations) =
+        resolve_trace_invocations(plan, "python", &preflight_failure, &targets, &[0, 101])
+            .expect("resolve coverage failure");
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[1].program, "cargo-clippy");
+    assert_eq!(
+        invocations[1].arguments,
+        [
+            "clippy",
+            "--manifest-path",
+            &indicator,
+            "--",
+            "--cap-lints=allow",
+        ]
+    );
+    assert_eq!(invocations[1].exit_code, 101);
+
+    let forwarded = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "cargo".to_owned(),
+        "cargo-clippy".to_owned(),
+        "verify".to_owned(),
+        "--package=escape".to_owned(),
+        "__WORKSPACE_INDICATOR__".to_owned(),
+        indicator,
+    ];
+    let error = resolve_trace_invocations(plan, "python", &forwarded, &targets, &[0, 0, 101])
+        .expect_err("forwarded extra arguments must fail closed");
+    assert!(error.contains("does not permit forwarded extra arguments"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn tool_trace_shim_dispatches_distinct_program_bindings() {
+    let root = unique_temp_dir("velvet-glove-multi-program-trace-test");
+    let shim_dir = root.join("shims");
+    let real_dir = root.join("real");
+    let trace_dir = root.join("trace");
+    for directory in [&shim_dir, &real_dir, &trace_dir] {
+        std::fs::create_dir_all(directory).expect("trace test directory");
+    }
+
+    for (program, exit_code) in [("cargo", 0), ("cargo-clippy", 7)] {
+        let shim = shim_dir.join(program);
+        let real = real_dir.join(program);
+        std::fs::write(&shim, include_bytes!("support/tool-trace.sh")).expect("trace shim");
+        std::fs::write(&real, format!("#!/bin/sh\nexit {exit_code}\n"))
+            .expect("real program fixture");
+        std::fs::write(
+            shim_dir.join(format!("{program}.real-program")),
+            format!("{}\n", real.display()),
+        )
+        .expect("real program binding");
+        #[cfg(unix)]
+        for executable in [&shim, &real] {
+            let mut permissions = std::fs::metadata(executable)
+                .expect("executable metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(executable, permissions).expect("executable permissions");
+        }
+
+        let status = Command::new(&shim)
+            .args(["probe", program])
+            .env(TOOL_TRACE_DIR_ENV, &trace_dir)
+            .env(TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL)
+            .status()
+            .expect("run trace shim");
+        assert_eq!(status.code(), Some(exit_code));
+    }
+
+    let invocations = sorted_entries(&trace_dir.join("invocations")).expect("trace records");
+    assert_eq!(invocations.len(), 2);
+    for (invocation, program) in invocations.iter().zip(["cargo", "cargo-clippy"]) {
+        let record = invocation.path();
+        assert_record(&record, "logical-program", program).expect("logical program record");
+        assert_record(
+            &record,
+            "real-program",
+            real_dir.join(program).to_string_lossy().as_ref(),
+        )
+        .expect("real program record");
+        assert_record(&record, "argv-0", "probe").expect("first argument record");
+        assert_record(&record, "argv-1", program).expect("second argument record");
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
     let root = unique_temp_dir("velvet-glove-astro-trace-environment");
     let node_modules = root.join("node_modules");
@@ -1654,8 +2297,8 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
     let harness = ToolTraceHarness {
         shim_dir: root.join("shim"),
         trace_root: root.join("trace"),
-        logical_program: "astro".to_owned(),
-        real_program,
+        programs: BTreeMap::from([("astro".to_owned(), real_program)]),
+        cargo_clippy_toolchain: None,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -1713,8 +2356,8 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
     let harness = ToolTraceHarness {
         shim_dir: root.join("shim"),
         trace_root: root.join("trace"),
-        logical_program: "astro".to_owned(),
-        real_program,
+        programs: BTreeMap::from([("astro".to_owned(), real_program)]),
+        cargo_clippy_toolchain: None,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -1791,8 +2434,8 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
     let harness = ToolTraceHarness {
         shim_dir,
         trace_root,
-        logical_program: "buf".to_owned(),
-        real_program: root.join("managed/bin/buf"),
+        programs: BTreeMap::from([("buf".to_owned(), root.join("managed/bin/buf"))]),
+        cargo_clippy_toolchain: None,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -2652,7 +3295,14 @@ fn run_fixture_case_inner(
 
     let tool_trace = resolved_contract
         .as_ref()
-        .map(|contract| ToolTraceHarness::prepare(workspace, &contract.trace_program))
+        .map(|contract| {
+            let programs = contract
+                .trace_invocations
+                .iter()
+                .map(|invocation| invocation.program.clone())
+                .collect::<BTreeSet<_>>();
+            ToolTraceHarness::prepare(case, workspace, &programs)
+        })
         .transpose()?;
     let before = contract
         .as_ref()
@@ -2853,18 +3503,26 @@ fn run_mutating_fixture_case_inner(
     pristine: &TreeSnapshot,
 ) -> Result<(), String> {
     validate_mutation_expected_tree(case, mutation)?;
-    let immediate_trace = resolved_mutation
-        .remedy
-        .trace_invocations
-        .iter()
-        .chain(
-            resolved_mutation
-                .final_check
-                .iter()
-                .flat_map(|phase| phase.trace_invocations.iter()),
-        )
-        .cloned()
-        .collect::<Vec<_>>();
+    let phase_trace = |remedy: &ResolvedContract| {
+        remedy
+            .trace_invocations
+            .iter()
+            .chain(
+                resolved_mutation
+                    .final_check
+                    .iter()
+                    .flat_map(|phase| phase.trace_invocations.iter()),
+            )
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let immediate_trace = phase_trace(&resolved_mutation.remedy);
+    let repeat_trace = phase_trace(
+        resolved_mutation
+            .repeat_remedy
+            .as_ref()
+            .unwrap_or(&resolved_mutation.remedy),
+    );
     let binary = env!("CARGO_BIN_EXE_velvet-glove");
     let mut command = Command::new(binary);
     command
@@ -2884,7 +3542,6 @@ fn run_mutating_fixture_case_inner(
     verify_tool_trace_invocations(
         trace,
         "immediate-1",
-        &resolved.trace_program,
         &immediate_trace,
         &workspace.project,
         &workspace.evidence.join("immediate-1-trace.json"),
@@ -2925,8 +3582,7 @@ fn run_mutating_fixture_case_inner(
     verify_tool_trace_invocations(
         trace,
         "immediate-2",
-        &resolved.trace_program,
-        &immediate_trace,
+        &repeat_trace,
         &workspace.project,
         &workspace.evidence.join("immediate-2-trace.json"),
     )?;
@@ -3176,6 +3832,7 @@ struct ResolvedInvocation {
 
 #[derive(Debug, Clone)]
 struct ResolvedTraceInvocation {
+    program: String,
     targets: Vec<PathBuf>,
     arguments: Vec<String>,
     exit_code: i32,
@@ -3184,6 +3841,7 @@ struct ResolvedTraceInvocation {
 #[derive(Debug)]
 struct ResolvedMutatingContract {
     remedy: ResolvedContract,
+    repeat_remedy: Option<ResolvedContract>,
     final_check: Option<ResolvedContract>,
 }
 
@@ -3399,6 +4057,25 @@ fn resolve_mutating_tool_contract(
         contract.trace_plan,
         project,
     )?;
+    let repeat_remedy = mutation
+        .repeat_remedy_invocations
+        .map(|invocations| {
+            resolve_phase_invocations(
+                case,
+                spec,
+                remedy_phase,
+                invocations,
+                contract.trace_plan,
+                project,
+            )
+        })
+        .transpose()?;
+    if repeat_remedy.is_some() && mutation.changed_targets.is_empty() {
+        return Err(format!(
+            "{} declares a fixed-state repeat remedy without any expected mutations",
+            case.tool
+        ));
+    }
 
     let final_check = if mutation.final_invocations.is_empty() {
         None
@@ -3419,7 +4096,10 @@ fn resolve_mutating_tool_contract(
         )?)
     };
 
-    for resolved in std::iter::once(&remedy).chain(final_check.iter()) {
+    for resolved in std::iter::once(&remedy)
+        .chain(repeat_remedy.iter())
+        .chain(final_check.iter())
+    {
         if resolved.trace_program
             != final_check
                 .as_ref()
@@ -3460,6 +4140,7 @@ fn resolve_mutating_tool_contract(
     }
     Ok(ResolvedMutatingContract {
         remedy,
+        repeat_remedy,
         final_check,
     })
 }
@@ -3568,6 +4249,7 @@ fn resolve_trace_invocations(
             Ok((
                 outer_program.to_owned(),
                 vec![ResolvedTraceInvocation {
+                    program: outer_program.to_owned(),
                     targets: targets.to_vec(),
                     arguments: outer_arguments.to_vec(),
                     exit_code: expected_exit_codes[0],
@@ -3587,8 +4269,9 @@ fn resolve_trace_invocations(
                 .chain(trailing.iter().map(|argument| (*argument).to_owned()))
                 .collect();
             Ok((
-                trace_program,
+                trace_program.clone(),
                 vec![ResolvedTraceInvocation {
+                    program: trace_program.clone(),
                     targets: targets.to_vec(),
                     arguments,
                     exit_code: expected_exit_codes[0],
@@ -3674,8 +4357,9 @@ fn resolve_trace_invocations(
                 .chain(expected_files)
                 .collect();
             Ok((
-                trace_program,
+                trace_program.clone(),
                 vec![ResolvedTraceInvocation {
+                    program: trace_program.clone(),
                     targets: targets.to_vec(),
                     arguments,
                     exit_code: expected_exit_codes[0],
@@ -3777,8 +4461,9 @@ fn resolve_trace_invocations(
                 .chain(expected_files)
                 .collect();
             Ok((
-                trace_program,
+                trace_program.clone(),
                 vec![ResolvedTraceInvocation {
+                    program: trace_program.clone(),
                     targets: targets.to_vec(),
                     arguments,
                     exit_code: expected_exit_codes[0],
@@ -3896,6 +4581,7 @@ fn resolve_trace_invocations(
                 .chain(std::iter::once(workspace.clone()))
                 .collect();
             let mut traces = vec![ResolvedTraceInvocation {
+                program: trace_program.clone(),
                 targets: targets.to_vec(),
                 arguments: preflight
                     .iter()
@@ -3905,12 +4591,169 @@ fn resolve_trace_invocations(
             }];
             if let Some(exit_code) = expected_exit_codes.get(1) {
                 traces.push(ResolvedTraceInvocation {
+                    program: trace_program.clone(),
                     targets: targets.to_vec(),
                     arguments,
                     exit_code: *exit_code,
                 });
             }
             Ok((trace_program, traces))
+        }
+        TracePlan::PreflightThenNestedModeWorkspaceIndicatorMarker {
+            preflight_program_index,
+            command_program_index,
+            adapter_prefix,
+            marker,
+            modes,
+            preflight_before_indicator,
+            preflight_after_indicator,
+            command_before_indicator,
+            command_after_indicators,
+        } => {
+            if expected_exit_codes.is_empty()
+                || expected_exit_codes.len() > command_after_indicators.len() + 1
+            {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter trace for {outer_program} must declare one preflight exit code and at most {} command exit codes, got {expected_exit_codes:?}",
+                    command_after_indicators.len()
+                ));
+            }
+            if command_after_indicators.is_empty() {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter trace plan for {outer_program} must declare at least one command argument suffix"
+                ));
+            }
+            if preflight_program_index != adapter_prefix.len() + 1
+                || command_program_index != preflight_program_index + 1
+            {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter trace plan for {outer_program} must place exactly one script before consecutive preflight and command tools"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode workspace-indicator adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let preflight_program = outer_arguments
+                .get(preflight_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode workspace-indicator adapter {outer_program} has no preflight tool at argument {preflight_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let command_program = outer_arguments
+                .get(command_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "preflight-and-mode workspace-indicator adapter {outer_program} has no command tool at argument {command_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            if command_program == preflight_program {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} must trace distinct preflight and command tools, got {preflight_program:?} twice"
+                ));
+            }
+            let mode_index = command_program_index + 1;
+            let mode = outer_arguments.get(mode_index).ok_or_else(|| {
+                format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} has no phase mode: {outer_arguments:?}"
+                )
+            })?;
+            if !modes.iter().any(|expected| *expected == mode) {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} has unsupported phase mode {mode:?}"
+                ));
+            }
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= mode_index {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} places {marker:?} before phase mode: {outer_arguments:?}"
+                ));
+            }
+            let forwarded = &outer_arguments[(mode_index + 1)..*marker_index];
+            if !forwarded.is_empty() {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} fixture trace does not permit forwarded extra arguments: {forwarded:?}"
+                ));
+            }
+            let rendered_indicators = &outer_arguments[(*marker_index + 1)..];
+            let [indicator] = rendered_indicators else {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} requires exactly one indicator after {marker:?}, got {rendered_indicators:?}"
+                ));
+            };
+            let indicator_path = Path::new(indicator);
+            if !indicator_path.is_absolute() || !indicator_path.is_file() {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} rendered an invalid workspace indicator {indicator:?}"
+                ));
+            }
+            let workspace = indicator_path.parent().ok_or_else(|| {
+                format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} indicator has no parent: {indicator:?}"
+                )
+            })?;
+            let outside_workspace = targets
+                .iter()
+                .filter(|target| !target.starts_with(workspace))
+                .collect::<Vec<_>>();
+            if !outside_workspace.is_empty() {
+                return Err(format!(
+                    "preflight-and-mode workspace-indicator adapter {outer_program} targets escape indicator workspace {workspace:?}: {outside_workspace:?}"
+                ));
+            }
+            let render = |before: &[&str], after: &[&str]| {
+                before
+                    .iter()
+                    .map(|argument| (*argument).to_owned())
+                    .chain(std::iter::once(indicator.clone()))
+                    .chain(after.iter().map(|argument| (*argument).to_owned()))
+                    .collect::<Vec<_>>()
+            };
+            let mut traces = vec![ResolvedTraceInvocation {
+                program: preflight_program.clone(),
+                targets: targets.to_vec(),
+                arguments: render(preflight_before_indicator, preflight_after_indicator),
+                exit_code: expected_exit_codes[0],
+            }];
+            for (exit_code, after_indicator) in expected_exit_codes
+                .iter()
+                .skip(1)
+                .zip(command_after_indicators.iter())
+            {
+                traces.push(ResolvedTraceInvocation {
+                    program: command_program.clone(),
+                    targets: targets.to_vec(),
+                    arguments: render(command_before_indicator, after_indicator),
+                    exit_code: *exit_code,
+                });
+            }
+            Ok((preflight_program, traces))
         }
         TracePlan::TrailingOptionsAdapter {
             preflight,
@@ -3935,12 +4778,14 @@ fn resolve_trace_invocations(
                     .collect::<Vec<_>>()
             };
             let mut traces = vec![ResolvedTraceInvocation {
+                program: trace_program.clone(),
                 targets: targets.to_vec(),
                 arguments: render_nested(preflight),
                 exit_code: expected_exit_codes[0],
             }];
             if let Some(exit_code) = expected_exit_codes.get(1) {
                 traces.push(ResolvedTraceInvocation {
+                    program: trace_program.clone(),
                     targets: targets.to_vec(),
                     arguments: render_nested(validation),
                     exit_code: *exit_code,
@@ -3984,6 +4829,8 @@ fn render_expected_arguments(
     project: &Path,
     targets: &[PathBuf],
 ) -> Result<Vec<String>, String> {
+    let project = canonical_project(project);
+    let (workspace, workspace_indicator) = resolve_expected_workspace_job(spec, &project, targets)?;
     let mut arguments = Vec::new();
     for element in &phase.argv {
         match element {
@@ -3996,13 +4843,16 @@ fn render_expected_arguments(
             ArgvElement::Token(ArgToken::ExtraArgs) => {
                 arguments.extend(phase.extra_args.iter().cloned());
             }
-            ArgvElement::Token(ArgToken::ProjectRoot | ArgToken::Workspace) => {
-                arguments.push(canonical_project(project).to_string_lossy().into_owned());
+            ArgvElement::Token(ArgToken::ProjectRoot) => {
+                arguments.push(project.to_string_lossy().into_owned());
+            }
+            ArgvElement::Token(ArgToken::Workspace) => {
+                arguments.push(workspace.to_string_lossy().into_owned());
             }
             ArgvElement::Token(ArgToken::WorkspaceFiles) => {
                 arguments.extend(targets.iter().map(|target| {
                     target
-                        .strip_prefix(project)
+                        .strip_prefix(&workspace)
                         .unwrap_or(target)
                         .to_string_lossy()
                         .into_owned()
@@ -4011,15 +4861,91 @@ fn render_expected_arguments(
             ArgvElement::Token(ArgToken::ToolExecutable) => {
                 arguments.push(spec.executable.clone());
             }
-            ArgvElement::Token(ArgToken::WorkspaceIndicator) => {
-                return Err(format!(
-                    "{} fixture contract cannot render WorkspaceIndicator without a marker",
-                    spec.id
-                ));
-            }
+            ArgvElement::Token(ArgToken::WorkspaceIndicator) => arguments.push(
+                workspace_indicator
+                    .as_ref()
+                    .ok_or_else(|| {
+                        format!(
+                            "{} fixture contract rendered WorkspaceIndicator without a configured marker",
+                            spec.id
+                        )
+                    })?
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
         }
     }
     Ok(arguments)
+}
+
+fn resolve_expected_workspace_job(
+    spec: &ToolSpec,
+    project: &Path,
+    targets: &[PathBuf],
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let Some(indicator_name) = spec.workspace_indicator.as_deref() else {
+        return Ok((project.to_path_buf(), None));
+    };
+    if targets.is_empty() {
+        return Err(format!(
+            "{} fixture contract cannot resolve workspace marker {indicator_name:?} for an empty invocation",
+            spec.id
+        ));
+    }
+
+    let mut indicators = BTreeSet::new();
+    for target in targets {
+        if !target.starts_with(project) {
+            return Err(format!(
+                "{} fixture contract target escapes project {project:?}: {target:?}",
+                spec.id
+            ));
+        }
+        let indicator = nearest_fixture_workspace_indicator(target, project, indicator_name)
+            .ok_or_else(|| {
+                format!(
+                    "{} fixture contract found no {indicator_name:?} from target {target:?} through project {project:?}",
+                    spec.id
+                )
+            })?;
+        indicators.insert(indicator);
+    }
+    if indicators.len() != 1 {
+        return Err(format!(
+            "{} fixture invocation spans multiple {indicator_name:?} workspaces: {indicators:?}",
+            spec.id
+        ));
+    }
+    let indicator = indicators
+        .into_iter()
+        .next()
+        .expect("one workspace indicator was required");
+    let workspace = indicator.parent().ok_or_else(|| {
+        format!(
+            "{} fixture workspace marker has no parent directory: {indicator:?}",
+            spec.id
+        )
+    })?;
+    Ok((workspace.to_path_buf(), Some(indicator)))
+}
+
+fn nearest_fixture_workspace_indicator(
+    target: &Path,
+    project: &Path,
+    indicator_name: &str,
+) -> Option<PathBuf> {
+    let mut current = target.parent();
+    while let Some(directory) = current {
+        let candidate = directory.join(indicator_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if directory == project {
+            break;
+        }
+        current = directory.parent();
+    }
+    None
 }
 
 fn classify_expected_exit(phase: &Phase, code: i32) -> ExpectedOutcome {
@@ -4037,33 +4963,177 @@ fn classify_expected_exit(phase: &Phase, code: i32) -> ExpectedOutcome {
     }
 }
 
+struct CargoClippyToolchain {
+    root: PathBuf,
+    bin: PathBuf,
+    library: PathBuf,
+    cargo: PathBuf,
+    rustc: PathBuf,
+    rustdoc: PathBuf,
+    cargo_clippy: PathBuf,
+    clippy_driver: PathBuf,
+    cargo_home: PathBuf,
+    temporary: PathBuf,
+}
+
+impl CargoClippyToolchain {
+    fn resolve() -> Result<Self, String> {
+        let requested_root =
+            std::env::var_os(CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV).ok_or_else(|| {
+                format!("cargo-clippy real-tool fixtures require {CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV}")
+            })?;
+        let requested_root = PathBuf::from(requested_root);
+        if !requested_root.is_absolute() {
+            return Err(format!(
+                "{CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV} must be an absolute directory, got {requested_root:?}"
+            ));
+        }
+        let root = requested_root.canonicalize().map_err(|error| {
+            format!(
+                "canonicalize {CARGO_CLIPPY_TOOLCHAIN_ROOT_ENV} root {requested_root:?}: {error}"
+            )
+        })?;
+        let metadata = std::fs::metadata(&root)
+            .map_err(|error| format!("inspect cargo-clippy toolchain root {root:?}: {error}"))?;
+        if !metadata.is_dir() {
+            return Err(format!(
+                "cargo-clippy toolchain root is not a directory: {root:?}"
+            ));
+        }
+        let bin = root.join("bin");
+        let library = root.join("lib");
+        if !library.is_dir() {
+            return Err(format!(
+                "cargo-clippy toolchain root lacks its library directory: {library:?}"
+            ));
+        }
+        let cargo = require_executable(&bin.join("cargo"), "cargo-clippy cargo")?;
+        let rustc = require_executable(&bin.join("rustc"), "cargo-clippy rustc")?;
+        let rustdoc = require_executable(&bin.join("rustdoc"), "cargo-clippy rustdoc")?;
+        let cargo_clippy = require_executable(&bin.join("cargo-clippy"), "cargo-clippy driver")?;
+        let clippy_driver =
+            require_executable(&bin.join("clippy-driver"), "Clippy compiler driver")?;
+        let cargo_home = PathBuf::from(std::env::var_os(CARGO_HOME_ENV).ok_or_else(|| {
+            format!("cargo-clippy real-tool fixtures require controlled {CARGO_HOME_ENV}")
+        })?);
+        if !cargo_home.is_absolute() {
+            return Err(format!(
+                "cargo-clippy real-tool fixtures require an absolute {CARGO_HOME_ENV}, got {cargo_home:?}"
+            ));
+        }
+        let cargo_home = cargo_home.canonicalize().map_err(|error| {
+            format!("canonicalize controlled {CARGO_HOME_ENV} {cargo_home:?}: {error}")
+        })?;
+        for config_name in ["config", "config.toml"] {
+            let config = cargo_home.join(config_name);
+            match std::fs::symlink_metadata(&config) {
+                Ok(_) => {
+                    return Err(format!(
+                        "cargo-clippy real-tool fixtures reject ambient Cargo configuration at {config:?}"
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "inspect controlled Cargo configuration path {config:?}: {error}"
+                    ));
+                }
+            }
+        }
+        let temporary = PathBuf::from(std::env::var_os(TMPDIR_ENV).ok_or_else(|| {
+            format!("cargo-clippy real-tool fixtures require controlled {TMPDIR_ENV}")
+        })?);
+        if !temporary.is_absolute() {
+            return Err(format!(
+                "cargo-clippy real-tool fixtures require an absolute {TMPDIR_ENV}, got {temporary:?}"
+            ));
+        }
+        let temporary = temporary.canonicalize().map_err(|error| {
+            format!("canonicalize controlled {TMPDIR_ENV} {temporary:?}: {error}")
+        })?;
+        if !temporary.is_dir() {
+            return Err(format!(
+                "cargo-clippy real-tool fixture {TMPDIR_ENV} is not a directory: {temporary:?}"
+            ));
+        }
+        Ok(Self {
+            root,
+            bin,
+            library,
+            cargo,
+            rustc,
+            rustdoc,
+            cargo_clippy,
+            clippy_driver,
+            cargo_home,
+            temporary,
+        })
+    }
+}
+
+fn require_executable(path: &Path, description: &str) -> Result<PathBuf, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("resolve {description} executable {path:?}: {error}"))?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| format!("inspect {description} executable {canonical:?}: {error}"))?;
+    if !metadata.is_file() {
+        return Err(format!("{description} is not a file: {canonical:?}"));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(format!("{description} is not executable: {canonical:?}"));
+    }
+    Ok(canonical)
+}
+
 struct ToolTraceHarness {
     shim_dir: PathBuf,
     trace_root: PathBuf,
-    logical_program: String,
-    real_program: PathBuf,
+    programs: BTreeMap<String, PathBuf>,
+    cargo_clippy_toolchain: Option<CargoClippyToolchain>,
 }
 
 impl ToolTraceHarness {
-    fn prepare(workspace: &FixtureWorkspace, logical_program: &str) -> Result<Self, String> {
-        if Path::new(logical_program).components().count() != 1 || logical_program.is_empty() {
-            return Err(format!(
-                "real-tool trace requires a bare logical program name, got {logical_program:?}"
-            ));
+    fn prepare(
+        case: &FixtureCase,
+        workspace: &FixtureWorkspace,
+        logical_programs: &BTreeSet<String>,
+    ) -> Result<Self, String> {
+        if logical_programs.is_empty() {
+            return Err(format!("{} real-tool trace has no programs", case.tool));
         }
-        let real_program = resolve_program(logical_program).ok_or_else(|| {
-            format!("contract could not resolve pinned {logical_program} before tracing")
-        })?;
-        let real_program = real_program.canonicalize().map_err(|error| {
-            format!("canonicalize contract executable {real_program:?}: {error}")
-        })?;
+        for logical_program in logical_programs {
+            if Path::new(logical_program).components().count() != 1 || logical_program.is_empty() {
+                return Err(format!(
+                    "real-tool trace requires bare logical program names, got {logical_program:?}"
+                ));
+            }
+        }
+        let cargo_clippy_toolchain =
+            (case.tool == "cargo-clippy").then(CargoClippyToolchain::resolve);
+        let cargo_clippy_toolchain = cargo_clippy_toolchain.transpose()?;
+        let mut programs = BTreeMap::new();
+        for logical_program in logical_programs {
+            let real_program = match (logical_program.as_str(), &cargo_clippy_toolchain) {
+                ("cargo", Some(toolchain)) => toolchain.cargo.clone(),
+                ("cargo-clippy", Some(toolchain)) => toolchain.cargo_clippy.clone(),
+                _ => resolve_program(logical_program).ok_or_else(|| {
+                    format!("contract could not resolve pinned {logical_program} before tracing")
+                })?,
+            };
+            let real_program = real_program.canonicalize().map_err(|error| {
+                format!("canonicalize contract executable {real_program:?}: {error}")
+            })?;
+            programs.insert(logical_program.clone(), real_program);
+        }
         let shim_dir = workspace.root.join("tool-shim");
         let trace_root = workspace.root.join("tool-traces");
         std::fs::create_dir_all(&shim_dir)
             .map_err(|error| format!("create tool shim directory {shim_dir:?}: {error}"))?;
         std::fs::create_dir_all(&trace_root)
             .map_err(|error| format!("create tool trace directory {trace_root:?}: {error}"))?;
-        if logical_program == "buf" {
+        if logical_programs.contains("buf") {
             let diff = Path::new(BUF_DIFF_PROGRAM);
             let metadata = std::fs::metadata(diff).map_err(|error| {
                 format!("inspect Buf adapter diff prerequisite {diff:?}: {error}")
@@ -4086,32 +5156,43 @@ impl ToolTraceHarness {
                 })?;
             }
         }
-        let shim = shim_dir.join(logical_program);
-        std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
-            .map_err(|error| format!("write tool trace shim {shim:?}: {error}"))?;
-        #[cfg(unix)]
-        {
-            let mut permissions = std::fs::metadata(&shim)
-                .map_err(|error| format!("tool trace shim metadata {shim:?}: {error}"))?
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&shim, permissions)
-                .map_err(|error| format!("make tool trace shim executable {shim:?}: {error}"))?;
+        for (logical_program, real_program) in &programs {
+            let shim = shim_dir.join(logical_program);
+            std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
+                .map_err(|error| format!("write tool trace shim {shim:?}: {error}"))?;
+            std::fs::write(
+                shim_dir.join(format!("{logical_program}.real-program")),
+                format!("{}\n", real_program.display()),
+            )
+            .map_err(|error| format!("write {logical_program} trace program binding: {error}"))?;
+            #[cfg(unix)]
+            {
+                let mut permissions = std::fs::metadata(&shim)
+                    .map_err(|error| format!("tool trace shim metadata {shim:?}: {error}"))?
+                    .permissions();
+                permissions.set_mode(0o755);
+                std::fs::set_permissions(&shim, permissions).map_err(|error| {
+                    format!("make tool trace shim executable {shim:?}: {error}")
+                })?;
+            }
         }
         Ok(Self {
             shim_dir,
             trace_root,
-            logical_program: logical_program.to_owned(),
-            real_program,
+            programs,
+            cargo_clippy_toolchain,
         })
     }
 
     fn configure(&self, command: &mut Command, label: &str) -> Result<(), String> {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
-        let path = std::env::join_paths(
-            std::iter::once(self.shim_dir.clone()).chain(std::env::split_paths(&inherited)),
-        )
-        .map_err(|error| format!("construct tool trace PATH: {error}"))?;
+        let mut path_entries = vec![self.shim_dir.clone()];
+        if let Some(toolchain) = &self.cargo_clippy_toolchain {
+            path_entries.push(toolchain.bin.clone());
+        }
+        path_entries.extend(std::env::split_paths(&inherited));
+        let path = std::env::join_paths(path_entries)
+            .map_err(|error| format!("construct tool trace PATH: {error}"))?;
         let trace_dir = self.trace_root.join(label);
         std::fs::create_dir_all(&trace_dir)
             .map_err(|error| format!("create tool trace attempt {trace_dir:?}: {error}"))?;
@@ -4124,10 +5205,8 @@ impl ToolTraceHarness {
             .env("CLICOLOR", "0")
             .env("FORCE_COLOR", "0")
             .env(TOOL_TRACE_DIR_ENV, trace_dir)
-            .env(TOOL_REAL_PROGRAM_ENV, &self.real_program)
-            .env(TOOL_LOGICAL_PROGRAM_ENV, &self.logical_program)
             .env(TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL);
-        if self.logical_program == "betterleaks" {
+        if self.programs.contains_key("betterleaks") {
             for name in [
                 BETTERLEAKS_CONFIG_ENV,
                 BETTERLEAKS_CONFIG_TOML_ENV,
@@ -4137,14 +5216,14 @@ impl ToolTraceHarness {
                 command.env(name, BETTERLEAKS_POISON_ENV_VALUE);
             }
         }
-        if self.logical_program == "biome" {
+        if self.programs.contains_key("biome") {
             command.env(CI_ENV, BIOME_POISON_ENV_VALUE);
             command.env(RAYON_NUM_THREADS_ENV, BIOME_POISON_ENV_VALUE);
             for name in BIOME_SCRUBBED_ENV {
                 command.env(name, BIOME_POISON_ENV_VALUE);
             }
         }
-        if self.logical_program == "buf" {
+        if self.programs.contains_key("buf") {
             let root = self.trace_root.parent().ok_or_else(|| {
                 format!(
                     "Buf trace root has no controlled environment parent: {:?}",
@@ -4161,6 +5240,28 @@ impl ToolTraceHarness {
                 command.env(name, BUF_POISON_ENV_VALUE);
             }
         }
+        if let Some(toolchain) = &self.cargo_clippy_toolchain {
+            command
+                .env(DYLD_LIBRARY_PATH_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(CARGO_HOME_ENV, &toolchain.cargo_home)
+                .env(CARGO_TARGET_DIR_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(CARGO_NET_OFFLINE_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(CARGO_BUILD_JOBS_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(CARGO_TERM_COLOR_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(CARGO_PROGRAM_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(RUSTC_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
+                .env(RUSTDOC_ENV, CARGO_CLIPPY_POISON_ENV_VALUE);
+            for name in CARGO_CLIPPY_EMPTY_ENV
+                .iter()
+                .chain(CARGO_CLIPPY_SCRUBBED_ENV)
+                .chain(CARGO_CLIPPY_PREFIX_POISON_ENV)
+            {
+                command.env(name, CARGO_CLIPPY_POISON_ENV_VALUE);
+            }
+            for name in CARGO_CLIPPY_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         Ok(())
     }
 }
@@ -4175,7 +5276,6 @@ fn verify_tool_trace(
     verify_tool_trace_invocations(
         harness,
         label,
-        &contract.trace_program,
         &contract.trace_invocations,
         project,
         evidence_path,
@@ -4185,7 +5285,6 @@ fn verify_tool_trace(
 fn verify_tool_trace_invocations(
     harness: &ToolTraceHarness,
     label: &str,
-    trace_program: &str,
     expected_invocations: &[ResolvedTraceInvocation],
     project: &Path,
     evidence_path: &Path,
@@ -4197,8 +5296,7 @@ fn verify_tool_trace_invocations(
         .collect::<Vec<_>>();
     if invocations.len() != expected_invocations.len() {
         return Err(format!(
-            "{} {label} expected {} invocation(s), observed {} at {trace_dir:?}",
-            trace_program,
+            "{label} expected {} tool invocation(s), observed {} at {trace_dir:?}",
             expected_invocations.len(),
             invocations.len()
         ));
@@ -4206,7 +5304,10 @@ fn verify_tool_trace_invocations(
 
     let cwd = canonical_project(project);
     let mut records = Vec::new();
+    let mut cargo_target_dir = None;
+    let mut clippy_conf_dir = None;
     for (invocation, expected) in invocations.iter().zip(expected_invocations) {
+        let trace_program = expected.program.as_str();
         let record = invocation.path();
         assert_record(&record, "logical-program", trace_program)?;
         for (name, expected) in [
@@ -4220,12 +5321,22 @@ fn verify_tool_trace_invocations(
         ] {
             assert_record(&record, &format!("env-{name}"), expected)?;
         }
+        let real_program = harness.programs.get(trace_program).ok_or_else(|| {
+            format!("{label} has no real executable binding for {trace_program:?}")
+        })?;
         assert_record(
             &record,
             "real-program",
-            harness.real_program.to_string_lossy().as_ref(),
+            real_program.to_string_lossy().as_ref(),
         )?;
-        assert_record(&record, "cwd", cwd.to_string_lossy().trim_end())?;
+        let recorded_cwd = read_record(&record, "cwd")?;
+        if !matches!(trace_program, "cargo" | "cargo-clippy")
+            && recorded_cwd != cwd.to_string_lossy().trim_end()
+        {
+            return Err(format!(
+                "{trace_program} {label} trace expected cwd {cwd:?}, got {recorded_cwd:?}"
+            ));
+        }
         assert_record(&record, "argc", &expected.arguments.len().to_string())?;
         for (index, argument) in expected.arguments.iter().enumerate() {
             assert_record(&record, &format!("argv-{index}"), argument)?;
@@ -4289,16 +5400,38 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if matches!(trace_program, "cargo" | "cargo-clippy") {
+            if trace_program == "cargo" {
+                cargo_target_dir = None;
+                clippy_conf_dir = None;
+            }
+            let controlled = verify_cargo_clippy_trace_environment(
+                &record,
+                harness,
+                project,
+                &recorded_cwd,
+                &mut cargo_target_dir,
+                &mut clippy_conf_dir,
+            )?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         let prerequisites = if trace_program == "buf" {
             serde_json::json!({"diff": BUF_DIFF_PROGRAM})
+        } else if matches!(trace_program, "cargo" | "cargo-clippy") {
+            cargo_clippy_trace_prerequisites(harness)?
         } else {
             serde_json::json!({})
         };
         records.push(serde_json::json!({
             "logicalProgram": trace_program,
             "shimProgram": program,
-            "realProgram": harness.real_program,
-            "cwd": cwd,
+            "realProgram": real_program,
+            "cwd": recorded_cwd,
             "argv": expected.arguments,
             "candidateFiles": expected.targets,
             "environment": environment,
@@ -4334,21 +5467,24 @@ fn verify_astro_trace_environment(
     let root = roots[0]
         .canonicalize()
         .map_err(|error| format!("canonicalize Astro NODE_PATH {:?}: {error}", roots[0]))?;
-    let controlled_root = harness
-        .real_program
+    let real_program = harness
+        .programs
+        .get("astro")
+        .ok_or_else(|| "Astro trace harness has no executable binding".to_owned())?;
+    let controlled_root = real_program
         .ancestors()
         .find(|path| path.file_name() == Some(OsStr::new("node_modules")))
         .ok_or_else(|| {
             format!(
                 "pinned Astro executable is not inside node_modules: {:?}",
-                harness.real_program
+                real_program
             )
         })?
         .canonicalize()
         .map_err(|error| {
             format!(
                 "canonicalize pinned Astro node_modules root for {:?}: {error}",
-                harness.real_program
+                real_program
             )
         })?;
     if root != controlled_root {
@@ -4508,6 +5644,231 @@ fn verify_buf_trace_environment(
         ));
     }
     Ok(environment)
+}
+
+fn verify_cargo_clippy_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    project: &Path,
+    recorded_cwd: &str,
+    expected_target_dir: &mut Option<PathBuf>,
+    expected_conf_dir: &mut Option<PathBuf>,
+) -> Result<BTreeMap<String, String>, String> {
+    let toolchain = harness
+        .cargo_clippy_toolchain
+        .as_ref()
+        .ok_or_else(|| "cargo-clippy trace has no managed toolchain binding".to_owned())?;
+    let mut environment = BTreeMap::new();
+    let logical_program = read_record(record, "logical-program")?;
+    if !matches!(logical_program.as_str(), "cargo" | "cargo-clippy") {
+        return Err(format!(
+            "cargo-clippy trace recorded an unexpected logical program {logical_program:?}"
+        ));
+    }
+    let observed_shim = PathBuf::from(read_record(record, "program")?)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced {logical_program} shim: {error}"))?;
+    let expected_shim = harness
+        .shim_dir
+        .join(&logical_program)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize expected {logical_program} shim: {error}"))?;
+    if observed_shim != expected_shim {
+        return Err(format!(
+            "cargo-clippy adapter escaped its {logical_program} trace shim: expected {expected_shim:?}, got {observed_shim:?}"
+        ));
+    }
+
+    for (name, expected) in [
+        (
+            DYLD_LIBRARY_PATH_ENV,
+            // macOS strips DYLD_* while resolving the trace shim's /bin/sh
+            // interpreter. The paired library remains bound as a prerequisite
+            // and in the evaluated adapter source, but is intentionally absent
+            // by the time the shim can record its environment.
+            String::new(),
+        ),
+        (
+            CARGO_PROGRAM_ENV,
+            toolchain.cargo.to_string_lossy().into_owned(),
+        ),
+        (RUSTC_ENV, toolchain.rustc.to_string_lossy().into_owned()),
+        (
+            RUSTDOC_ENV,
+            toolchain.rustdoc.to_string_lossy().into_owned(),
+        ),
+        (
+            CARGO_HOME_ENV,
+            toolchain.cargo_home.to_string_lossy().into_owned(),
+        ),
+        (
+            TMPDIR_ENV,
+            toolchain.temporary.to_string_lossy().into_owned(),
+        ),
+        (CARGO_NET_OFFLINE_ENV, "true".to_owned()),
+        (CARGO_BUILD_JOBS_ENV, "1".to_owned()),
+        ("CARGO_INCREMENTAL", "0".to_owned()),
+        (CARGO_TERM_COLOR_ENV, "never".to_owned()),
+        ("CLIPPY_DISABLE_DOCS_LINKS", "1".to_owned()),
+        ("RUST_BACKTRACE", "0".to_owned()),
+        ("RUST_LIB_BACKTRACE", "0".to_owned()),
+        ("TERM", "dumb".to_owned()),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "cargo-clippy trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+
+    let expected_path = std::env::join_paths([
+        harness.shim_dir.as_path(),
+        toolchain.bin.as_path(),
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .map_err(|error| format!("construct cargo-clippy child PATH: {error}"))?;
+    let path = read_record(record, &format!("env-{PATH_ENV}"))?;
+    if OsStr::new(&path) != expected_path {
+        return Err(format!(
+            "cargo-clippy trace expected controlled PATH {expected_path:?}, got {path:?}"
+        ));
+    }
+    environment.insert(PATH_ENV.to_owned(), path);
+
+    let project = canonical_project(project);
+    let target_dir = controlled_private_trace_directory(
+        record,
+        CARGO_TARGET_DIR_ENV,
+        &project,
+        expected_target_dir,
+    )?;
+    environment.insert(
+        CARGO_TARGET_DIR_ENV.to_owned(),
+        target_dir.to_string_lossy().into_owned(),
+    );
+    if target_dir.parent() != Some(toolchain.temporary.as_path())
+        || !target_dir
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with("velvet-glove-cargo-clippy-"))
+    {
+        return Err(format!(
+            "cargo-clippy trace target is not a direct private child of {:?}: {target_dir:?}",
+            toolchain.temporary
+        ));
+    }
+    let invocation_dir = target_dir.join("invocation");
+    if Path::new(recorded_cwd) != invocation_dir {
+        return Err(format!(
+            "cargo-clippy trace must run from its private invocation directory {invocation_dir:?}, got {recorded_cwd:?}"
+        ));
+    }
+
+    let conf_dir = controlled_private_trace_directory(
+        record,
+        CLIPPY_CONF_DIR_ENV,
+        &project,
+        expected_conf_dir,
+    )?;
+    let root_config = [project.join(".clippy.toml"), project.join("clippy.toml")]
+        .into_iter()
+        .find(|path| path.is_file());
+    if root_config.is_some() {
+        if conf_dir != project {
+            return Err(format!(
+                "cargo-clippy trace must bind a validated root Clippy config to {project:?}, got {conf_dir:?}"
+            ));
+        }
+    } else {
+        if conf_dir != invocation_dir {
+            return Err(format!(
+                "cargo-clippy trace must bind its empty fallback Clippy config to {invocation_dir:?}, got {conf_dir:?}"
+            ));
+        }
+        assert_record(record, "env-CLIPPY_CONF_DIR-clippy-toml-kind", "empty-file")?;
+        assert_record(
+            record,
+            "env-CLIPPY_CONF_DIR-dot-clippy-toml-kind",
+            "missing",
+        )?;
+    }
+    environment.insert(
+        CLIPPY_CONF_DIR_ENV.to_owned(),
+        conf_dir.to_string_lossy().into_owned(),
+    );
+
+    for name in CARGO_CLIPPY_EMPTY_ENV
+        .iter()
+        .chain(CARGO_CLIPPY_SCRUBBED_ENV)
+        .chain(CARGO_CLIPPY_PREFIX_POISON_ENV)
+        .chain(CARGO_CLIPPY_LOADER_SCRUBBED_ENV)
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "cargo-clippy trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    Ok(environment)
+}
+
+fn controlled_private_trace_directory(
+    record: &Path,
+    name: &str,
+    project: &Path,
+    expected: &mut Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    let value = read_record(record, &format!("env-{name}"))?;
+    let path = PathBuf::from(&value);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "cargo-clippy trace requires an absolute normalized {name}, got {value:?}"
+        ));
+    }
+    assert_record(record, &format!("env-{name}-kind"), "directory")?;
+    if name == CARGO_TARGET_DIR_ENV && path.starts_with(project) {
+        return Err(format!(
+            "cargo-clippy trace must keep its build target outside the project, got {path:?}"
+        ));
+    }
+    if let Some(expected) = expected {
+        if path != *expected {
+            return Err(format!(
+                "cargo-clippy trace changed {name} between child processes: expected {expected:?}, got {path:?}"
+            ));
+        }
+    } else {
+        *expected = Some(path.clone());
+    }
+    Ok(path)
+}
+
+fn cargo_clippy_trace_prerequisites(harness: &ToolTraceHarness) -> Result<JsonValue, String> {
+    let toolchain = harness
+        .cargo_clippy_toolchain
+        .as_ref()
+        .ok_or_else(|| "cargo-clippy trace has no managed toolchain prerequisites".to_owned())?;
+    Ok(serde_json::json!({
+        "toolchainRoot": toolchain.root,
+        "bin": toolchain.bin,
+        "library": toolchain.library,
+        "cargo": toolchain.cargo,
+        "rustc": toolchain.rustc,
+        "rustdoc": toolchain.rustdoc,
+        "cargoClippy": toolchain.cargo_clippy,
+        "clippyDriver": toolchain.clippy_driver,
+        "cargoHome": toolchain.cargo_home,
+        "temporaryRoot": toolchain.temporary,
+    }))
 }
 
 fn read_record(record: &Path, name: &str) -> Result<String, String> {
@@ -5165,25 +6526,9 @@ fn run_mutating_deferred_attempt(
         .flat_map(|phase| phase.resolved.trace_invocations.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let trace_program = expectation
-        .phases
-        .first()
-        .map(|phase| phase.resolved.trace_program.as_str())
-        .ok_or_else(|| format!("{} deferred attempt has no expected phases", case.tool))?;
-    if expectation
-        .phases
-        .iter()
-        .any(|phase| phase.resolved.trace_program != trace_program)
-    {
-        return Err(format!(
-            "{} deferred attempt changes traced child program between phases",
-            case.tool
-        ));
-    }
     verify_tool_trace_invocations(
         trace,
         &trace_label,
-        trace_program,
         &expected_trace,
         &workspace.project,
         &workspace

@@ -1,0 +1,9 @@
+[build]
+rustflags = ["--cap-lints=allow"]
+
+[env]
+RUSTC = { value = "/velvet-glove-ambient-rustc-must-not-run", force = true }
+RUSTDOC = { value = "/velvet-glove-ambient-rustdoc-must-not-run", force = true }
+RUSTFLAGS = { value = "--cap-lints=allow", force = true }
+CARGO_TARGET_DIR = { value = "/velvet-glove-ambient-target-must-not-be-used", force = true }
+CLIPPY_CONF_DIR = { value = "/velvet-glove-ambient-clippy-config-must-not-be-used", force = true }

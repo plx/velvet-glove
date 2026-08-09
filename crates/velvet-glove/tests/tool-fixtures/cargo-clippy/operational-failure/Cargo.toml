@@ -1,0 +1,12 @@
+[package]
+name = "cargo-clippy-operational-failure"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "cargo-clippy-operational-failure"
+path = "src/main.rs"
+test = false
+bench = false
+
+[workspace]

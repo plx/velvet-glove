@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "cargo clippy changed src/example.rs, src/workspace_only.rs; re-read changed files before editing further."
+  }
+}

@@ -150,9 +150,11 @@ just tool-case astro multi-file-project
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case buf-format multi-file
+just tool-case cargo-clippy workspace-autofix
 
-# Twelve behavior-rich contracts across nine environments: jq data formats,
-# Buf data formats, Node, Python, Go, Rust, Ruby, security, and native macOS.
+# Thirteen behavior-rich contracts across ten environments: jq data formats,
+# Buf data formats, Node, Python, Go, Rust, Cargo Clippy, Ruby, security, and
+# native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -205,6 +207,17 @@ files, conservative candidate attribution, an untouched unselected sentinel,
 and clean idempotent repeats. Provenance, integrity, command, mutation, and
 security limitations are recorded in the
 [Biome contract](docs/pinned-tool-environments.md#biome-validation-contract).
+
+The dedicated Cargo Clippy lane pins the official Rust and Cargo 1.97.1
+distribution with Clippy 0.1.97. Its isolated adapter runs frozen read-only
+metadata and Clippy JSON checks, proves every physical workspace Rust source
+was compiled through fresh dependency information, and applies only validated
+non-overlapping `MachineApplicable` suggestions before the authoritative final
+check. The representative repairs one selected and one unselected compiled
+source while preserving a selected clean source, then proves exact workspace
+diffs and clean idempotent repeats. The deliberately narrow single-package,
+all-targets/all-features scope and execution/TOCTOU limitations are recorded in
+the [Cargo Clippy contract](docs/pinned-tool-environments.md#cargo-clippy-validation-contract).
 
 The security lane reproducibly builds Betterleaks
 `1.7.3+velvet-glove.1` from the checksum-pinned upstream v1.7.3 source and a

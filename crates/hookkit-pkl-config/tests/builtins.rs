@@ -676,45 +676,88 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
     assert_eq!(clippy.display_name, "cargo clippy");
     assert_eq!(clippy.executable, "cargo");
     assert_eq!(clippy.workspace_indicator.as_deref(), Some("Cargo.toml"));
+    assert_eq!(clippy.phase_invocation, InvocationGranularity::Workspace);
 
     let fix = clippy.phases.get("fix").expect("fix");
-    assert_argv(
-        fix,
-        vec![
-            literal("clippy"),
-            literal("--manifest-path"),
-            token(ArgToken::WorkspaceIndicator),
-            literal("--fix"),
-            literal("--allow-dirty"),
-            literal("--allow-staged"),
-            literal("--quiet"),
-            token(ArgToken::ExtraArgs),
-        ],
+    assert_eq!(fix.program.as_deref(), Some("python"));
+    assert_eq!(fix.argv.len(), 9);
+    assert_eq!(fix.argv[0], literal("-I"));
+    assert_eq!(fix.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &fix.argv[2] else {
+        panic!("cargo-clippy adapter must be a literal Python program")
+    };
+    for required in [
+        "class AdapterSignal(BaseException)",
+        "start_new_session=True",
+        "os.killpg(process.pid, signum)",
+        "combined output exceeded",
+        "cargo and cargo-clippy must resolve from one launcher directory",
+        "rustc, rustdoc, and clippy-driver must resolve from one toolchain directory",
+        "Cargo home configuration is unsupported",
+        "Cargo invocation-path configuration is unsupported",
+        "cannot initialize controlled Cargo execution",
+        "getattr(os, \"O_NOFOLLOW\", 0)",
+        "for key in (\"device\", \"inode\", \"mode\", \"size\", \"mtime\", \"sha256\")",
+        "CLIPPY_CONF_DIR",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "--format-version=1",
+        "--keep-going",
+        "--message-format=json",
+        "--cap-lints=allow",
+        "-Dwarnings",
+        "Cargo JSON has no unique terminal build-finished record",
+        "Cargo did not compile every physical workspace Rust source",
+        "rule_targets.isdisjoint(selected_artifact_filenames)",
+        "selected_dep_info_count",
+        "MachineApplicable",
+        "os.replace",
+        "rollback also failed",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "cargo-clippy adapter omits {required:?}"
+        );
+    }
+    assert!(!adapter.contains("\"--fix\""));
+    assert_eq!(fix.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(fix.argv[4], literal("cargo-clippy"));
+    assert_eq!(fix.argv[5], literal("fix"));
+    assert_eq!(fix.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(
+        fix.argv[7],
+        literal("__VELVET_GLOVE_CARGO_CLIPPY_WORKSPACE__")
     );
-    assert_exit_codes(&fix.exit_codes, &[0], &[101], &[]);
+    assert_eq!(fix.argv[8], token(ArgToken::WorkspaceIndicator));
+    assert_exit_codes(&fix.exit_codes, &[0], &[1], &[2]);
     assert_eq!(fix.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
-    assert_eq!(fix.writes, WriteBehavior::MatchingGlobs);
+    assert_eq!(fix.writes, WriteBehavior::Workspace);
 
     let verify = clippy.phases.get("verify").expect("verify");
-    assert_argv(
-        verify,
-        vec![
-            literal("clippy"),
-            literal("--manifest-path"),
-            token(ArgToken::WorkspaceIndicator),
-            literal("--quiet"),
-            token(ArgToken::ExtraArgs),
-        ],
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv.len(), 9);
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    assert_eq!(verify.argv[2], fix.argv[2]);
+    assert_eq!(verify.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[4], literal("cargo-clippy"));
+    assert_eq!(verify.argv[5], literal("verify"));
+    assert_eq!(verify.argv[6], token(ArgToken::ExtraArgs));
+    assert_eq!(
+        verify.argv[7],
+        literal("__VELVET_GLOVE_CARGO_CLIPPY_WORKSPACE__")
     );
-    assert_exit_codes(&verify.exit_codes, &[0], &[101], &[]);
+    assert_eq!(verify.argv[8], token(ArgToken::WorkspaceIndicator));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.writes, WriteBehavior::None);
 
     assert_eq!(
         clippy.messages.issues_agent,
-        "cargo clippy reports issues; inspect diagnostics at {{ diagnostics_path }}."
+        "cargo clippy reports validated Rust source issues; inspect diagnostics at {{ diagnostics_path }}."
     );
     assert_eq!(
         clippy.messages.issues_changed_agent,
-        "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
+        "cargo clippy applied validated suggestions to {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
     );
 }
 

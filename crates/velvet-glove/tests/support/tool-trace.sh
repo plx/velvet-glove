@@ -2,9 +2,22 @@
 set -eu
 
 : "${VELVET_GLOVE_TOOL_TRACE_DIR:?missing tool trace directory}"
-: "${VELVET_GLOVE_TOOL_REAL_PROGRAM:?missing real tool program}"
-: "${VELVET_GLOVE_TOOL_LOGICAL_PROGRAM:?missing logical tool program}"
 : "${VELVET_GLOVE_TOOL_TRACE_SENTINEL:?missing tool trace sentinel}"
+
+logical_program=${0##*/}
+real_program_file="$0.real-program"
+if [ ! -f "$real_program_file" ]; then
+  printf '%s\n' "missing real tool program binding: $real_program_file" >&2
+  exit 2
+fi
+IFS= read -r real_program <"$real_program_file"
+case $real_program in
+  /*) ;;
+  *)
+    printf '%s\n' "invalid real tool program binding: $real_program" >&2
+    exit 2
+    ;;
+esac
 
 invocations_dir="$VELVET_GLOVE_TOOL_TRACE_DIR/invocations"
 /bin/mkdir -p "$invocations_dir"
@@ -16,8 +29,8 @@ done
 record="$invocations_dir/$(printf '%04d' "$index")"
 
 printf '%s\n' "$0" >"$record/program"
-printf '%s\n' "$VELVET_GLOVE_TOOL_LOGICAL_PROGRAM" >"$record/logical-program"
-printf '%s\n' "$VELVET_GLOVE_TOOL_REAL_PROGRAM" >"$record/real-program"
+printf '%s\n' "$logical_program" >"$record/logical-program"
+printf '%s\n' "$real_program" >"$record/real-program"
 printf '%s\n' 'pass-through' >"$record/execution"
 pwd -P >"$record/cwd"
 printf '%s\n' "$#" >"$record/argc"
@@ -27,11 +40,12 @@ printf '%s\n' "${TZ-}" >"$record/env-TZ"
 printf '%s\n' "${NO_COLOR-}" >"$record/env-NO_COLOR"
 printf '%s\n' "${CLICOLOR-}" >"$record/env-CLICOLOR"
 printf '%s\n' "${FORCE_COLOR-}" >"$record/env-FORCE_COLOR"
+printf '%s\n' "${TERM-}" >"$record/env-TERM"
 printf '%s\n' "${NODE_PATH-}" >"$record/env-NODE_PATH"
 printf '%s\n' "${ASTRO_TELEMETRY_DISABLED-}" >"$record/env-ASTRO_TELEMETRY_DISABLED"
 printf '%s\n' "${CI-}" >"$record/env-CI"
 printf '%s\n' "${DEBUG-}" >"$record/env-DEBUG"
-if [ "$VELVET_GLOVE_TOOL_LOGICAL_PROGRAM" = buf ]; then
+if [ "$logical_program" = buf ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${HOME-}" >"$record/env-HOME"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
@@ -50,6 +64,93 @@ if [ "$VELVET_GLOVE_TOOL_LOGICAL_PROGRAM" = buf ]; then
   printf '%s\n' "${BUF_TESTING_PUBLIC_REGISTRY-}" >"$record/env-BUF_TESTING_PUBLIC_REGISTRY"
   printf '%s\n' "${BUF_TOKEN-}" >"$record/env-BUF_TOKEN"
   printf '%s\n' "${BUF_VELVET_GLOVE_POISON-}" >"$record/env-BUF_VELVET_GLOVE_POISON"
+fi
+if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ]; then
+  printf '%s\n' "${PATH-}" >"$record/env-PATH"
+  printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
+  printf '%s\n' "${DYLD_LIBRARY_PATH-}" >"$record/env-DYLD_LIBRARY_PATH"
+  printf '%s\n' "${DYLD_FALLBACK_LIBRARY_PATH-}" >"$record/env-DYLD_FALLBACK_LIBRARY_PATH"
+  printf '%s\n' "${DYLD_FALLBACK_FRAMEWORK_PATH-}" >"$record/env-DYLD_FALLBACK_FRAMEWORK_PATH"
+  printf '%s\n' "${DYLD_FRAMEWORK_PATH-}" >"$record/env-DYLD_FRAMEWORK_PATH"
+  printf '%s\n' "${DYLD_INSERT_LIBRARIES-}" >"$record/env-DYLD_INSERT_LIBRARIES"
+  printf '%s\n' "${DYLD_PRINT_LIBRARIES-}" >"$record/env-DYLD_PRINT_LIBRARIES"
+  printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
+  printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
+  printf '%s\n' "${CARGO-}" >"$record/env-CARGO"
+  printf '%s\n' "${RUSTC-}" >"$record/env-RUSTC"
+  printf '%s\n' "${RUSTDOC-}" >"$record/env-RUSTDOC"
+  printf '%s\n' "${CARGO_HOME-}" >"$record/env-CARGO_HOME"
+  printf '%s\n' "${CARGO_TARGET_DIR-}" >"$record/env-CARGO_TARGET_DIR"
+  if [ -L "${CARGO_TARGET_DIR-}" ]; then
+    printf '%s\n' symlink >"$record/env-CARGO_TARGET_DIR-kind"
+  elif [ -d "${CARGO_TARGET_DIR-}" ]; then
+    printf '%s\n' directory >"$record/env-CARGO_TARGET_DIR-kind"
+  else
+    printf '%s\n' missing >"$record/env-CARGO_TARGET_DIR-kind"
+  fi
+  printf '%s\n' "${CARGO_NET_OFFLINE-}" >"$record/env-CARGO_NET_OFFLINE"
+  printf '%s\n' "${CARGO_BUILD_JOBS-}" >"$record/env-CARGO_BUILD_JOBS"
+  printf '%s\n' "${CARGO_TERM_COLOR-}" >"$record/env-CARGO_TERM_COLOR"
+  printf '%s\n' "${CARGO_ENCODED_RUSTFLAGS-}" >"$record/env-CARGO_ENCODED_RUSTFLAGS"
+  printf '%s\n' "${RUSTFLAGS-}" >"$record/env-RUSTFLAGS"
+  printf '%s\n' "${RUSTC_WRAPPER-}" >"$record/env-RUSTC_WRAPPER"
+  printf '%s\n' "${RUSTC_WORKSPACE_WRAPPER-}" >"$record/env-RUSTC_WORKSPACE_WRAPPER"
+  printf '%s\n' "${CLIPPY_CONF_DIR-}" >"$record/env-CLIPPY_CONF_DIR"
+  if [ -L "${CLIPPY_CONF_DIR-}" ]; then
+    printf '%s\n' symlink >"$record/env-CLIPPY_CONF_DIR-kind"
+  elif [ -d "${CLIPPY_CONF_DIR-}" ]; then
+    printf '%s\n' directory >"$record/env-CLIPPY_CONF_DIR-kind"
+  else
+    printf '%s\n' missing >"$record/env-CLIPPY_CONF_DIR-kind"
+  fi
+  if [ -L "${CLIPPY_CONF_DIR-}/clippy.toml" ]; then
+    printf '%s\n' symlink >"$record/env-CLIPPY_CONF_DIR-clippy-toml-kind"
+  elif [ -f "${CLIPPY_CONF_DIR-}/clippy.toml" ]; then
+    if [ -s "${CLIPPY_CONF_DIR-}/clippy.toml" ]; then
+      printf '%s\n' nonempty-file >"$record/env-CLIPPY_CONF_DIR-clippy-toml-kind"
+    else
+      printf '%s\n' empty-file >"$record/env-CLIPPY_CONF_DIR-clippy-toml-kind"
+    fi
+  else
+    printf '%s\n' missing >"$record/env-CLIPPY_CONF_DIR-clippy-toml-kind"
+  fi
+  if [ -L "${CLIPPY_CONF_DIR-}/.clippy.toml" ]; then
+    printf '%s\n' symlink >"$record/env-CLIPPY_CONF_DIR-dot-clippy-toml-kind"
+  elif [ -f "${CLIPPY_CONF_DIR-}/.clippy.toml" ]; then
+    printf '%s\n' file >"$record/env-CLIPPY_CONF_DIR-dot-clippy-toml-kind"
+  else
+    printf '%s\n' missing >"$record/env-CLIPPY_CONF_DIR-dot-clippy-toml-kind"
+  fi
+  printf '%s\n' "${CARGO_BUILD_RUSTC-}" >"$record/env-CARGO_BUILD_RUSTC"
+  printf '%s\n' "${CARGO_BUILD_RUSTC_WRAPPER-}" >"$record/env-CARGO_BUILD_RUSTC_WRAPPER"
+  printf '%s\n' "${CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER-}" >"$record/env-CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
+  printf '%s\n' "${CARGO_BUILD_RUSTDOC-}" >"$record/env-CARGO_BUILD_RUSTDOC"
+  printf '%s\n' "${CARGO_BUILD_TARGET-}" >"$record/env-CARGO_BUILD_TARGET"
+  printf '%s\n' "${CARGO_ENCODED_RUSTDOCFLAGS-}" >"$record/env-CARGO_ENCODED_RUSTDOCFLAGS"
+  printf '%s\n' "${CARGO_INCREMENTAL-}" >"$record/env-CARGO_INCREMENTAL"
+  printf '%s\n' "${CARGO_PROFILE_DEV_DEBUG-}" >"$record/env-CARGO_PROFILE_DEV_DEBUG"
+  printf '%s\n' "${CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS-}" >"$record/env-CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS"
+  printf '%s\n' "${CLIPPY_ARGS-}" >"$record/env-CLIPPY_ARGS"
+  printf '%s\n' "${CLIPPY_DISABLE_DOCS_LINKS-}" >"$record/env-CLIPPY_DISABLE_DOCS_LINKS"
+  printf '%s\n' "${CLIPPY_DRIVER_DISABLE_DOCS_LINKS-}" >"$record/env-CLIPPY_DRIVER_DISABLE_DOCS_LINKS"
+  printf '%s\n' "${CLIPPY_TERMINAL_WIDTH-}" >"$record/env-CLIPPY_TERMINAL_WIDTH"
+  printf '%s\n' "${RUSTC_BOOTSTRAP-}" >"$record/env-RUSTC_BOOTSTRAP"
+  printf '%s\n' "${RUSTDOCFLAGS-}" >"$record/env-RUSTDOCFLAGS"
+  printf '%s\n' "${RUSTUP_TOOLCHAIN-}" >"$record/env-RUSTUP_TOOLCHAIN"
+  printf '%s\n' "${SCCACHE_CACHE_SIZE-}" >"$record/env-SCCACHE_CACHE_SIZE"
+  printf '%s\n' "${SCCACHE_DIR-}" >"$record/env-SCCACHE_DIR"
+  printf '%s\n' "${SCCACHE_ENDPOINT-}" >"$record/env-SCCACHE_ENDPOINT"
+  printf '%s\n' "${SCCACHE_ERROR_LOG-}" >"$record/env-SCCACHE_ERROR_LOG"
+  printf '%s\n' "${SCCACHE_LOG-}" >"$record/env-SCCACHE_LOG"
+  printf '%s\n' "${CCACHE_CONFIGPATH-}" >"$record/env-CCACHE_CONFIGPATH"
+  printf '%s\n' "${CCACHE_DIR-}" >"$record/env-CCACHE_DIR"
+  printf '%s\n' "${CCACHE_PREFIX-}" >"$record/env-CCACHE_PREFIX"
+  printf '%s\n' "${CARGO_VELVET_GLOVE_POISON-}" >"$record/env-CARGO_VELVET_GLOVE_POISON"
+  printf '%s\n' "${RUST_VELVET_GLOVE_POISON-}" >"$record/env-RUST_VELVET_GLOVE_POISON"
+  printf '%s\n' "${CLIPPY_VELVET_GLOVE_POISON-}" >"$record/env-CLIPPY_VELVET_GLOVE_POISON"
+  printf '%s\n' "${SCCACHE_VELVET_GLOVE_POISON-}" >"$record/env-SCCACHE_VELVET_GLOVE_POISON"
+  printf '%s\n' "${CCACHE_VELVET_GLOVE_POISON-}" >"$record/env-CCACHE_VELVET_GLOVE_POISON"
+  printf '%s\n' "${SYSROOT-}" >"$record/env-SYSROOT"
 fi
 printf '%s\n' "${BETTERLEAKS_CONFIG-}" >"$record/env-BETTERLEAKS_CONFIG"
 printf '%s\n' "${BETTERLEAKS_CONFIG_TOML-}" >"$record/env-BETTERLEAKS_CONFIG_TOML"
@@ -77,7 +178,7 @@ for argument in "$@"; do
 done
 
 set +e
-"$VELVET_GLOVE_TOOL_REAL_PROGRAM" "$@"
+"$real_program" "$@"
 status=$?
 set -e
 printf '%s\n' "$status" >"$record/status"
