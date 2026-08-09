@@ -13968,6 +13968,12 @@ if [ -f mode-malformed-private-log ]; then
   printf 'Jan  1 00:00:00.000 ERR unrecognized private failure config_file=%s\n' "$config" >&2
   exit 1
 fi
+if [ -f mode-output-cap ]; then
+  if [ -n "${VELVET_GLOVE_TOOL_TRACE_DIR-}" ]; then
+    printf '%s\n' "$$" > "$VELVET_GLOVE_TOOL_TRACE_DIR/leader.pid"
+  fi
+  exec /usr/bin/yes ghalint-current-output
+fi
 if [ -f mode-mutate ]; then
   printf '%s\n' '# changed' >> .github/workflows/example.yml
   exit 0
@@ -14569,34 +14575,137 @@ exit 0
                     &adapter_tmp,
                 );
                 descendant_command.env("VELVET_GLOVE_TOOL_TRACE_DIR", &trace);
-                let descendant = run_with_timeout(
+                let descendant_result = run_with_timeout(
                     &mut descendant_command,
                     &[],
                     timeout.min(Duration::from_secs(10)),
                     &root.join("captures").join(label),
-                )
-                .map_err(|error| format!("ghalint lifecycle {label}: {error}"))?;
-                assert_status(label, &descendant, 2)?;
-                let descendant_pid =
-                    read_pid_file(&trace.join("descendant.pid"), "ghalint descendant")?;
+                );
+                let descendant = match descendant_result {
+                    Ok(output) => output,
+                    Err(error) => {
+                        if let Ok(leader) =
+                            read_pid_file(&trace.join("leader.pid"), "ghalint leader")
+                        {
+                            let _ = signal_process_group(leader, "KILL");
+                        }
+                        return Err(format!("ghalint lifecycle {label}: {error}"));
+                    }
+                };
                 let leader_pid = read_pid_file(&trace.join("leader.pid"), "ghalint leader")?;
-                let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
-                let group_alive = process_group_survives(leader_pid, Duration::from_secs(1))?;
-                if descendant_alive || group_alive {
+                let verification = (|| {
+                    assert_status(label, &descendant, 2)?;
+                    let descendant_pid =
+                        read_pid_file(&trace.join("descendant.pid"), "ghalint descendant")?;
+                    let descendant_alive =
+                        process_survives(descendant_pid, Duration::from_secs(1))?;
+                    let group_alive = process_group_survives(leader_pid, Duration::from_secs(1))?;
+                    if !String::from_utf8_lossy(&descendant.stderr)
+                        .contains("same-group descendant")
+                        || !descendant.stdout.is_empty()
+                        || descendant_alive
+                        || group_alive
+                    {
+                        return Err(format!(
+                            "ghalint {label} was not bounded and swept: descendant={descendant_pid}:{descendant_alive}; group={leader_pid}:{group_alive}; stdout={:?}; stderr={:?}",
+                            String::from_utf8_lossy(&descendant.stdout),
+                            String::from_utf8_lossy(&descendant.stderr),
+                        ));
+                    }
+                    Ok(())
+                })();
+                if verification.is_err() {
                     let _ = signal_process_group(leader_pid, "KILL");
                 }
-                if !String::from_utf8_lossy(&descendant.stderr).contains("same-group descendant")
-                    || !descendant.stdout.is_empty()
-                    || descendant_alive
+                verification?;
+            }
+
+            const OUTPUT_LIMIT_ANCHOR: &str = "MAX_OUTPUT_BYTES = 16 * 1024 * 1024\n";
+            const SURVIVOR_CONFIRMATION_ANCHOR: &str = concat!(
+                "                if process_group_exists(group):\n",
+                "                    failures.append(\"ghalint child process group survived SIGKILL\")\n",
+            );
+            if adapter.matches(OUTPUT_LIMIT_ANCHOR).count() != 1
+                || adapter.matches(SURVIVOR_CONFIRMATION_ANCHOR).count() != 1
+            {
+                return Err(
+                    "ghalint output/cleanup composition probe lost its exact anchors".to_owned(),
+                );
+            }
+            let output_adapter = adapter
+                .replacen(OUTPUT_LIMIT_ANCHOR, "MAX_OUTPUT_BYTES = 1024\n", 1)
+                .replacen(
+                    SURVIVOR_CONFIRMATION_ANCHOR,
+                    concat!(
+                        "                if True:\n",
+                        "                    failures.append(\"ghalint child process group survived SIGKILL\")\n",
+                    ),
+                    1,
+                );
+            let (output_project, output_workflow) = create_case("output-cap", "output-cap", true)?;
+            let output_trace = root.join("output-cap-trace");
+            std::fs::create_dir(&output_trace)
+                .map_err(|error| format!("create ghalint output-cap trace: {error}"))?;
+            let mut output_command = adapter_command(
+                &output_adapter,
+                &output_project,
+                &output_workflow,
+                &adapter_tmp,
+            );
+            output_command.env("VELVET_GLOVE_TOOL_TRACE_DIR", &output_trace);
+            let output_result = run_with_timeout(
+                &mut output_command,
+                &[],
+                timeout.min(Duration::from_secs(10)),
+                &root.join("captures/output-cap"),
+            );
+            let output = match output_result {
+                Ok(output) => output,
+                Err(error) => {
+                    if let Ok(leader) = read_pid_file(
+                        &output_trace.join("leader.pid"),
+                        "ghalint output-cap leader",
+                    ) {
+                        let _ = signal_process_group(leader, "KILL");
+                    }
+                    return Err(format!("ghalint lifecycle output-cap: {error}"));
+                }
+            };
+            let output_leader = read_pid_file(
+                &output_trace.join("leader.pid"),
+                "ghalint output-cap leader",
+            )?;
+            let output_verification = (|| {
+                let child_alive = process_survives(output_leader, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(output_leader, Duration::from_secs(1))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || child_alive
                     || group_alive
+                    || !stderr.contains("combined ghalint output exceeds 1024 bytes")
+                    || !stderr.contains(
+                        "child cleanup failed: ghalint child process group survived SIGKILL",
+                    )
+                    || stderr.contains("ghalint version 1.5.6+velvet-glove.1")
+                    || stderr.contains("ghalint-current-output")
+                    || stderr.matches("velvet-glove-ghalint-workflow:").count() != 1
+                    || stderr.lines().count() != 1
+                    || !private_roots(&adapter_tmp)?.is_empty()
                 {
                     return Err(format!(
-                        "ghalint {label} was not bounded and swept: descendant={descendant_pid}:{descendant_alive}; group={leader_pid}:{group_alive}; stdout={:?}; stderr={:?}",
-                        String::from_utf8_lossy(&descendant.stdout),
-                        String::from_utf8_lossy(&descendant.stderr),
+                        "ghalint output-cap cleanup did not compose or emitted stale output: status={:?}; leader={output_leader}:{child_alive}; group={group_alive}; roots={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        private_roots(&adapter_tmp)?,
+                        String::from_utf8_lossy(&output.stdout),
                     ));
                 }
+                Ok(())
+            })();
+            if output_verification.is_err() {
+                let _ = signal_process_group(output_leader, "KILL");
             }
+            output_verification?;
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(root);
