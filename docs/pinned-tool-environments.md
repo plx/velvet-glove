@@ -1,13 +1,14 @@
 # Pinned tool environments
 
 The pinned real-tool lane provisions and runs one exact fixture contract with a
-single command:
+single command. For example:
 
 ```sh
 just tool-case jq multi-file-fragments
+just tool-case betterleaks multi-file
 ```
 
-Run all nine behavior-rich representative contracts across seven environments
+Run all ten behavior-rich representative contracts across eight environments
 with:
 
 ```sh
@@ -27,8 +28,8 @@ and are checked against the builtin validation manifest and fixture inventory.
 Provisioning and case execution are deliberately separate phases. Provisioning
 may use the network to fetch only locked artifacts and dependency graphs. The
 case phase starts from `env -i`, uses a neutral system-temporary `HOME` (outside
-the checkout and user directory), isolated XDG, mise,
-Cargo (including its target directory), npm, pip, and Bundler state, and
+the checkout and user directory), isolated XDG, mise, Cargo (including its
+target directory), Go module and build caches, npm, pip, and Bundler state, and
 constructs `PATH` from controlled roots plus explicitly declared macOS host
 shims.
 The fixture harness passes an explicit generated `--config`, so neither legacy
@@ -40,11 +41,13 @@ Before a case runs, the driver:
    required version, and the declared compiler, Xcode, and SDK minimum probes
    pass;
 2. installs only the selected mise-managed tools in `--locked` mode and verifies
-   every directly managed Rust or Ruby archive against its committed SHA-256;
-3. bootstraps Cargo, npm, Python-wheel, and pure-Ruby Bundler graphs from their
-   committed locks as applicable; Cargo runs from `/` with an explicit manifest
-   and controlled target root so ancestor `.cargo` files and host build caches
-   cannot participate;
+   every directly managed Rust or Ruby archive, and every Betterleaks source,
+   patch, module-lock, and build-artifact digest, against committed values;
+3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, and Betterleaks Go
+   module graphs from their committed locks as applicable; Cargo runs from `/`
+   with an explicit manifest and controlled target root so ancestor `.cargo`
+   files and host build caches cannot participate, while the patched Betterleaks
+   build verifies modules and compiles with the network denied;
 4. checks every declared executable resolves inside a controlled tool/state
    root or to an exact declared macOS host shim;
 5. runs every shared, runtime, and tool version probe and rejects a mismatch;
@@ -58,15 +61,20 @@ network-denial probe, or fixture contract differs from the declaration.
 
 ## Locked representatives
 
+<!-- markdownlint-disable MD013 -->
+
 | Environment | Runtime/tool | Integrity source | Representative |
 | --- | --- | --- | --- |
 | Data formats | jq 1.8.2 | SHA-256 + SLSA | `jq/multi-file-fragments` |
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `sort-package-json/unformatted` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
-| Go | Go/gofmt 1.26.3 | mise SHA-256 | `go-fmt/unformatted` |
+| Go | Go/gofmt 1.26.5 | mise SHA-256 | `go-fmt/unformatted` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
+| Security | Go 1.26.5; Betterleaks 1.7.3+velvet-glove.1 | mise SHA-256; source, patch, module closure, and built-artifact SHA-256 | `betterleaks/multi-file` |
 | native macOS | SwiftLint 0.65.0 | mise SHA-256 | `swiftlint/manual-issue` |
+
+<!-- markdownlint-enable MD013 -->
 
 ### jq validation contract
 
@@ -103,6 +111,125 @@ The representative selector exercises the cross-file regression. Full jq
 coverage additionally runs `clean`, `invalid`, and `operational-failure`; each
 case covers both Claude and Codex immediate hooks and the
 compatibility-translated deferred lifecycle.
+
+### Betterleaks validation contract
+
+The security environment starts from the upstream Betterleaks
+[`v1.7.3` source archive](https://github.com/betterleaks/betterleaks/archive/refs/tags/v1.7.3.tar.gz),
+whose tag resolves to commit
+[`82b306a9d338121a6fd087002a94e5c7ab685355`](https://github.com/betterleaks/betterleaks/commit/82b306a9d338121a6fd087002a94e5c7ab685355).
+The source archive is pinned at SHA-256
+`7359ae820c62c276d31cef3d1431eb8beb6db07d5c44830bad03dbe9c0cf3850`.
+Betterleaks is MIT-licensed. GitHub marks the tag commit as verified, but the
+upstream Sigstore bundle authenticates the official release binaries rather
+than GitHub's generated source archive or this downstream binary. This lane's
+trust chain is therefore the tag-archive checksum, tag-to-commit identity,
+checked patch and module checksums, locked compiler, and reproducible output
+checksum. Redistributing the downstream binary would additionally require its
+own attestation and complete third-party notices.
+Velvet Glove applies the committed `closure.patch`, pinned at SHA-256
+`2d57aa396d9c7f0337cf13c05fa06f661099035cb5f753a12e79ca2f46a38147`,
+to update `github.com/klauspost/compress` to 1.18.7 and
+`golang.org/x/text` to 0.39.0. The resulting `go.mod` and `go.sum` are pinned at
+SHA-256
+`a669cc877c8dac1c9f3927b57e246902b81bc37665147e4a2d301104f534819e`
+and
+`359a55b2abc25a4fa290093fed6bc6d7d3d2923906e4c77cf4d786581a61a38d`,
+respectively.
+
+The patched source is reproducibly compiled with the official Go 1.26.5
+`go1.26.5.darwin-arm64.tar.gz` archive, locked by mise at SHA-256
+`efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a`.
+The build uses the local toolchain, read-only module mode, `CGO_ENABLED=0`,
+`GOOS=darwin`, `GOARCH=arm64`, `-trimpath`, no VCS metadata, and an empty build
+ID. Module download is the only network-enabled build step; module verification
+and compilation run with active network denial and the proxy disabled. The
+resulting binary is pinned at
+SHA-256
+`046177cad9aa9f924fe57adca4a1a8c54d0ad74ceed593147b127f5a486f8144`
+and has the exact probe output
+`betterleaks version 1.7.3+velvet-glove.1`.
+
+The evaluated outer phase is:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> betterleaks {extra-args} __VELVET_GLOVE_BETTERLEAKS_FILES__ {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Isolated Python mode prevents project-local modules, user site packages, and
+ambient Python path configuration from replacing the adapter's standard-library
+imports. The pinned lane supplies Python 3.14.5 as the `python` executable;
+other installations must provide an interpreter with `-I` support. The marker
+then gives the adapter an unambiguous boundary between
+configured arguments and selected paths. It preflights that every selected
+path is a readable regular file and not a symlink, then launches exactly one
+nested batch:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+betterleaks dir {extra-args} --redact=100 --verbose=true --no-color=true --no-banner=true --exit-code=10 --log-level=fatal --legacy-print=true {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+For handled hangup, interrupt, and termination signals, the adapter forwards
+the signal to the native child. If that child does not exit within one second,
+the adapter sends `KILL` and attempts a bounded reap before returning failure.
+
+Complete redaction prevents source secrets from entering diagnostics. Fatal
+logging suppresses elapsed-time summaries, while verbose legacy output retains
+stable file, rule, and line evidence. The adapter accepts configured arguments
+only in non-controlled long `--name=value` form. It rejects positional and short
+arguments, the `--` separator, help/version exits, and options that could change
+redaction, verbosity, color, banners, finding status, log level, legacy output,
+baselines, reports, diagnostics, or validation. Fixed controls are appended
+after allowed arguments as a second guard.
+
+Before launch, the adapter removes `BETTERLEAKS_CONFIG`,
+`BETTERLEAKS_CONFIG_TOML`, `GITLEAKS_CONFIG`, and `GITLEAKS_CONFIG_TOML` from
+the child environment. Policy-sensitive cases pass
+`--config=.betterleaks.toml` explicitly. This matters because a scan over
+regular-file targets does not implicitly discover a project Betterleaks or
+Gitleaks config; without an explicit option, Betterleaks uses its embedded
+default policy.
+
+Status zero means clean and the locked status 10 means findings. Statuses one,
+two, and 126 cover Betterleaks configuration/process failures, adapter or spawn
+failures, and unknown CLI options; every other status also fails closed as an
+operational problem. The four cases cover a clean file, a stable fully redacted
+finding, one mixed clean/finding two-file batch, and a missing explicit-config
+failure whose native status one must remain operational rather than a finding.
+The adapter narrowly canonicalizes only Betterleaks' leading console clock on
+fatal diagnostics before Velvet Glove stores them. Immediate execution and the
+compatibility-translated deferred lifecycle each run twice and prove that source
+and configuration inputs are unchanged; only the expected hook diagnostic
+artifact may be added.
+
+The batch result is conservatively attributed to every selected candidate,
+even when legacy diagnostics name the file containing a finding. The regular,
+readable, nonsymlink check is a launch-time preflight rather than a filesystem
+capability: another process could replace a path before Betterleaks opens it.
+The adapter also controls config discovery and argument shape, but does not
+validate the contents or confine the filesystem reach of an explicitly supplied
+config; parse, read, and semantic config failures are left to Betterleaks and
+classified as operational. These TOCTOU and config boundaries are recorded
+limitations, not sandbox guarantees.
+
+A `govulncheck` 1.6.0 source-mode symbol scan of this Go 1.26.5 build, using the
+database modified 2026-07-27, reports no reachable package or symbol findings.
+It retains the module-level
+[`GO-2026-5932`](https://pkg.go.dev/vuln/GO-2026-5932) advisory because the
+transitive graph contains `golang.org/x/crypto` 0.53.0, but the source
+dependency graph does not import the affected `golang.org/x/crypto/openpgp`
+packages. Binary mode reports only the same advisory through coarse
+module-derived package and symbol matches; those matches do not establish
+call-graph reachability. This is a recorded scanner limitation, not a claim that
+the pinned artifact is exempt from future vulnerability-database changes.
 
 ### Astro validation contract
 
@@ -247,35 +374,38 @@ The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
 recipe registry. Node, Python, and Ruby package closures live beside it under
-`node/`, `python/`, and `ruby/`. Runtime components, auxiliary programs,
-bootstrap commands, platform, architecture, minimum OS, and case-network policy
-are schema-checked there as well. The current macOS 26 floor is dictated by the
-official native Pkl 0.31.1 asset shared by the lane; the Rust and Ruby archives
-themselves support earlier macOS releases. The Apple compiler and SDK are
-host-supplied prerequisites because Apple does not distribute them as portable
-redistributable archives; their paths and minimum-version probes are declared
-and recorded alongside the checksum-pinned closure.
+`node/`, `python/`, and `ruby/`; the Betterleaks dependency closure and patch
+live under `betterleaks/`. Runtime components, auxiliary programs, bootstrap
+commands, platform, architecture, minimum OS, and case-network policy are
+schema-checked there as well. The current macOS 26 floor is dictated by the
+official native Pkl 0.31.1 asset shared by the lane; the Rust, Ruby, and built
+Betterleaks artifacts themselves support earlier macOS releases. The Apple
+compiler and SDK are host-supplied prerequisites because Apple does not
+distribute them as portable redistributable archives; their paths and
+minimum-version probes are declared and recorded alongside the checksum-pinned
+closure.
 
 Successful runs write `target/pinned-tool-environments/artifacts/` by default.
 `pinned-environment.json` records the selected recipe IDs, lock digest, host
 OS/architecture and constraint, observed versions, resolved executable paths,
-direct-archive and selected dependency-lock digests, sandbox backend, active
-network-denial result, and outcome. The fixture harness writes its stable
-surface-level report to `artifacts/fixtures/report.json`; the environment record
-binds that report by SHA-256, while timestamped report copies preserve run
-history. Successful fully instrumented contract runs also retain their exact
-invocation traces, workspace snapshots and diffs, diagnostic artifacts, and
-repeated deferred summaries below the tool's `artifacts/fixtures/` directory.
+direct-archive, source-build input/output, and selected dependency-lock digests,
+sandbox backend, active network-denial result, and outcome. The fixture harness
+writes its stable surface-level report to `artifacts/fixtures/report.json`; the
+environment record binds that report by SHA-256, while timestamped report copies
+preserve run history. Successful fully instrumented contract runs also retain
+their exact invocation traces, workspace snapshots and diffs, diagnostic
+artifacts, and repeated deferred summaries below the tool's
+`artifacts/fixtures/` directory.
 Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These nine smoke contracts establish the reproducible environment substrate;
+These ten smoke contracts establish the reproducible environment substrate;
 they do not by themselves promote a tool's full pinned-real-tool coverage tier.
 The generated coverage report retains gaps until every required target, surface,
-and semantic case has evidence; jq, Astro, and Asciidoctor are covered only
-after each complete four-case matrix passes. Linux, Intel, and full-catalog
-scheduling remain separate follow-up work.
+and semantic case has evidence; jq, Betterleaks, Astro, and Asciidoctor are
+covered only after each complete four-case matrix passes. Linux, Intel, and
+full-catalog scheduling remain separate follow-up work.
 
 ## Updating a pin
 

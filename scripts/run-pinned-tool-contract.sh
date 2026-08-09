@@ -66,6 +66,7 @@ artifact_dir=$(CDPATH='' cd -- "$artifact_dir" && pwd -P)
 run_home=$(mktemp -d "/private/tmp/velvet-glove-pinned.XXXXXX")
 rust_extract_dir=
 ruby_extract_dir=
+betterleaks_build_dir=
 cleanup() {
   case $run_home in
     /private/tmp/velvet-glove-pinned.*) rm -rf -- "$run_home" ;;
@@ -75,6 +76,9 @@ cleanup() {
   esac
   case $ruby_extract_dir in
     "$state_dir"/ruby-extract.*) rm -rf -- "$ruby_extract_dir" ;;
+  esac
+  case $betterleaks_build_dir in
+    "$state_dir"/betterleaks-build-1.7.3-vg1) rm -rf -- "$betterleaks_build_dir" ;;
   esac
 }
 trap cleanup EXIT INT TERM
@@ -170,7 +174,7 @@ fetch_component_archive() {
   esac
   component=$("$jq_bin" -ce --arg id "$component_id" '
     first((.sharedComponents + [.environments[].components[]])[] | select(.id == $id))
-    | select(.integrity.kind == "sha256-archive")' "$registry")
+    | select(.integrity.kind == "sha256-archive" or .integrity.kind == "go-source-build")' "$registry")
   url=$(printf '%s\n' "$component" | "$jq_bin" -r '.integrity.url')
   expected_sha256=$(printf '%s\n' "$component" | "$jq_bin" -r '.integrity.sha256')
   archive_format=$(printf '%s\n' "$component" | "$jq_bin" -r '.integrity.archiveFormat')
@@ -405,6 +409,158 @@ if needs_group python; then
     --require-hashes \
     --only-binary=:all: \
     --requirement "$provisioning_dir/python/requirements-macos-arm64.txt"
+fi
+
+if needs_group security; then
+  betterleaks_archive=$(fetch_component_archive betterleaks)
+  betterleaks_root="$state_dir/betterleaks-1.7.3-vg1"
+  betterleaks_identity=$(component_integrity_json betterleaks)
+  betterleaks_binary="$betterleaks_root/bin/betterleaks"
+  betterleaks_expected_sha256=$(printf '%s\n' "$betterleaks_identity" | \
+    "$jq_bin" -r '.integrity.builtArtifactSha256')
+  if [[ -e $betterleaks_root && ! -d $betterleaks_root ]]; then
+    echo "error: controlled Betterleaks root is not a directory: $betterleaks_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $betterleaks_root ]]; then
+    echo "==> Building the checksum-locked Betterleaks source closure"
+    betterleaks_build_dir="$state_dir/betterleaks-build-1.7.3-vg1"
+    if [[ -e $betterleaks_build_dir ]]; then
+      echo "warning: removing stale transactional Betterleaks build directory" >&2
+      rm -rf -- "$betterleaks_build_dir"
+    fi
+    betterleaks_staging_root="$betterleaks_build_dir/install"
+    betterleaks_staging_binary="$betterleaks_staging_root/bin/betterleaks"
+    mkdir -p "$betterleaks_build_dir" "$betterleaks_staging_root/bin"
+    /usr/bin/tar -xf "$betterleaks_archive" -C "$betterleaks_build_dir"
+    betterleaks_archive_root=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.archiveRoot')
+    betterleaks_source="$betterleaks_build_dir/source"
+    mv "$betterleaks_build_dir/$betterleaks_archive_root" "$betterleaks_source"
+
+    betterleaks_manifest_path=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.moduleManifestPath')
+    betterleaks_lock_path=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.moduleLockPath')
+    betterleaks_manifest_sha256=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.moduleManifestSha256')
+    betterleaks_lock_sha256=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.moduleLockSha256')
+    betterleaks_patch_path=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.path')
+    betterleaks_patch_sha256=$(printf '%s\n' "$betterleaks_identity" | \
+      "$jq_bin" -r '.integrity.patchSha256')
+    read -r observed_betterleaks_patch_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$repository_root/$betterleaks_patch_path"
+    )
+    if [[ $observed_betterleaks_patch_sha256 != "$betterleaks_patch_sha256" ]]; then
+      echo "error: Betterleaks closure patch checksum mismatch" >&2
+      exit 1
+    fi
+    env -i "${provisioning_env[@]}" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      /usr/bin/patch \
+        -d "$betterleaks_source" \
+        -p1 \
+        -i "$repository_root/$betterleaks_patch_path"
+    read -r observed_betterleaks_manifest_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$betterleaks_source/go.mod"
+    )
+    read -r observed_betterleaks_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$betterleaks_source/go.sum"
+    )
+    if [[ $observed_betterleaks_manifest_sha256 != "$betterleaks_manifest_sha256" || \
+      $observed_betterleaks_lock_sha256 != "$betterleaks_lock_sha256" ]]; then
+      echo "error: Betterleaks patched module closure checksum mismatch" >&2
+      exit 1
+    fi
+    if ! /usr/bin/cmp -s "$repository_root/$betterleaks_manifest_path" "$betterleaks_source/go.mod" || \
+      ! /usr/bin/cmp -s "$repository_root/$betterleaks_lock_path" "$betterleaks_source/go.sum"; then
+      echo "error: Betterleaks applied closure differs from the checked module inputs" >&2
+      exit 1
+    fi
+
+    go_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where go@1.26.5)
+    go_bin="$go_root/bin/go"
+    case $go_bin in
+      "$state_dir"/*) ;;
+      *)
+        echo "error: pinned Go resolved outside the controlled state: $go_bin" >&2
+        exit 1
+        ;;
+    esac
+    if [[ ! -x $go_bin ]]; then
+      echo "error: pinned Go executable is unavailable: $go_bin" >&2
+      exit 1
+    fi
+    mkdir -p "$state_dir/betterleaks-go-mod-cache" "$state_dir/betterleaks-go-build-cache"
+    betterleaks_go_env=(
+      "${provisioning_env[@]}"
+      "PATH=$go_root/bin:/usr/bin:/bin"
+      "GOTOOLCHAIN=local"
+      "GOFLAGS=-mod=readonly"
+      "CGO_ENABLED=0"
+      "GOOS=darwin"
+      "GOARCH=arm64"
+      "SOURCE_DATE_EPOCH=1785516069"
+      "GOMODCACHE=$state_dir/betterleaks-go-mod-cache"
+      "GOCACHE=$state_dir/betterleaks-go-build-cache"
+    )
+    env -i "${betterleaks_go_env[@]}" \
+      "GOPROXY=https://proxy.golang.org" \
+      "GOSUMDB=sum.golang.org" \
+      "$go_bin" -C "$betterleaks_source" mod download all
+    env -i "${betterleaks_go_env[@]}" \
+      "GOPROXY=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$go_bin" -C "$betterleaks_source" mod verify
+    env -i "${betterleaks_go_env[@]}" \
+      "GOPROXY=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$go_bin" -C "$betterleaks_source" build \
+          -trimpath \
+          -buildvcs=false \
+          -ldflags '-s -w -buildid= -X=github.com/betterleaks/betterleaks/version.Version=1.7.3+velvet-glove.1' \
+          -o "$betterleaks_staging_binary" \
+          .
+    read -r observed_betterleaks_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$betterleaks_staging_binary"
+    )
+    if [[ $observed_betterleaks_sha256 != "$betterleaks_expected_sha256" ]]; then
+      echo "error: reproducible Betterleaks artifact checksum mismatch" >&2
+      exit 1
+    fi
+    betterleaks_build_metadata=$(
+      env -i "${betterleaks_go_env[@]}" "$go_bin" version -m "$betterleaks_staging_binary"
+    )
+    betterleaks_build_metadata_first_line=${betterleaks_build_metadata%%$'\n'*}
+    if [[ $betterleaks_build_metadata_first_line != *': go1.26.5' || \
+      $betterleaks_build_metadata != *$'\tdep\tgithub.com/klauspost/compress\tv1.18.7'* || \
+      $betterleaks_build_metadata != *$'\tdep\tgolang.org/x/text\tv0.39.0'* ]]; then
+      echo "error: Betterleaks binary module metadata does not match the declared closure" >&2
+      exit 1
+    fi
+    printf '%s\n' "$betterleaks_identity" >"$betterleaks_staging_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$betterleaks_staging_root" betterleaks
+    mv "$betterleaks_staging_root" "$betterleaks_root"
+    rm -rf -- "$betterleaks_build_dir"
+    betterleaks_build_dir=
+  fi
+  if [[ ! -x $betterleaks_binary ]]; then
+    echo "error: controlled Betterleaks installation is incomplete: $betterleaks_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $betterleaks_root/.velvet-glove-artifacts.json ]] || \
+    [[ $(<"$betterleaks_root/.velvet-glove-artifacts.json") != "$betterleaks_identity" ]]; then
+    echo "error: controlled Betterleaks installation does not match the declared source build" >&2
+    exit 1
+  fi
+  read -r observed_betterleaks_sha256 _ < <(/usr/bin/shasum -a 256 "$betterleaks_binary")
+  if [[ $observed_betterleaks_sha256 != "$betterleaks_expected_sha256" ]]; then
+    echo "error: controlled Betterleaks artifact checksum mismatch" >&2
+    exit 1
+  fi
+  verify_macho_closure "$betterleaks_root" betterleaks
 fi
 
 if needs_group ruby; then

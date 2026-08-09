@@ -288,8 +288,8 @@
       "components": [
         {
           "id": "go",
-          "version": "1.26.3",
-          "miseTool": "go@1.26.3",
+          "version": "1.26.5",
+          "miseTool": "go@1.26.5",
           "installationSource": "mise core:go archive locked for macos-arm64",
           "integrity": {
             "kind": "mise-lock",
@@ -298,7 +298,7 @@
           "probe": {
             "argv": ["go", "version"],
             "match": "prefix",
-            "expected": "go version go1.26.3 "
+            "expected": "go version go1.26.5 "
           }
         }
       ],
@@ -519,6 +519,168 @@
       ]
     },
     {
+      "id": "macos-arm64-security",
+      "provisioningGroup": "security",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "go",
+          "version": "1.26.5",
+          "miseTool": "go@1.26.5",
+          "installationSource": "mise core:go archive locked for macos-arm64 and used for the Betterleaks reproducible build",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+          },
+          "probe": {
+            "argv": ["go", "version"],
+            "match": "prefix",
+            "expected": "go version go1.26.5 "
+          }
+        },
+        {
+          "id": "betterleaks",
+          "version": "1.7.3+velvet-glove.1",
+          "installationSource": "betterleaks v1.7.3 source at verified commit 82b306a9d338121a6fd087002a94e5c7ab685355 plus a checksum-pinned closure patch, reproducibly built with locked Go 1.26.5",
+          "integrity": {
+            "kind": "go-source-build",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/closure.patch",
+            "url": "https://github.com/betterleaks/betterleaks/archive/refs/tags/v1.7.3.tar.gz",
+            "sha256": "7359ae820c62c276d31cef3d1431eb8beb6db07d5c44830bad03dbe9c0cf3850",
+            "patchSha256": "2d57aa396d9c7f0337cf13c05fa06f661099035cb5f753a12e79ca2f46a38147",
+            "archiveFormat": "tar-gz",
+            "archiveRoot": "betterleaks-1.7.3",
+            "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.mod",
+            "moduleManifestSha256": "a669cc877c8dac1c9f3927b57e246902b81bc37665147e4a2d301104f534819e",
+            "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.sum",
+            "moduleLockSha256": "359a55b2abc25a4fa290093fed6bc6d7d3d2923906e4c77cf4d786581a61a38d",
+            "builtArtifactSha256": "046177cad9aa9f924fe57adca4a1a8c54d0ad74ceed593147b127f5a486f8144",
+            "buildToolchainComponentId": "go",
+            "buildWorkingDirectory": "{state}/betterleaks-build-1.7.3-vg1/source",
+            "buildArgv": [
+              "go",
+              "-C",
+              "{state}/betterleaks-build-1.7.3-vg1/source",
+              "build",
+              "-trimpath",
+              "-buildvcs=false",
+              "-ldflags",
+              "-s -w -buildid= -X=github.com/betterleaks/betterleaks/version.Version=1.7.3+velvet-glove.1",
+              "-o",
+              "{state}/betterleaks-build-1.7.3-vg1/install/bin/betterleaks",
+              "."
+            ],
+            "buildEnvironment": {
+              "GOTOOLCHAIN": "local",
+              "GOFLAGS": "-mod=readonly",
+              "CGO_ENABLED": "0",
+              "GOOS": "darwin",
+              "GOARCH": "arm64",
+              "SOURCE_DATE_EPOCH": "1785516069",
+              "GOMODCACHE": "{state}/betterleaks-go-mod-cache",
+              "GOCACHE": "{state}/betterleaks-go-build-cache",
+              "GOPROXY": "off"
+            },
+            "minOsVersion": "12.0",
+            "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+          },
+          "probe": {
+            "argv": ["betterleaks", "--version"],
+            "match": "exact",
+            "expected": "betterleaks version 1.7.3+velvet-glove.1"
+          }
+        }
+      ],
+      "auxiliaryPrograms": [],
+      "bootstrap": [
+        {
+          "id": "betterleaks-apply-closure",
+          "argv": [
+            "/usr/bin/patch",
+            "-p1",
+            "-i",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/betterleaks/closure.patch"
+          ],
+          "environment": {},
+          "workingDirectory": "{state}/betterleaks-build-1.7.3-vg1/source",
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/closure.patch"
+        },
+        {
+          "id": "betterleaks-go-mod-download",
+          "argv": [
+            "go",
+            "-C",
+            "{state}/betterleaks-build-1.7.3-vg1/source",
+            "mod",
+            "download",
+            "all"
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOMODCACHE": "{state}/betterleaks-go-mod-cache",
+            "GOCACHE": "{state}/betterleaks-go-build-cache",
+            "GOPROXY": "https://proxy.golang.org",
+            "GOSUMDB": "sum.golang.org"
+          },
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.sum"
+        },
+        {
+          "id": "betterleaks-go-mod-verify",
+          "argv": [
+            "go",
+            "-C",
+            "{state}/betterleaks-build-1.7.3-vg1/source",
+            "mod",
+            "verify"
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOMODCACHE": "{state}/betterleaks-go-mod-cache",
+            "GOCACHE": "{state}/betterleaks-go-build-cache",
+            "GOPROXY": "off"
+          },
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.sum"
+        },
+        {
+          "id": "betterleaks-go-build",
+          "argv": [
+            "go",
+            "-C",
+            "{state}/betterleaks-build-1.7.3-vg1/source",
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags",
+            "-s -w -buildid= -X=github.com/betterleaks/betterleaks/version.Version=1.7.3+velvet-glove.1",
+            "-o",
+            "{state}/betterleaks-build-1.7.3-vg1/install/bin/betterleaks",
+            "."
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOFLAGS": "-mod=readonly",
+            "CGO_ENABLED": "0",
+            "GOOS": "darwin",
+            "GOARCH": "arm64",
+            "SOURCE_DATE_EPOCH": "1785516069",
+            "GOMODCACHE": "{state}/betterleaks-go-mod-cache",
+            "GOCACHE": "{state}/betterleaks-go-build-cache",
+            "GOPROXY": "off"
+          },
+          "workingDirectory": "{state}/betterleaks-build-1.7.3-vg1/source",
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.sum"
+        }
+      ]
+    },
+    {
       "id": "macos-arm64-swift",
       "provisioningGroup": "swift",
       "platform": "macos",
@@ -566,6 +728,63 @@
       "caseExecutables": ["jq"],
       "cases": ["clean", "invalid", "multi-file-fragments", "operational-failure"],
       "representativeCase": "multi-file-fragments"
+    },
+    {
+      "id": "betterleaks-macos-arm64",
+      "toolId": "betterleaks",
+      "environmentId": "macos-arm64-security",
+      "version": "1.7.3+velvet-glove.1",
+      "installationSource": "betterleaks v1.7.3 source at verified commit 82b306a9d338121a6fd087002a94e5c7ab685355 plus a checksum-pinned closure patch, reproducibly built with locked Go 1.26.5",
+      "integrity": {
+        "kind": "go-source-build",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/closure.patch",
+        "url": "https://github.com/betterleaks/betterleaks/archive/refs/tags/v1.7.3.tar.gz",
+        "sha256": "7359ae820c62c276d31cef3d1431eb8beb6db07d5c44830bad03dbe9c0cf3850",
+        "patchSha256": "2d57aa396d9c7f0337cf13c05fa06f661099035cb5f753a12e79ca2f46a38147",
+        "archiveFormat": "tar-gz",
+        "archiveRoot": "betterleaks-1.7.3",
+        "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.mod",
+        "moduleManifestSha256": "a669cc877c8dac1c9f3927b57e246902b81bc37665147e4a2d301104f534819e",
+        "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/betterleaks/go.sum",
+        "moduleLockSha256": "359a55b2abc25a4fa290093fed6bc6d7d3d2923906e4c77cf4d786581a61a38d",
+        "builtArtifactSha256": "046177cad9aa9f924fe57adca4a1a8c54d0ad74ceed593147b127f5a486f8144",
+        "buildToolchainComponentId": "go",
+        "buildWorkingDirectory": "{state}/betterleaks-build-1.7.3-vg1/source",
+        "buildArgv": [
+          "go",
+          "-C",
+          "{state}/betterleaks-build-1.7.3-vg1/source",
+          "build",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags",
+          "-s -w -buildid= -X=github.com/betterleaks/betterleaks/version.Version=1.7.3+velvet-glove.1",
+          "-o",
+          "{state}/betterleaks-build-1.7.3-vg1/install/bin/betterleaks",
+          "."
+        ],
+        "buildEnvironment": {
+          "GOTOOLCHAIN": "local",
+          "GOFLAGS": "-mod=readonly",
+          "CGO_ENABLED": "0",
+          "GOOS": "darwin",
+          "GOARCH": "arm64",
+          "SOURCE_DATE_EPOCH": "1785516069",
+          "GOMODCACHE": "{state}/betterleaks-go-mod-cache",
+          "GOCACHE": "{state}/betterleaks-go-build-cache",
+          "GOPROXY": "off"
+        },
+        "minOsVersion": "12.0",
+        "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+      },
+      "probe": {
+        "argv": ["betterleaks", "--version"],
+        "match": "exact",
+        "expected": "betterleaks version 1.7.3+velvet-glove.1"
+      },
+      "caseExecutables": ["betterleaks", "python"],
+      "cases": ["clean", "finding", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
     },
     {
       "id": "sort-package-json-macos-arm64",
@@ -628,8 +847,8 @@
       "id": "go-fmt-macos-arm64",
       "toolId": "go-fmt",
       "environmentId": "macos-arm64-go",
-      "version": "go1.26.3",
-      "installationSource": "gofmt in the Go 1.26.3 archive pinned by validation/provisioning/mise.lock",
+      "version": "go1.26.5",
+      "installationSource": "gofmt in the Go 1.26.5 archive pinned by validation/provisioning/mise.lock",
       "integrity": {
         "kind": "mise-lock",
         "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
@@ -637,7 +856,7 @@
       "probe": {
         "argv": ["go", "version"],
         "match": "prefix",
-        "expected": "go version go1.26.3 "
+        "expected": "go version go1.26.5 "
       },
       "caseExecutables": ["gofmt"],
       "cases": ["unformatted"],

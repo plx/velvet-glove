@@ -1,0 +1,7 @@
+title = "Velvet Glove Betterleaks fixture"
+
+[[rules]]
+id = "fixture-secret"
+description = "Velvet Glove fixture secret"
+regex = '''VG_SECRET_[A-Za-z0-9]{16}'''
+keywords = ["VG_SECRET_"]

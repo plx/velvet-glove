@@ -1,6 +1,10 @@
 /// betterleaks — alternative secrets scanner with a gitleaks-compatible CLI.
 ///
-/// DRAFT: not exercised by a fixture in this catalog.
+/// Betterleaks accepts multiple filesystem paths in one `dir` scan. A small
+/// Python adapter rejects arguments that could bypass redaction, diagnostics,
+/// or the enforced status 10 used to distinguish findings from tool failures.
+/// Fatal-level logging removes elapsed-time summaries while the adapter
+/// canonicalizes Betterleaks' console clock and retains redacted diagnostics.
 
 module velvet_glove.builtins.tools.Betterleaks
 
@@ -10,7 +14,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "betterleaks"
   displayName = "betterleaks"
   executable = "betterleaks"
-  installHint = "install betterleaks with `brew install betterleaks`"
+  installHint = "use the checksum-verified Betterleaks source-build recipe documented in docs/pinned-tool-environments.md"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*"; "**/*" }
@@ -19,18 +23,226 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
-        "dir"
-        "--redact"
-        "--verbose"
-        "--no-color"
-        "--no-banner"
+        "-I"
+        "-c"
+        #"""
+        import os
+        import re
+        import signal
+        import subprocess
+        import sys
+
+        marker = "__VELVET_GLOVE_BETTERLEAKS_FILES__"
+        if len(sys.argv) < 4 or sys.argv[2:].count(marker) != 1:
+            print("velvet-glove-betterleaks: invalid adapter arguments", file=sys.stderr)
+            raise SystemExit(2)
+
+        tool = sys.argv[1]
+        payload = sys.argv[2:]
+        marker_index = payload.index(marker)
+        extra_args = payload[:marker_index]
+        files = payload[marker_index + 1:]
+        if not files:
+            print("velvet-glove-betterleaks: no files selected", file=sys.stderr)
+            raise SystemExit(2)
+        for path in files:
+            if os.path.islink(path) or not os.path.isfile(path):
+                print(
+                    f"velvet-glove-betterleaks: selected path is not a regular file: {path}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            try:
+                with open(path, "rb"):
+                    pass
+            except OSError as error:
+                print(f"velvet-glove-betterleaks: cannot read {path}: {error}", file=sys.stderr)
+                raise SystemExit(2) from error
+
+        controlled_options = (
+            "--help",
+            "--version",
+            "--redact",
+            "--verbose",
+            "--no-color",
+            "--no-banner",
+            "--exit-code",
+            "--log-level",
+            "--legacy-print",
+            "--baseline-path",
+            "--report-path",
+            "--report-format",
+            "--report-template",
+        )
+        controlled_families = ("--diagnostics", "--validation")
+        for argument in extra_args:
+            lowered = argument.lower()
+            controlled = any(
+                lowered == option or lowered.startswith(option + "=")
+                for option in controlled_options
+            ) or any(lowered.startswith(family) for family in controlled_families)
+            if argument == "--" or not lowered.startswith("--") or "=" not in argument or controlled:
+                print(
+                    f"velvet-glove-betterleaks: unsupported argument {argument!r}; "
+                    "use a non-controlled long --name=value option",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+
+        fixed = [
+            "--redact=100",
+            "--verbose=true",
+            "--no-color=true",
+            "--no-banner=true",
+            "--exit-code=10",
+            "--log-level=fatal",
+            "--legacy-print=true",
+        ]
+        child_environment = os.environ.copy()
+        for variable in (
+            "BETTERLEAKS_CONFIG",
+            "BETTERLEAKS_CONFIG_TOML",
+            "GITLEAKS_CONFIG",
+            "GITLEAKS_CONFIG_TOML",
+        ):
+            child_environment.pop(variable, None)
+
+        class AdapterSignal(BaseException):
+            def __init__(self, signum):
+                self.signum = signum
+
+        process = None
+        pending_signal = None
+        cleaning = False
+
+        def stop_child(initial_signal=None):
+            global process
+            global cleaning
+            child = process
+            if child is None:
+                return
+            cleaning = True
+            try:
+                if child.stderr is not None:
+                    try:
+                        child.stderr.close()
+                    except (OSError, ValueError):
+                        pass
+                try:
+                    running = child.poll() is None
+                except (OSError, ValueError):
+                    running = True
+                if running:
+                    try:
+                        if initial_signal is None:
+                            child.terminate()
+                        else:
+                            child.send_signal(initial_signal)
+                    except (OSError, ValueError):
+                        pass
+                    exited = False
+                    try:
+                        child.wait(timeout=1)
+                        exited = True
+                    except (OSError, ValueError, subprocess.TimeoutExpired):
+                        pass
+                    if not exited:
+                        try:
+                            child.kill()
+                        except (OSError, ValueError):
+                            pass
+                        try:
+                            child.wait(timeout=1)
+                        except (OSError, ValueError, subprocess.TimeoutExpired):
+                            pass
+            finally:
+                process = None
+                cleaning = False
+
+        previous_signal_handlers = {}
+
+        def forward_signal(signum, _frame):
+            global pending_signal
+            pending_signal = signum
+            if process is not None and not cleaning:
+                raise AdapterSignal(signum)
+
+        adapter_error = None
+        returncode = 2
+        try:
+            handled_signals = tuple(
+                getattr(signal, name)
+                for name in ("SIGHUP", "SIGINT", "SIGTERM")
+                if hasattr(signal, name)
+            )
+            for signum in handled_signals:
+                previous_signal_handlers[signum] = signal.signal(signum, forward_signal)
+            if pending_signal is not None:
+                raise AdapterSignal(pending_signal)
+            process = subprocess.Popen(
+                [tool, "dir", *extra_args, *fixed, *files],
+                env=child_environment,
+                stderr=subprocess.PIPE,
+            )
+            if pending_signal is not None:
+                raise AdapterSignal(pending_signal)
+            if process.stderr is None:
+                raise OSError("failed to capture tool diagnostics")
+            for line in iter(process.stderr.readline, b""):
+                stable_line = re.sub(
+                    br"^[0-9]{1,2}:[0-9]{2}(?:AM|PM) FTL ",
+                    b"<time> FTL ",
+                    line,
+                )
+                sys.stderr.buffer.write(stable_line)
+            sys.stderr.buffer.flush()
+            returncode = process.wait()
+        except AdapterSignal as error:
+            stop_child(error.signum)
+            returncode = 2
+        except OSError as error:
+            stop_child()
+            adapter_error = error
+            returncode = 2
+        except BaseException:
+            stop_child()
+            raise
+        finally:
+            for signum, handler in previous_signal_handlers.items():
+                try:
+                    signal.signal(signum, handler)
+                except (OSError, ValueError):
+                    pass
+        if process is not None and process.stderr is not None:
+            try:
+                process.stderr.close()
+            except OSError as error:
+                adapter_error = error
+                returncode = 2
+        process = None
+        if adapter_error is not None:
+            try:
+                print(f"velvet-glove-betterleaks: {adapter_error}", file=sys.stderr)
+            except OSError:
+                try:
+                    null_fd = os.open(os.devnull, os.O_WRONLY)
+                    os.dup2(null_fd, sys.stderr.fileno())
+                    os.close(null_fd)
+                except OSError:
+                    pass
+        raise SystemExit(returncode if returncode >= 0 else 2)
+        """#
+        new Config.ToolExecutable {}
         new Config.ExtraArgs {}
+        "__VELVET_GLOVE_BETTERLEAKS_FILES__"
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1 }
+        issues = new Listing<Int> { 10 }
+        failure = new Listing<Int> { 1; 2; 126 }
       }
     }
   }

@@ -93,6 +93,90 @@ fn jq_uses_per_file_parse_validation_and_distinguishes_tool_failures() {
 }
 
 #[test]
+fn betterleaks_batches_paths_and_separates_findings_from_failures() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let betterleaks = spec(&specs, "betterleaks");
+
+    assert_eq!(betterleaks.phase_invocation, InvocationGranularity::Batch);
+    assert!(
+        betterleaks.workflows.is_empty(),
+        "betterleaks uses compatibility translation"
+    );
+    let verify = betterleaks
+        .phases
+        .get("verify")
+        .expect("betterleaks verify phase");
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv.len(), 7);
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("betterleaks adapter must be a literal Python program")
+    };
+    for required in [
+        "sys.argv[2:].count(marker) != 1",
+        "--redact",
+        "--verbose",
+        "--no-color",
+        "--no-banner",
+        "--exit-code",
+        "--log-level",
+        "--legacy-print",
+        "--baseline-path",
+        "--report-path",
+        "--report-format",
+        "--diagnostics",
+        "--validation",
+        "not lowered.startswith(\"--\")",
+        "\"=\" not in argument",
+        "--redact=100",
+        "--verbose=true",
+        "--no-color=true",
+        "--no-banner=true",
+        "--exit-code=10",
+        "--log-level=fatal",
+        "--legacy-print=true",
+        "subprocess.Popen",
+        "stderr=subprocess.PIPE",
+        "class AdapterSignal(BaseException)",
+        "pending_signal = None",
+        "def stop_child(initial_signal=None)",
+        "child.wait(timeout=1)",
+        "child.send_signal(initial_signal)",
+        "child.terminate()",
+        "child.kill()",
+        "for name in (\"SIGHUP\", \"SIGINT\", \"SIGTERM\")",
+        "previous_signal_handlers[signum] = signal.signal(signum, forward_signal)",
+        "except AdapterSignal as error:",
+        "except BaseException:",
+        "br\"^[0-9]{1,2}:[0-9]{2}(?:AM|PM) FTL \"",
+        "b\"<time> FTL \"",
+        "sys.stderr.buffer.write(stable_line)",
+        "os.path.islink(path) or not os.path.isfile(path)",
+        "with open(path, \"rb\")",
+        "child_environment.pop(variable, None)",
+        "BETTERLEAKS_CONFIG_TOML",
+        "GITLEAKS_CONFIG_TOML",
+        "env=child_environment",
+        "returncode if returncode >= 0 else 2",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "betterleaks adapter omits {required:?}"
+        );
+    }
+    assert_eq!(verify.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[4], token(ArgToken::ExtraArgs));
+    assert_eq!(
+        verify.argv[5],
+        literal("__VELVET_GLOVE_BETTERLEAKS_FILES__")
+    );
+    assert_eq!(verify.argv[6], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[10], &[1, 2, 126]);
+}
+
+#[test]
 fn asciidoctor_adapter_distinguishes_document_issues_from_cli_failures() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
