@@ -1,0 +1,20 @@
+openapi: 3.0.0
+info:
+  title: Selected clean batch API
+  description: The second selected file stays clean
+  version: 1.0.0
+servers:
+  - url: https://example.com
+tags:
+  - name: selected
+    description: Selected endpoints
+paths:
+  /selected:
+    get:
+      operationId: getSelected
+      summary: Get selected
+      tags:
+        - selected
+      responses:
+        '200':
+          description: OK

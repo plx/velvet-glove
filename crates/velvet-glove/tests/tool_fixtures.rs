@@ -43,6 +43,8 @@ const TOOL_TRACE_SENTINEL: &str = "real-tool-fixture";
 const PATH_ENV: &str = "PATH";
 const HOME_ENV: &str = "HOME";
 const TMPDIR_ENV: &str = "TMPDIR";
+const PWD_ENV: &str = "PWD";
+const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 const XDG_CACHE_HOME_ENV: &str = "XDG_CACHE_HOME";
 const DIFF_OPTIONS_ENV: &str = "DIFF_OPTIONS";
 const NODE_PATH_ENV: &str = "NODE_PATH";
@@ -54,6 +56,34 @@ const BETTERLEAKS_CONFIG_TOML_ENV: &str = "BETTERLEAKS_CONFIG_TOML";
 const GITLEAKS_CONFIG_ENV: &str = "GITLEAKS_CONFIG";
 const GITLEAKS_CONFIG_TOML_ENV: &str = "GITLEAKS_CONFIG_TOML";
 const BETTERLEAKS_POISON_ENV_VALUE: &str = "velvet-glove-adapter-must-clear-this";
+const VACUUM_POISON_ENV_VALUE: &str = "velvet-glove-vacuum-adapter-must-clear-this";
+const VACUUM_CHILD_PATH: &str = "/usr/bin:/bin";
+const VACUUM_PREFIX_SCRUBBED_ENV: &[&str] = &[
+    "VACUUM_CONFIG",
+    "VACUUM_FIX",
+    "VACUUM_FUNCTIONS",
+    "VACUUM_HARD_MODE",
+    "VACUUM_REMOTE",
+    "VACUUM_RULESET",
+    "VACUUM_VELVET_GLOVE_POISON",
+];
+const VACUUM_SCRUBBED_ENV: &[&str] = &[
+    "ALL_PROXY",
+    DEBUG_ENV,
+    "GOGC",
+    "GOMEMLIMIT",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+];
+const VACUUM_LOADER_SCRUBBED_ENV: &[&str] = &[
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+];
 const BIOME_POISON_ENV_VALUE: &str = "velvet-glove-biome-adapter-must-clear-this";
 const PRETTIER_POISON_ENV_VALUE: &str = "velvet-glove-prettier-adapter-must-clear-this";
 const PRETTIER_ROOT_ENV: &str = "VELVET_GLOVE_FIXTURE_PRETTIER_ROOT";
@@ -334,6 +364,12 @@ enum TracePlan {
         leading: &'static [&'static str],
         before_files: &'static [&'static str],
     },
+    VacuumPrivateFilesMarker {
+        nested_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        leading: &'static [&'static str],
+    },
     SingleNestedModeFilesMarker {
         nested_program_index: usize,
         adapter_prefix: &'static [&'static str],
@@ -441,6 +477,41 @@ const BETTERLEAKS_TRACE_PLAN: TracePlan = TracePlan::SingleNestedFilesMarker {
     before_files: BETTERLEAKS_FIXED_ARGUMENTS,
 };
 const BETTERLEAKS_FIXTURE_SECRET: &str = "VG_SECRET_AbCdEf0123456789";
+
+const VACUUM_FILES_MARKER: &str = "__VELVET_GLOVE_VACUUM_FILES__";
+const VACUUM_FIXED_ARGUMENTS: &[&str] = &[
+    "lint",
+    "--config=vacuum.conf.yaml",
+    "--base=.",
+    "--no-update-check",
+    "--remote=false",
+    "--no-style",
+    "--no-banner",
+    "--details",
+    "--errors",
+    "--silent",
+    "--all-results",
+    "--no-clip",
+    "--fail-severity=error",
+    "--fix=false",
+    "--timeout=5",
+    "--lookup-timeout=500",
+    "--turbo=false",
+    "--hard-mode=false",
+    "--skip-check=false",
+    "--ext-refs=false",
+    "--resolve-all-refs=false",
+    "--nested-refs-doc-context=false",
+    "--allow-private-networks=false",
+    "--allow-http=false",
+    "--fetch-timeout=5",
+];
+const VACUUM_TRACE_PLAN: TracePlan = TracePlan::VacuumPrivateFilesMarker {
+    nested_program_index: 3,
+    adapter_prefix: &["-I", "-c"],
+    marker: VACUUM_FILES_MARKER,
+    leading: VACUUM_FIXED_ARGUMENTS,
+};
 
 const BIOME_FILES_MARKER: &str = "__VELVET_GLOVE_BIOME_FILES__";
 const BIOME_MODE_ARGUMENTS: &[(&str, &[&str])] = &[("fix", &["--write"]), ("verify", &[])];
@@ -1399,9 +1470,78 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["gofmt: changed example.go"],
             trace_plan: GOFMT_TRACE_PLAN,
         },
+        ("vacuum", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example-openapi.yaml"],
+                exit_code: 0,
+                trace_exit_codes: &[0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &["this project-local configuration"],
+            trace_plan: VACUUM_TRACE_PLAN,
+        },
+        ("vacuum", "source-issue") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example-openapi.yaml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "example-openapi.yaml:2:1",
+                "`info` section must have a `description`",
+                "$.info",
+                "rule: info-description  category: Contract Information",
+            ],
+            diagnostic_excludes: &["this project-local configuration"],
+            trace_plan: VACUUM_TRACE_PLAN,
+        },
+        ("vacuum", "multi-file") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example-openapi.yaml", "selected-clean-openapi.yaml"],
+                exit_code: 1,
+                trace_exit_codes: &[1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "example-openapi.yaml:2:1",
+                "`info` section must have a `description`",
+                "$.info",
+                "rule: info-description  category: Contract Information",
+            ],
+            diagnostic_excludes: &[
+                "unselected-sentinel.yaml",
+                "this project-local configuration",
+            ],
+            trace_plan: VACUUM_TRACE_PLAN,
+        },
+        ("vacuum", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example-openapi.yaml"],
+                exit_code: 2,
+                trace_exit_codes: &[2],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "Unable to process spec 'example-openapi.yaml'",
+                "unable to parse specification",
+                "did not find expected ',' or ']'",
+            ],
+            diagnostic_excludes: &["rule: info-description", "this project-local configuration"],
+            trace_plan: VACUUM_TRACE_PLAN,
+        },
         (
             "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
-            | "cargo-clippy" | "dclint" | "go-fmt" | "prettier",
+            | "cargo-clippy" | "dclint" | "go-fmt" | "prettier" | "vacuum",
             other,
         ) => {
             return Err(format!(
@@ -2393,6 +2533,26 @@ fn real_tool_contract_registry_preserves_direct_and_adapter_shapes() {
         betterleaks_failure.outcome,
         ExpectedOutcome::OperationalFailure
     );
+
+    let vacuum_multi = real_tool_contract_case(&named_fixture_case("vacuum", "multi-file"))
+        .expect("Vacuum contract lookup")
+        .expect("Vacuum contract");
+    assert_eq!(vacuum_multi.invocations.len(), 1);
+    assert_eq!(
+        vacuum_multi.invocations[0].targets,
+        &["example-openapi.yaml", "selected-clean-openapi.yaml"]
+    );
+    assert_eq!(vacuum_multi.invocations[0].exit_code, 1);
+    assert_eq!(vacuum_multi.invocations[0].trace_exit_codes, &[1]);
+    assert_eq!(vacuum_multi.trace_plan, VACUUM_TRACE_PLAN);
+
+    let vacuum_failure =
+        real_tool_contract_case(&named_fixture_case("vacuum", "operational-failure"))
+            .expect("Vacuum failure contract lookup")
+            .expect("Vacuum failure contract");
+    assert_eq!(vacuum_failure.invocations[0].exit_code, 2);
+    assert_eq!(vacuum_failure.invocations[0].trace_exit_codes, &[2]);
+    assert_eq!(vacuum_failure.outcome, ExpectedOutcome::OperationalFailure);
 }
 
 #[test]
@@ -4020,6 +4180,18 @@ fn gofmt_evaluated_adapter_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated Vacuum adapter lifecycle; requires controlled Python"]
+fn vacuum_evaluated_adapter_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("vacuum")
+        .unwrap_or_else(|| panic!("builtin catalog has no Vacuum spec"));
+    verify_vacuum_adapter_lifecycle(spec, timeout).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated Cargo Fmt adapter lifecycle; requires controlled Python"]
 fn cargo_fmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -4145,6 +4317,11 @@ fn run_all_tool_fixtures() {
         verify_gofmt_adapter_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("gofmt adapter lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "vacuum") {
+        verify_vacuum_adapter_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("vacuum adapter lifecycle probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "cargo-fmt") {
         verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -6292,6 +6469,108 @@ fn resolve_trace_invocations(
                 trace_program.clone(),
                 vec![ResolvedTraceInvocation {
                     program: trace_program.clone(),
+                    targets: targets.to_vec(),
+                    arguments,
+                    exit_code: expected_exit_codes[0],
+                }],
+            ))
+        }
+        TracePlan::VacuumPrivateFilesMarker {
+            nested_program_index,
+            adapter_prefix,
+            marker,
+            leading,
+        } => {
+            if expected_exit_codes.len() != 1 {
+                return Err(format!(
+                    "Vacuum private-input adapter trace for {outer_program} must declare exactly one exit code, got {expected_exit_codes:?}"
+                ));
+            }
+            if nested_program_index != adapter_prefix.len() + 1 {
+                return Err(format!(
+                    "Vacuum private-input adapter trace plan for {outer_program} must place exactly one script between its adapter prefix and nested tool"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "Vacuum private-input adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Vacuum private-input adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let trace_program = outer_arguments
+                .get(nested_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Vacuum private-input adapter {outer_program} has no nested tool at argument {nested_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "Vacuum private-input adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index != nested_program_index + 1 {
+                return Err(format!(
+                    "Vacuum private-input adapter {outer_program} must reject every extra argument before {marker:?}: {outer_arguments:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let rendered_files = &outer_arguments[(*marker_index + 1)..];
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "Vacuum private-input adapter {outer_program} selected-file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let private_files = targets
+                .iter()
+                .enumerate()
+                .map(|(index, target)| {
+                    let extension = target
+                        .extension()
+                        .and_then(OsStr::to_str)
+                        .map(str::to_ascii_lowercase)
+                        .ok_or_else(|| {
+                            format!(
+                                "Vacuum private-input trace target lacks a UTF-8 extension: {target:?}"
+                            )
+                        })?;
+                    if !matches!(extension.as_str(), "yaml" | "yml" | "json") {
+                        return Err(format!(
+                            "Vacuum private-input trace target has unsupported extension {extension:?}: {target:?}"
+                        ));
+                    }
+                    Ok(format!("inputs/{index:04}.{extension}"))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let arguments = leading
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .chain(private_files)
+                .collect();
+            Ok((
+                trace_program.clone(),
+                vec![ResolvedTraceInvocation {
+                    program: trace_program,
                     targets: targets.to_vec(),
                     arguments,
                     exit_code: expected_exit_codes[0],
@@ -8496,6 +8775,14 @@ impl ToolTraceHarness {
                 command.env(name, BETTERLEAKS_POISON_ENV_VALUE);
             }
         }
+        if self.programs.contains_key("vacuum") {
+            for name in VACUUM_PREFIX_SCRUBBED_ENV.iter().chain(VACUUM_SCRUBBED_ENV) {
+                command.env(name, VACUUM_POISON_ENV_VALUE);
+            }
+            for name in VACUUM_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         if self.programs.contains_key("biome") {
             command.env(CI_ENV, BIOME_POISON_ENV_VALUE);
             command.env(RAYON_NUM_THREADS_ENV, BIOME_POISON_ENV_VALUE);
@@ -8742,7 +9029,7 @@ fn verify_tool_trace_invocations(
         };
         if !matches!(
             trace_program,
-            "cargo" | "cargo-clippy" | "cargo-fmt" | "rustfmt"
+            "cargo" | "cargo-clippy" | "cargo-fmt" | "rustfmt" | "vacuum"
         ) && recorded_cwd.trim_end_matches(std::path::MAIN_SEPARATOR)
             != expected_cwd.trim_end_matches(std::path::MAIN_SEPARATOR)
         {
@@ -8861,6 +9148,20 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if trace_program == "vacuum" {
+            let controlled = verify_vacuum_trace_environment(
+                &record,
+                harness,
+                &recorded_cwd,
+                expected.targets.len(),
+            )?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
         {
@@ -8909,7 +9210,14 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        let prerequisites = if trace_program == "node" && harness.contextlint {
+        let prerequisites = if trace_program == "vacuum" {
+            serde_json::json!({
+                "config": "owned-0600-empty-config",
+                "inputs": "owned-0600-byte-copies",
+                "network": "fixed-deny-flags",
+                "privateRootRemoved": true,
+            })
+        } else if trace_program == "node" && harness.contextlint {
             contextlint_trace_prerequisites(harness, expected)?
         } else if trace_program == "buf" {
             serde_json::json!({"diff": BUF_DIFF_PROGRAM})
@@ -9497,6 +9805,133 @@ fn verify_buf_trace_environment(
     if observed_program != expected_program {
         return Err(format!(
             "Buf adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
+        ));
+    }
+    Ok(environment)
+}
+
+fn vacuum_private_root_name(value: &str, suffix: Option<&str>) -> Result<String, String> {
+    let relative = value
+        .strip_prefix("/private/tmp/")
+        .or_else(|| value.strip_prefix("/tmp/"))
+        .ok_or_else(|| format!("Vacuum private path escaped /tmp: {value:?}"))?;
+    let components = relative.split('/').collect::<Vec<_>>();
+    let expected_len = usize::from(suffix.is_some()) + 1;
+    if components.len() != expected_len
+        || !components[0].starts_with("velvet-glove-vacuum-")
+        || components[0].len() == "velvet-glove-vacuum-".len()
+        || suffix.is_some_and(|expected| components.get(1).copied() != Some(expected))
+    {
+        return Err(format!(
+            "Vacuum private path has an unexpected shape for suffix {suffix:?}: {value:?}"
+        ));
+    }
+    Ok(components[0].to_owned())
+}
+
+fn verify_vacuum_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    recorded_cwd: &str,
+    expected_input_count: usize,
+) -> Result<BTreeMap<String, String>, String> {
+    let private_root_name = vacuum_private_root_name(recorded_cwd, None)?;
+    if Path::new(recorded_cwd).exists() {
+        return Err(format!(
+            "Vacuum adapter left its private root after child exit: {recorded_cwd:?}"
+        ));
+    }
+
+    let mut environment = BTreeMap::new();
+    for (name, expected) in [
+        (PATH_ENV, VACUUM_CHILD_PATH),
+        ("TERM", "dumb"),
+        ("COLUMNS", "120"),
+        ("LINES", "40"),
+        ("GODEBUG", ""),
+        ("GOMAXPROCS", "1"),
+        ("GOTRACEBACK", "none"),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "Vacuum trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+
+    for (name, suffix) in [
+        (PWD_ENV, None),
+        (HOME_ENV, Some("home")),
+        (TMPDIR_ENV, Some("tmp")),
+        (XDG_CONFIG_HOME_ENV, Some("config")),
+        (XDG_CACHE_HOME_ENV, Some("cache")),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        let observed_root = vacuum_private_root_name(&value, suffix)?;
+        if observed_root != private_root_name {
+            return Err(format!(
+                "Vacuum trace {name} escaped its invocation root: expected {private_root_name:?}, got {observed_root:?} from {value:?}"
+            ));
+        }
+        if Path::new(&value).exists() {
+            return Err(format!(
+                "Vacuum adapter left private {name} state after child exit: {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+
+    for name in VACUUM_PREFIX_SCRUBBED_ENV
+        .iter()
+        .chain(VACUUM_SCRUBBED_ENV)
+        .chain(VACUUM_LOADER_SCRUBBED_ENV)
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "Vacuum trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+
+    for (name, expected) in [
+        ("vacuum-config-kind", "file"),
+        ("vacuum-config-size", "3"),
+        ("vacuum-config-content", "controlled"),
+        ("vacuum-config-mode", "600"),
+    ] {
+        assert_record(record, name, expected)?;
+    }
+    assert_record(
+        record,
+        "vacuum-input-count",
+        &expected_input_count.to_string(),
+    )?;
+    for index in 0..expected_input_count {
+        assert_record(record, &format!("vacuum-input-{index}-kind"), "file")?;
+        assert_record(record, &format!("vacuum-input-{index}-mode"), "600")?;
+    }
+
+    let program = PathBuf::from(read_record(record, "program")?);
+    if !program.is_absolute() {
+        return Err(format!(
+            "Vacuum adapter must execute an absolute managed tool path, got {program:?}"
+        ));
+    }
+    let observed_program = program
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced Vacuum program {program:?}: {error}"))?;
+    let expected_program = harness
+        .shim_dir
+        .join("vacuum")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize managed Vacuum trace shim: {error}"))?;
+    if observed_program != expected_program {
+        return Err(format!(
+            "Vacuum adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
         ));
     }
     Ok(environment)
@@ -14599,6 +15034,1099 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                     "dclint lifecycle left private configuration artifacts: {leftovers:?}"
                 ));
             }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn vacuum_lifecycle_command(
+    python: &Path,
+    adapter: &str,
+    tool: &Path,
+    extra_args: &[&str],
+    files: &[PathBuf],
+    current_dir: &Path,
+) -> Command {
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", adapter])
+        .arg(tool)
+        .args(extra_args)
+        .arg(VACUUM_FILES_MARKER)
+        .args(files)
+        .current_dir(current_dir);
+    command
+}
+
+#[cfg(unix)]
+fn assert_vacuum_private_root_removed(cwd_record: &Path, label: &str) -> Result<(), String> {
+    let cwd = std::fs::read_to_string(cwd_record)
+        .map_err(|error| format!("read Vacuum {label} private cwd record: {error}"))?;
+    let cwd = cwd.trim();
+    if !cwd.contains("/velvet-glove-vacuum-") {
+        return Err(format!(
+            "Vacuum {label} child did not run in an owned private root: {cwd:?}"
+        ));
+    }
+    if Path::new(cwd).exists() {
+        return Err(format!(
+            "Vacuum {label} retained private state after exit: {cwd:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_vacuum_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        const INVOKED_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_INVOKED";
+        const ARGV_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_ARGV";
+        const CWD_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_CWD";
+        const COPY_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_COPY";
+        const CONFIG_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_CONFIG";
+        const MODES_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_MODES";
+        const ENVIRONMENT_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_ENVIRONMENT";
+        const ORIGINAL_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_ORIGINAL";
+        const REPLACEMENT_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_REPLACEMENT";
+        const CHILD_PID_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_CHILD_PID";
+        const DESCENDANT_PID_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_DESCENDANT_PID";
+        const READY_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_READY";
+        const CUTOFF_READY_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_CUTOFF_READY";
+        const CUTOFF_RELEASE_ENV: &str = "VELVET_GLOVE_VACUUM_LIFECYCLE_CUTOFF_RELEASE";
+
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "Vacuum lifecycle probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "Vacuum lifecycle probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I" || command != "-c" || marker != VACUUM_FILES_MARKER {
+            return Err(format!(
+                "Vacuum lifecycle probe expected exact isolated marker shape, got {isolated:?} {command:?} marker={marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "Vacuum lifecycle probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("Vacuum lifecycle probe cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Vacuum lifecycle Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-vacuum-lifecycle");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize Vacuum lifecycle root: {error}"))?;
+        let result = (|| {
+            let target = root.join("selected-openapi.yaml");
+            let baseline = b"openapi: 3.0.0\ninfo:\n  title: Lifecycle\n  description: Controlled\n  version: 1.0.0\npaths: {}\n";
+            std::fs::write(&target, baseline)
+                .map_err(|error| format!("write Vacuum lifecycle target: {error}"))?;
+            std::fs::write(
+                root.join("vacuum.conf.yaml"),
+                "lint: [project configuration must not load\n",
+            )
+            .map_err(|error| format!("write hostile Vacuum lifecycle config: {error}"))?;
+
+            let clean_tool = root.join("vacuum-clean-fake");
+            write_executable_fixture(
+                &clean_tool,
+                r#"#!/bin/sh
+set -eu
+: > "$VELVET_GLOVE_VACUUM_LIFECYCLE_ARGV"
+for argument in "$@"; do
+  printf '%s\n' "$argument" >> "$VELVET_GLOVE_VACUUM_LIFECYCLE_ARGV"
+done
+/bin/pwd -P > "$VELVET_GLOVE_VACUUM_LIFECYCLE_CWD"
+/bin/cp vacuum.conf.yaml "$VELVET_GLOVE_VACUUM_LIFECYCLE_CONFIG"
+last=
+for argument in "$@"; do last=$argument; done
+/bin/cp "$last" "$VELVET_GLOVE_VACUUM_LIFECYCLE_COPY"
+: > "$VELVET_GLOVE_VACUUM_LIFECYCLE_MODES"
+for controlled in vacuum.conf.yaml "$last" . inputs "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$TMPDIR"; do
+  if controlled_mode=$(/usr/bin/stat -f '%Lp' "$controlled" 2>/dev/null); then :; else controlled_mode=$(/usr/bin/stat -c '%a' "$controlled"); fi
+  printf '%s\n' "$controlled_mode" >> "$VELVET_GLOVE_VACUUM_LIFECYCLE_MODES"
+done
+{
+  printf 'PATH=%s\n' "${PATH-}"
+  printf 'HOME=%s\n' "${HOME-}"
+  printf 'PWD=%s\n' "${PWD-}"
+  printf 'TMPDIR=%s\n' "${TMPDIR-}"
+  printf 'XDG_CONFIG_HOME=%s\n' "${XDG_CONFIG_HOME-}"
+  printf 'XDG_CACHE_HOME=%s\n' "${XDG_CACHE_HOME-}"
+  printf 'VACUUM_RULESET=%s\n' "${VACUUM_RULESET-}"
+  printf 'HTTP_PROXY=%s\n' "${HTTP_PROXY-}"
+  printf 'GODEBUG=%s\n' "${GODEBUG-}"
+  printf 'GOMAXPROCS=%s\n' "${GOMAXPROCS-}"
+  printf 'GOTRACEBACK=%s\n' "${GOTRACEBACK-}"
+} > "$VELVET_GLOVE_VACUUM_LIFECYCLE_ENVIRONMENT"
+exit 0
+"#,
+                "Vacuum clean lifecycle fake",
+            )?;
+            let clean_argv = root.join("clean.argv");
+            let clean_cwd = root.join("clean.cwd");
+            let clean_copy = root.join("clean.copy");
+            let clean_config = root.join("clean.config");
+            let clean_modes = root.join("clean.modes");
+            let clean_environment = root.join("clean.environment");
+            let mut clean = vacuum_lifecycle_command(
+                &python,
+                adapter,
+                &clean_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            clean
+                .env(ARGV_ENV, &clean_argv)
+                .env(CWD_ENV, &clean_cwd)
+                .env(COPY_ENV, &clean_copy)
+                .env(CONFIG_ENV, &clean_config)
+                .env(MODES_ENV, &clean_modes)
+                .env(ENVIRONMENT_ENV, &clean_environment)
+                .env("VACUUM_RULESET", "poison")
+                .env("HTTP_PROXY", "poison")
+                .env("GODEBUG", "poison")
+                .env("GOMAXPROCS", "999")
+                .env("GOTRACEBACK", "all");
+            let clean_output = run_with_timeout(
+                &mut clean,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("clean-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum clean lifecycle probe: {error}"))?;
+            if clean_output.status.code() != Some(0)
+                || !clean_output.stdout.is_empty()
+                || !clean_output.stderr.is_empty()
+            {
+                return Err(format!(
+                    "Vacuum clean lifecycle failed: status={:?}; stdout={:?}; stderr={:?}",
+                    clean_output.status.code(),
+                    String::from_utf8_lossy(&clean_output.stdout),
+                    String::from_utf8_lossy(&clean_output.stderr)
+                ));
+            }
+            let expected_argv = VACUUM_FIXED_ARGUMENTS
+                .iter()
+                .copied()
+                .chain(std::iter::once("inputs/0000.yaml"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            let observed_argv = std::fs::read_to_string(&clean_argv)
+                .map_err(|error| format!("read Vacuum clean lifecycle argv: {error}"))?;
+            if observed_argv != expected_argv
+                || observed_argv.contains(target.to_string_lossy().as_ref())
+            {
+                return Err(format!(
+                    "Vacuum child did not receive only the fixed command and private copy: expected={expected_argv:?}; observed={observed_argv:?}"
+                ));
+            }
+            if std::fs::read(&clean_copy)
+                .map_err(|error| format!("read Vacuum private copy: {error}"))?
+                != baseline
+                || std::fs::read(&clean_config)
+                    .map_err(|error| format!("read Vacuum private config: {error}"))?
+                    != b"{}\n"
+                || std::fs::read_to_string(&clean_modes)
+                    .map_err(|error| format!("read Vacuum private modes: {error}"))?
+                    != "600\n600\n700\n700\n700\n700\n700\n700\n"
+            {
+                return Err(
+                    "Vacuum lifecycle did not create exact 0600 config/input copies".to_owned(),
+                );
+            }
+            let controlled_environment = std::fs::read_to_string(&clean_environment)
+                .map_err(|error| format!("read Vacuum clean child environment: {error}"))?;
+            for required in [
+                "PATH=/usr/bin:/bin\n",
+                "VACUUM_RULESET=\n",
+                "HTTP_PROXY=\n",
+                "GODEBUG=\n",
+                "GOMAXPROCS=1\n",
+                "GOTRACEBACK=none\n",
+            ] {
+                if !controlled_environment.contains(required) {
+                    return Err(format!(
+                        "Vacuum lifecycle child environment omits {required:?}: {controlled_environment:?}"
+                    ));
+                }
+            }
+            assert_vacuum_private_root_removed(&clean_cwd, "clean")?;
+
+            let umask_start_anchor = "    private_aliases = list(dict.fromkeys((private_root, os.path.realpath(private_root))))\n";
+            let umask_restore_anchor = "    environment = os.environ.copy()\n";
+            if adapter.matches(umask_start_anchor).count() != 1
+                || adapter.matches(umask_restore_anchor).count() != 1
+            {
+                return Err(
+                    "Vacuum hostile-umask probe requires exact creation-window anchors".to_owned(),
+                );
+            }
+            let umask_adapter = adapter
+                .replacen(
+                    umask_start_anchor,
+                    &format!("    original_umask = os.umask(0o777)\n{umask_start_anchor}"),
+                    1,
+                )
+                .replacen(
+                    umask_restore_anchor,
+                    &format!("    os.umask(original_umask)\n{umask_restore_anchor}"),
+                    1,
+                );
+            let umask_argv = root.join("umask.argv");
+            let umask_cwd = root.join("umask.cwd");
+            let umask_copy = root.join("umask.copy");
+            let umask_config = root.join("umask.config");
+            let umask_modes = root.join("umask.modes");
+            let umask_environment = root.join("umask.environment");
+            let mut umask = vacuum_lifecycle_command(
+                &python,
+                &umask_adapter,
+                &clean_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            umask
+                .env(ARGV_ENV, &umask_argv)
+                .env(CWD_ENV, &umask_cwd)
+                .env(COPY_ENV, &umask_copy)
+                .env(CONFIG_ENV, &umask_config)
+                .env(MODES_ENV, &umask_modes)
+                .env(ENVIRONMENT_ENV, &umask_environment);
+            let umask_output = run_with_timeout(
+                &mut umask,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("umask-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum hostile-umask probe: {error}"))?;
+            let umask_observed_modes = std::fs::read_to_string(&umask_modes)
+                .map_err(|error| format!("read Vacuum hostile-umask modes: {error}"))?;
+            if umask_output.status.code() != Some(0)
+                || !umask_output.stdout.is_empty()
+                || !umask_output.stderr.is_empty()
+                || umask_observed_modes != "600\n600\n700\n700\n700\n700\n700\n700\n"
+            {
+                return Err(format!(
+                    "Vacuum hostile umask changed controlled permissions or completion: status={:?}; modes={umask_observed_modes:?}; stdout={:?}; stderr={:?}",
+                    umask_output.status.code(),
+                    String::from_utf8_lossy(&umask_output.stdout),
+                    String::from_utf8_lossy(&umask_output.stderr)
+                ));
+            }
+            assert_vacuum_private_root_removed(&umask_cwd, "hostile-umask")?;
+
+            let rejection_tool = root.join("vacuum-rejection-fake");
+            write_executable_fixture(
+                &rejection_tool,
+                "#!/bin/sh\nset -eu\n: > \"$VELVET_GLOVE_VACUUM_LIFECYCLE_INVOKED\"\nexit 0\n",
+                "Vacuum rejection lifecycle fake",
+            )?;
+            let invoked = root.join("rejection-invoked");
+            let rejection_cases = vec![
+                (
+                    "raw-ref",
+                    b"openapi: 3.0.0\npaths: {}\n$ref: sibling.yaml\n".to_vec(),
+                    "unsupported external-reference syntax",
+                ),
+                (
+                    "raw-dynamic-ref",
+                    b"openapi: 3.1.0\npaths: {}\n$dynamicRef: sibling.yaml\n".to_vec(),
+                    "unsupported external-reference syntax",
+                ),
+                (
+                    "raw-recursive-ref",
+                    b"openapi: 3.1.0\npaths: {}\n$recursiveRef: sibling.yaml\n".to_vec(),
+                    "unsupported external-reference syntax",
+                ),
+                (
+                    "hex-dollar",
+                    br#"note: "\x24"
+"#
+                    .to_vec(),
+                    "unsupported encoded dollar token",
+                ),
+                (
+                    "unicode-dollar",
+                    br#"note: "\u0024"
+"#
+                    .to_vec(),
+                    "unsupported encoded dollar token",
+                ),
+                (
+                    "long-unicode-dollar",
+                    br#"note: "\U00000024"
+"#
+                    .to_vec(),
+                    "unsupported encoded dollar token",
+                ),
+                (
+                    "mixed-ref",
+                    br#""$\u0072ef": "sibling.yaml"
+"#
+                    .to_vec(),
+                    "unsupported escaped external-reference syntax",
+                ),
+                (
+                    "mixed-dynamic-ref",
+                    br#""$d\u0079namicRef": "sibling.yaml"
+"#
+                    .to_vec(),
+                    "unsupported escaped external-reference syntax",
+                ),
+                (
+                    "mixed-recursive-ref",
+                    br#""$recursive\u0052ef": "sibling.yaml"
+"#
+                    .to_vec(),
+                    "unsupported escaped external-reference syntax",
+                ),
+                (
+                    "del-path",
+                    baseline.to_vec(),
+                    "selected path contains a control character",
+                ),
+                ("non-utf8", vec![0xff, 0xfe], "selected file is not UTF-8"),
+            ];
+            for (label, content, diagnostic) in rejection_cases {
+                let selected = if label == "del-path" {
+                    root.join("del\u{7f}-openapi.yaml")
+                } else {
+                    root.join(format!("{label}-openapi.yaml"))
+                };
+                std::fs::write(&selected, content)
+                    .map_err(|error| format!("write Vacuum {label} rejection input: {error}"))?;
+                let _ = std::fs::remove_file(&invoked);
+                let mut command = vacuum_lifecycle_command(
+                    &python,
+                    adapter,
+                    &rejection_tool,
+                    &[],
+                    std::slice::from_ref(&selected),
+                    &root,
+                );
+                command.env(INVOKED_ENV, &invoked);
+                let output = run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(5)),
+                    &root.join(format!("rejection-{label}-evidence")),
+                )
+                .map_err(|error| format!("run Vacuum {label} rejection: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains(diagnostic)
+                    || stderr.matches("velvet-glove-vacuum:").count() != 1
+                    || invoked.exists()
+                {
+                    return Err(format!(
+                        "Vacuum {label} rejection did not fail before child execution: status={:?}; stdout={:?}; stderr={stderr:?}; invoked={}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        invoked.exists()
+                    ));
+                }
+            }
+
+            let regular = root.join("regular-openapi.yaml");
+            let hardlink = root.join("hardlink-openapi.yaml");
+            let symlink = root.join("symlink-openapi.yaml");
+            std::fs::write(&regular, baseline)
+                .map_err(|error| format!("write Vacuum link rejection input: {error}"))?;
+            std::fs::hard_link(&regular, &hardlink)
+                .map_err(|error| format!("create Vacuum hardlink rejection input: {error}"))?;
+            std::os::unix::fs::symlink(&regular, &symlink)
+                .map_err(|error| format!("create Vacuum symlink rejection input: {error}"))?;
+            for (label, selected, diagnostic) in [
+                (
+                    "hardlink",
+                    hardlink.as_path(),
+                    "selected path is not a unique regular file",
+                ),
+                (
+                    "symlink",
+                    symlink.as_path(),
+                    "selected path traverses a symlink",
+                ),
+            ] {
+                let _ = std::fs::remove_file(&invoked);
+                let mut command = vacuum_lifecycle_command(
+                    &python,
+                    adapter,
+                    &rejection_tool,
+                    &[],
+                    &[selected.to_path_buf()],
+                    &root,
+                );
+                command.env(INVOKED_ENV, &invoked);
+                let output = run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(5)),
+                    &root.join(format!("rejection-{label}-evidence")),
+                )
+                .map_err(|error| format!("run Vacuum {label} rejection: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !stderr.contains(diagnostic)
+                    || invoked.exists()
+                {
+                    return Err(format!(
+                        "Vacuum {label} rejection escaped preflight: status={:?}; stderr={stderr:?}; invoked={}",
+                        output.status.code(),
+                        invoked.exists()
+                    ));
+                }
+            }
+
+            for (label, extra, files, diagnostic) in [
+                (
+                    "extra-argument",
+                    vec!["--remote=true"],
+                    vec![target.clone()],
+                    "extra arguments are unsupported",
+                ),
+                (
+                    "file-count",
+                    Vec::new(),
+                    vec![target.clone(); 257],
+                    "selected batch exceeds the 256-file limit",
+                ),
+            ] {
+                let _ = std::fs::remove_file(&invoked);
+                let mut command = vacuum_lifecycle_command(
+                    &python,
+                    adapter,
+                    &rejection_tool,
+                    &extra,
+                    &files,
+                    &root,
+                );
+                command.env(INVOKED_ENV, &invoked);
+                let output = run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(5)),
+                    &root.join(format!("rejection-{label}-evidence")),
+                )
+                .map_err(|error| format!("run Vacuum {label} rejection: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !stderr.contains(diagnostic)
+                    || invoked.exists()
+                {
+                    return Err(format!(
+                        "Vacuum {label} rejection escaped preflight: status={:?}; stderr={stderr:?}; invoked={}",
+                        output.status.code(),
+                        invoked.exists()
+                    ));
+                }
+            }
+
+            for (label, source, diagnostic) in [
+                (
+                    "clean-output",
+                    "#!/bin/sh\nprintf unexpected\nexit 0\n",
+                    "clean Vacuum lint emitted output under the silent contract",
+                ),
+                (
+                    "empty-issue",
+                    "#!/bin/sh\nexit 1\n",
+                    "Vacuum violation status lacked a stable rule diagnostic",
+                ),
+            ] {
+                let tool = root.join(format!("vacuum-{label}-fake"));
+                write_executable_fixture(&tool, source, &format!("Vacuum {label} fake"))?;
+                let mut command = vacuum_lifecycle_command(
+                    &python,
+                    adapter,
+                    &tool,
+                    &[],
+                    std::slice::from_ref(&target),
+                    &root,
+                );
+                let output = run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(5)),
+                    &root.join(format!("no-op-{label}-evidence")),
+                )
+                .map_err(|error| format!("run Vacuum {label} no-op resistance probe: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains(diagnostic)
+                    || stderr.matches("velvet-glove-vacuum:").count() != 1
+                {
+                    return Err(format!(
+                        "Vacuum {label} no-op resistance failed: status={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+            }
+
+            let mutation_tool = root.join("vacuum-mutation-fake");
+            write_executable_fixture(
+                &mutation_tool,
+                r#"#!/bin/sh
+set -eu
+last=
+for argument in "$@"; do last=$argument; done
+/bin/cp "$last" "$VELVET_GLOVE_VACUUM_LIFECYCLE_COPY"
+/bin/pwd -P > "$VELVET_GLOVE_VACUUM_LIFECYCLE_CWD"
+printf 'replacement\n' > "$VELVET_GLOVE_VACUUM_LIFECYCLE_REPLACEMENT"
+/bin/mv "$VELVET_GLOVE_VACUUM_LIFECYCLE_REPLACEMENT" "$VELVET_GLOVE_VACUUM_LIFECYCLE_ORIGINAL"
+exit 0
+"#,
+                "Vacuum mutation lifecycle fake",
+            )?;
+            let mutation_target = root.join("mutated-openapi.yaml");
+            std::fs::write(&mutation_target, baseline)
+                .map_err(|error| format!("write Vacuum mutation target: {error}"))?;
+            let mutation_copy = root.join("mutation.copy");
+            let mutation_cwd = root.join("mutation.cwd");
+            let replacement = root.join("replacement.tmp");
+            let mut mutation = vacuum_lifecycle_command(
+                &python,
+                adapter,
+                &mutation_tool,
+                &[],
+                std::slice::from_ref(&mutation_target),
+                &root,
+            );
+            mutation
+                .env(COPY_ENV, &mutation_copy)
+                .env(CWD_ENV, &mutation_cwd)
+                .env(ORIGINAL_ENV, &mutation_target)
+                .env(REPLACEMENT_ENV, &replacement);
+            let mutation_output = run_with_timeout(
+                &mut mutation,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("mutation-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum mutation probe: {error}"))?;
+            let mutation_stderr = String::from_utf8_lossy(&mutation_output.stderr);
+            if mutation_output.status.code() != Some(2)
+                || !mutation_output.stdout.is_empty()
+                || mutation_stderr
+                    != "velvet-glove-vacuum: Vacuum mutated selected file mutated-openapi.yaml: changed content\n"
+                || std::fs::read(&mutation_copy)
+                    .map_err(|error| format!("read Vacuum mutation private copy: {error}"))?
+                    != baseline
+            {
+                return Err(format!(
+                    "Vacuum post-snapshot replacement was not contained: status={:?}; stdout={:?}; stderr={mutation_stderr:?}",
+                    mutation_output.status.code(),
+                    String::from_utf8_lossy(&mutation_output.stdout)
+                ));
+            }
+            assert_vacuum_private_root_removed(&mutation_cwd, "mutation")?;
+
+            let mkdtemp_anchor = "        private_root = tempfile.mkdtemp(prefix=\"velvet-glove-vacuum-\", dir=\"/tmp\")\n";
+            if adapter.matches(mkdtemp_anchor).count() != 1 {
+                return Err("Vacuum mkdtemp probe requires one exact live anchor".to_owned());
+            }
+            let mkdtemp_hook = "        raise PermissionError(13, \"Permission denied\", \"/tmp/velvet-glove-vacuum-sensitive-random\")\n";
+            let mkdtemp_adapter = adapter.replacen(mkdtemp_anchor, mkdtemp_hook, 1);
+            let mut mkdtemp = vacuum_lifecycle_command(
+                &python,
+                &mkdtemp_adapter,
+                &rejection_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            mkdtemp.env(INVOKED_ENV, &invoked);
+            let _ = std::fs::remove_file(&invoked);
+            let mkdtemp_output = run_with_timeout(
+                &mut mkdtemp,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("mkdtemp-failure-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum mkdtemp failure probe: {error}"))?;
+            let mkdtemp_stderr = String::from_utf8_lossy(&mkdtemp_output.stderr);
+            if mkdtemp_output.status.code() != Some(2)
+                || !mkdtemp_output.stdout.is_empty()
+                || mkdtemp_stderr.contains("sensitive-random")
+                || !mkdtemp_stderr.contains("<vacuum-private>")
+                || mkdtemp_stderr.matches("velvet-glove-vacuum:").count() != 1
+                || invoked.exists()
+            {
+                return Err(format!(
+                    "Vacuum mkdtemp failure leaked private state or invoked child: status={:?}; stdout={:?}; stderr={mkdtemp_stderr:?}; invoked={}",
+                    mkdtemp_output.status.code(),
+                    String::from_utf8_lossy(&mkdtemp_output.stdout),
+                    invoked.exists()
+                ));
+            }
+
+            let private_diagnostic_tool = root.join("vacuum-private-diagnostic-fake");
+            write_executable_fixture(
+                &private_diagnostic_tool,
+                "#!/bin/sh\nset -eu\nprintf '%s\\n%s\\n%s\\n' \"$PWD\" \"$HOME\" \"$TMPDIR\" >&2\nexit 2\n",
+                "Vacuum private-diagnostic lifecycle fake",
+            )?;
+            let mut private_diagnostic = vacuum_lifecycle_command(
+                &python,
+                adapter,
+                &private_diagnostic_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            let private_diagnostic_output = run_with_timeout(
+                &mut private_diagnostic,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("private-diagnostic-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum private-diagnostic probe: {error}"))?;
+            let private_diagnostic_stderr =
+                String::from_utf8_lossy(&private_diagnostic_output.stderr);
+            if private_diagnostic_output.status.code() != Some(2)
+                || !private_diagnostic_output.stdout.is_empty()
+                || private_diagnostic_stderr.contains("velvet-glove-vacuum-")
+                || !private_diagnostic_stderr.contains("<vacuum-private>\n")
+                || !private_diagnostic_stderr.contains("<vacuum-private>/home\n")
+                || !private_diagnostic_stderr.contains("<vacuum-private>/tmp\n")
+            {
+                return Err(format!(
+                    "Vacuum status-2 diagnostic exposed private state: status={:?}; stdout={:?}; stderr={private_diagnostic_stderr:?}",
+                    private_diagnostic_output.status.code(),
+                    String::from_utf8_lossy(&private_diagnostic_output.stdout)
+                ));
+            }
+
+            let output_tool = root.join("vacuum-output-cap-fake");
+            let output_cwd = root.join("output-cap.cwd");
+            write_executable_fixture(
+                &output_tool,
+                "#!/bin/sh\nset -eu\n/bin/pwd -P > \"$VELVET_GLOVE_VACUUM_LIFECYCLE_CWD\"\nexec /usr/bin/yes vacuum-output\n",
+                "Vacuum output-cap lifecycle fake",
+            )?;
+            let mut output_cap = vacuum_lifecycle_command(
+                &python,
+                adapter,
+                &output_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            output_cap.env(CWD_ENV, &output_cwd);
+            let output_cap_output = run_with_timeout(
+                &mut output_cap,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("output-cap-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum output-cap probe: {error}"))?;
+            let output_cap_stderr = String::from_utf8_lossy(&output_cap_output.stderr);
+            if output_cap_output.status.code() != Some(2)
+                || !output_cap_output.stdout.is_empty()
+                || !output_cap_stderr.contains("combined output exceeded 16777216 bytes")
+                || output_cap_stderr.matches("velvet-glove-vacuum:").count() != 1
+            {
+                return Err(format!(
+                    "Vacuum output cap did not fail closed: status={:?}; stdout_bytes={}; stderr={output_cap_stderr:?}",
+                    output_cap_output.status.code(),
+                    output_cap_output.stdout.len()
+                ));
+            }
+            assert_vacuum_private_root_removed(&output_cwd, "output-cap")?;
+
+            let spawn_tool = root.join("vacuum-spawn-signal-fake");
+            write_executable_fixture(
+                &spawn_tool,
+                "#!/bin/sh\ntrap '' HUP INT TERM\nwhile :; do :; done\n",
+                "Vacuum spawn-signal lifecycle fake",
+            )?;
+            let spawn_anchor = "            process = child\n";
+            if adapter.matches(spawn_anchor).count() != 1 {
+                return Err(
+                    "Vacuum spawn cutoff probe requires one exact process-assignment anchor"
+                        .to_owned(),
+                );
+            }
+            let spawn_hook = concat!(
+                "            with open(os.environ[\"VELVET_GLOVE_VACUUM_LIFECYCLE_CHILD_PID\"], \"x\") as handle:\n",
+                "                handle.write(str(child.pid))\n",
+                "            with open(os.environ[\"VELVET_GLOVE_VACUUM_LIFECYCLE_CWD\"], \"x\") as handle:\n",
+                "                handle.write(private_root)\n",
+                "            os.kill(os.getpid(), signal.SIGTERM)\n",
+                "            process = child\n",
+            );
+            let spawn_adapter = adapter.replacen(spawn_anchor, spawn_hook, 1);
+            let spawn_child_pid_path = root.join("spawn-signal.child.pid");
+            let spawn_cwd = root.join("spawn-signal.cwd");
+            let mut spawn_signal = vacuum_lifecycle_command(
+                &python,
+                &spawn_adapter,
+                &spawn_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            spawn_signal
+                .env(CHILD_PID_ENV, &spawn_child_pid_path)
+                .env(CWD_ENV, &spawn_cwd);
+            let spawn_output = run_with_timeout(
+                &mut spawn_signal,
+                b"",
+                timeout.min(Duration::from_secs(7)),
+                &root.join("spawn-signal-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum spawn-signal probe: {error}"))?;
+            let spawn_child_pid =
+                read_pid_file(&spawn_child_pid_path, "Vacuum spawn-signal child")?;
+            let spawn_child_alive = process_survives(spawn_child_pid, Duration::from_secs(1))?;
+            let spawn_group_alive =
+                process_group_survives(spawn_child_pid, Duration::from_secs(1))?;
+            if spawn_child_alive || spawn_group_alive {
+                let _ = signal_process_group(spawn_child_pid, "KILL");
+            }
+            let spawn_stdout = String::from_utf8_lossy(&spawn_output.stdout);
+            let spawn_stderr = String::from_utf8_lossy(&spawn_output.stderr);
+            if spawn_output.status.code() != Some(2)
+                || !spawn_stdout.is_empty()
+                || spawn_stderr != "velvet-glove-vacuum: received signal 15\n"
+                || spawn_child_alive
+                || spawn_group_alive
+            {
+                return Err(format!(
+                    "Vacuum Popen assignment signal was not contained: status={:?}; child={spawn_child_pid}:{spawn_child_alive}; group={spawn_group_alive}; stdout={spawn_stdout:?}; stderr={spawn_stderr:?}",
+                    spawn_output.status.code()
+                ));
+            }
+            assert_vacuum_private_root_removed(&spawn_cwd, "spawn-signal")?;
+
+            let signal_tool = root.join("vacuum-signal-fake");
+            write_executable_fixture(
+                &signal_tool,
+                r#"#!/bin/sh
+set -eu
+/bin/pwd -P > "$VELVET_GLOVE_VACUUM_LIFECYCLE_CWD"
+trap '' HUP INT TERM
+(
+  trap '' HUP INT TERM
+  while :; do :; done
+) &
+printf '%s\n' "$!" > "$VELVET_GLOVE_VACUUM_LIFECYCLE_DESCENDANT_PID"
+printf '%s\n' "$$" > "$VELVET_GLOVE_VACUUM_LIFECYCLE_CHILD_PID"
+: > "$VELVET_GLOVE_VACUUM_LIFECYCLE_READY"
+while :; do :; done
+"#,
+                "Vacuum signal lifecycle fake",
+            )?;
+            for (signal_name, signal_number, followup) in [
+                ("HUP", 1, None),
+                ("INT", 2, None),
+                ("TERM", 15, Some(("HUP", 1))),
+            ] {
+                let child_pid_path = root.join(format!("signal-{signal_name}.child.pid"));
+                let descendant_pid_path = root.join(format!("signal-{signal_name}.descendant.pid"));
+                let ready_path = root.join(format!("signal-{signal_name}.ready"));
+                let cwd_path = root.join(format!("signal-{signal_name}.cwd"));
+                let mut command = vacuum_lifecycle_command(
+                    &python,
+                    adapter,
+                    &signal_tool,
+                    &[],
+                    std::slice::from_ref(&target),
+                    &root,
+                );
+                command
+                    .env(CHILD_PID_ENV, &child_pid_path)
+                    .env(DESCENDANT_PID_ENV, &descendant_pid_path)
+                    .env(READY_ENV, &ready_path)
+                    .env(CWD_ENV, &cwd_path)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                let mut outer = command.spawn().map_err(|error| {
+                    format!("spawn Vacuum {signal_name} lifecycle probe: {error}")
+                })?;
+                let outer_pid = outer.id();
+                let startup_timeout = timeout.min(Duration::from_secs(5));
+                let startup_deadline = std::time::Instant::now() + startup_timeout;
+                while !ready_path.is_file() {
+                    if let Some(status) = outer.try_wait().map_err(|error| {
+                        format!("poll Vacuum {signal_name} lifecycle probe: {error}")
+                    })? {
+                        return Err(format!(
+                            "Vacuum {signal_name} lifecycle adapter exited {status:?} before child readiness"
+                        ));
+                    }
+                    if std::time::Instant::now() >= startup_deadline {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!(
+                            "Vacuum {signal_name} lifecycle child did not become ready within {startup_timeout:?}"
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let child_pid = read_pid_file(
+                    &child_pid_path,
+                    &format!("Vacuum {signal_name} lifecycle child"),
+                )?;
+                let descendant_pid = read_pid_file(
+                    &descendant_pid_path,
+                    &format!("Vacuum {signal_name} lifecycle descendant"),
+                )?;
+                if !signal_process(outer_pid, signal_name)?.success() {
+                    let _ = signal_process_group(child_pid, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!(
+                        "send {signal_name} to Vacuum lifecycle adapter {outer_pid}"
+                    ));
+                }
+                if let Some((followup_name, _)) = followup {
+                    std::thread::sleep(Duration::from_millis(50));
+                    if !signal_process(outer_pid, followup_name)?.success() {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!(
+                            "send follow-up {followup_name} while stopping Vacuum lifecycle adapter {outer_pid}"
+                        ));
+                    }
+                }
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send(outer.wait_with_output());
+                });
+                let completion_timeout = timeout.min(Duration::from_secs(7));
+                let output = match receiver.recv_timeout(completion_timeout) {
+                    Ok(Ok(output)) => output,
+                    Ok(Err(error)) => {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        return Err(format!(
+                            "wait for Vacuum {signal_name} lifecycle adapter: {error}"
+                        ));
+                    }
+                    Err(error) => {
+                        let _ = signal_process_group(child_pid, "KILL");
+                        let _ = signal_process(outer_pid, "KILL");
+                        return Err(format!(
+                            "Vacuum {signal_name} lifecycle output pipe remained open for {completion_timeout:?}: {error}"
+                        ));
+                    }
+                };
+                let child_alive = process_survives(child_pid, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant_pid, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(child_pid, Duration::from_secs(1))?;
+                if child_alive || descendant_alive || group_alive {
+                    let _ = signal_process_group(child_pid, "KILL");
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let expected_stderr = if let Some((_, followup_number)) = followup {
+                    format!(
+                        "velvet-glove-vacuum: received signal {signal_number}; also: received signal {followup_number}\n"
+                    )
+                } else {
+                    format!("velvet-glove-vacuum: received signal {signal_number}\n")
+                };
+                if output.status.code() != Some(2)
+                    || !stdout.is_empty()
+                    || stderr != expected_stderr
+                    || child_alive
+                    || descendant_alive
+                    || group_alive
+                {
+                    return Err(format!(
+                        "Vacuum {signal_name} lifecycle containment failed: status={:?}; child={child_pid}:{child_alive}; descendant={descendant_pid}:{descendant_alive}; group={group_alive}; stdout={stdout:?}; stderr={stderr:?}",
+                        output.status.code()
+                    ));
+                }
+                assert_vacuum_private_root_removed(&cwd_path, signal_name)?;
+            }
+
+            let orphan_tool = root.join("vacuum-normal-exit-orphan-fake");
+            let orphan_cwd = root.join("normal-exit-orphan.cwd");
+            let orphan_child_pid_path = root.join("normal-exit-orphan.child.pid");
+            let orphan_pid_path = root.join("normal-exit-orphan.pid");
+            write_executable_fixture(
+                &orphan_tool,
+                r#"#!/bin/sh
+set -eu
+/bin/pwd -P > "$VELVET_GLOVE_VACUUM_LIFECYCLE_CWD"
+printf '%s\n' "$$" > "$VELVET_GLOVE_VACUUM_LIFECYCLE_CHILD_PID"
+(
+  trap '' HUP INT TERM
+  while :; do :; done
+) &
+printf '%s\n' "$!" > "$VELVET_GLOVE_VACUUM_LIFECYCLE_DESCENDANT_PID"
+exit 0
+"#,
+                "Vacuum normal-exit orphan lifecycle fake",
+            )?;
+            let mut orphan = vacuum_lifecycle_command(
+                &python,
+                adapter,
+                &orphan_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            orphan
+                .env(CWD_ENV, &orphan_cwd)
+                .env(CHILD_PID_ENV, &orphan_child_pid_path)
+                .env(DESCENDANT_PID_ENV, &orphan_pid_path);
+            let orphan_output = run_with_timeout(
+                &mut orphan,
+                b"",
+                timeout.min(Duration::from_secs(10)),
+                &root.join("normal-exit-orphan-evidence"),
+            )
+            .map_err(|error| format!("run Vacuum normal-exit orphan probe: {error}"))?;
+            let orphan_pid =
+                read_pid_file(&orphan_pid_path, "Vacuum normal-exit orphan descendant")?;
+            let orphan_child_pid =
+                read_pid_file(&orphan_child_pid_path, "Vacuum normal-exit orphan leader")?;
+            let orphan_alive = process_survives(orphan_pid, Duration::from_secs(1))?;
+            let orphan_group_alive =
+                process_group_survives(orphan_child_pid, Duration::from_secs(1))?;
+            if orphan_alive || orphan_group_alive {
+                let _ = signal_process_group(orphan_child_pid, "KILL");
+            }
+            let orphan_stdout = String::from_utf8_lossy(&orphan_output.stdout);
+            let orphan_stderr = String::from_utf8_lossy(&orphan_output.stderr);
+            if orphan_output.status.code() != Some(2)
+                || !orphan_stdout.is_empty()
+                || orphan_stderr
+                    != "velvet-glove-vacuum: child left same-group descendants after leader exit\n"
+                || orphan_alive
+                || orphan_group_alive
+            {
+                return Err(format!(
+                    "Vacuum normal-exit orphan was not swept: status={:?}; orphan={orphan_pid}:{orphan_alive}; group={orphan_group_alive}; stdout={orphan_stdout:?}; stderr={orphan_stderr:?}",
+                    orphan_output.status.code()
+                ));
+            }
+            assert_vacuum_private_root_removed(&orphan_cwd, "normal-exit-orphan")?;
+
+            let cutoff_anchor = "            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n";
+            if adapter.matches(cutoff_anchor).count() != 1 {
+                return Err(
+                    "Vacuum cutoff probe requires one exact live SIG_BLOCK anchor".to_owned(),
+                );
+            }
+            let cutoff_hook = concat!(
+                "            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n",
+                "            with open(os.environ[\"VELVET_GLOVE_VACUUM_LIFECYCLE_CUTOFF_READY\"], \"xb\"):\n",
+                "                pass\n",
+                "            while not os.path.exists(os.environ[\"VELVET_GLOVE_VACUUM_LIFECYCLE_CUTOFF_RELEASE\"]):\n",
+                "                time.sleep(0.01)\n",
+            );
+            let cutoff_adapter = adapter.replacen(cutoff_anchor, cutoff_hook, 1);
+            let cutoff_ready = root.join("cutoff.ready");
+            let cutoff_release = root.join("cutoff.release");
+            let cutoff_cwd = root.join("cutoff.cwd");
+            let mut cutoff = vacuum_lifecycle_command(
+                &python,
+                &cutoff_adapter,
+                &clean_tool,
+                &[],
+                std::slice::from_ref(&target),
+                &root,
+            );
+            cutoff
+                .env(ARGV_ENV, root.join("cutoff.argv"))
+                .env(CWD_ENV, &cutoff_cwd)
+                .env(COPY_ENV, root.join("cutoff.copy"))
+                .env(CONFIG_ENV, root.join("cutoff.config"))
+                .env(MODES_ENV, root.join("cutoff.modes"))
+                .env(ENVIRONMENT_ENV, root.join("cutoff.environment"))
+                .env(CUTOFF_READY_ENV, &cutoff_ready)
+                .env(CUTOFF_RELEASE_ENV, &cutoff_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut cutoff_outer = cutoff
+                .spawn()
+                .map_err(|error| format!("spawn Vacuum cutoff lifecycle probe: {error}"))?;
+            let cutoff_outer_pid = cutoff_outer.id();
+            let cutoff_startup_timeout = timeout.min(Duration::from_secs(5));
+            let cutoff_startup_deadline = std::time::Instant::now() + cutoff_startup_timeout;
+            while !cutoff_ready.is_file() {
+                if let Some(status) = cutoff_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll Vacuum cutoff lifecycle probe: {error}"))?
+                {
+                    return Err(format!(
+                        "Vacuum cutoff adapter exited {status:?} before reaching the blocked window"
+                    ));
+                }
+                if std::time::Instant::now() >= cutoff_startup_deadline {
+                    let _ = signal_process(cutoff_outer_pid, "KILL");
+                    let _ = cutoff_outer.wait();
+                    return Err(format!(
+                        "Vacuum cutoff adapter did not reach its blocked window within {cutoff_startup_timeout:?}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_vacuum_private_root_removed(&cutoff_cwd, "cutoff-before-release")?;
+            if !signal_process(cutoff_outer_pid, "TERM")?.success() {
+                let _ = signal_process(cutoff_outer_pid, "KILL");
+                let _ = cutoff_outer.wait();
+                return Err("send blocked-window TERM to Vacuum cutoff adapter".to_owned());
+            }
+            std::fs::write(&cutoff_release, b"release\n")
+                .map_err(|error| format!("release Vacuum cutoff lifecycle hook: {error}"))?;
+            let (cutoff_sender, cutoff_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = cutoff_sender.send(cutoff_outer.wait_with_output());
+            });
+            let cutoff_output = cutoff_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(5)))
+                .map_err(|error| {
+                    let _ = signal_process(cutoff_outer_pid, "KILL");
+                    format!("wait for Vacuum cutoff lifecycle adapter: {error}")
+                })?
+                .map_err(|error| format!("collect Vacuum cutoff lifecycle output: {error}"))?;
+            let cutoff_stdout = String::from_utf8_lossy(&cutoff_output.stdout);
+            let cutoff_stderr = String::from_utf8_lossy(&cutoff_output.stderr);
+            if cutoff_output.status.code() != Some(2)
+                || !cutoff_stdout.is_empty()
+                || cutoff_stderr != "velvet-glove-vacuum: received signal 15\n"
+            {
+                return Err(format!(
+                    "Vacuum blocked cleanup signal was not drained exactly: status={:?}; stdout={cutoff_stdout:?}; stderr={cutoff_stderr:?}",
+                    cutoff_output.status.code()
+                ));
+            }
+            assert_vacuum_private_root_removed(&cutoff_cwd, "cutoff-after-exit")?;
+
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(&root);
