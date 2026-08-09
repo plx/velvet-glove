@@ -1,0 +1,12 @@
+{
+  "name": "velvet-glove-contextlint-contract",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": "24.19.0"
+  },
+  "dependencies": {
+    "@contextlint/cli": "1.1.1",
+    "@contextlint/core": "1.1.1"
+  }
+}

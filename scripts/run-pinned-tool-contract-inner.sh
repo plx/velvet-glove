@@ -45,6 +45,7 @@ export VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT
 VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT=$(pinned_component_cache_root \
   "$state_dir" cargo-clippy-toolchain-1.97.1 "$cargo_clippy_toolchain_identity")
 export VELVET_GLOVE_FIXTURE_PRETTIER_ROOT="$state_dir/prettier-environment-node-24.19.0-prettier-3.9.6"
+export VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT="$state_dir/contextlint-environment-node-24.19.0-contextlint-1.1.1"
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -90,6 +91,10 @@ prettier_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("prettier") != null' >/dev/null; then
   prettier_selected=true
 fi
+contextlint_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("contextlint") != null' >/dev/null; then
+  contextlint_selected=true
+fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
   any(.recipes[];
@@ -100,6 +105,10 @@ fi
 prettier_node="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/node/bin/node"
 prettier_npm_cli="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
 prettier_cli="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/package/node_modules/prettier/bin/prettier.cjs"
+contextlint_node="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/node/bin/node"
+contextlint_npm_cli="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/node/lib/node_modules/npm/bin/npm-cli.js"
+contextlint_cli="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_modules/@contextlint/cli/dist/index.js"
+contextlint_cli_manifest="$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_modules/@contextlint/cli/package.json"
 
 while IFS= read -r program; do
   resolved=
@@ -124,6 +133,24 @@ while IFS= read -r program; do
       node)
         if [[ $shared_node_selected == false ]]; then
           resolved="$prettier_node"
+        fi
+        ;;
+    esac
+  fi
+  if [[ -z $resolved && $contextlint_selected == true ]]; then
+    case $program in
+      contextlint-node)
+        resolved="$contextlint_node"
+        ;;
+      contextlint-npm)
+        resolved="$contextlint_npm_cli"
+        ;;
+      contextlint)
+        resolved="$contextlint_cli"
+        ;;
+      node)
+        if [[ $shared_node_selected == false && $prettier_selected == false ]]; then
+          resolved="$contextlint_node"
         fi
         ;;
     esac
@@ -187,6 +214,7 @@ while IFS= read -r probe; do
   probe_argv=()
   rust_197_probe=false
   prettier_probe=false
+  contextlint_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
   done < <(printf '%s\n' "$probe" | jq -r '.probe.argv[]')
@@ -230,10 +258,31 @@ while IFS= read -r probe; do
         ;;
     esac
   fi
+  if [[ $contextlint_selected == true ]]; then
+    case $owner in
+      contextlint-node)
+        probe_argv=("$contextlint_node" "${probe_argv[@]:1}")
+        contextlint_probe=true
+        ;;
+      contextlint-npm)
+        probe_argv=("$contextlint_node" "$contextlint_npm_cli" "${probe_argv[@]:1}")
+        contextlint_probe=true
+        ;;
+      contextlint)
+        probe_argv=(
+          "$contextlint_node"
+          -p
+          'JSON.parse(require("node:fs").readFileSync(process.argv[1])).version'
+          "$contextlint_cli_manifest"
+        )
+        contextlint_probe=true
+        ;;
+    esac
+  fi
   set +e
   if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
-  elif [[ $prettier_probe == true ]]; then
+  elif [[ $prettier_probe == true || $contextlint_probe == true ]]; then
     observed=$(env -i \
       "HOME=$HOME" \
       "USER=${USER:-runner}" \

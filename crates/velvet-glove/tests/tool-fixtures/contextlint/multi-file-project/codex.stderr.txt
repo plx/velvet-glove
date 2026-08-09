@@ -1,0 +1,9 @@
+warning: Contextlint: issues remain; diagnostics: <workspace>/.velvet-glove/contextlint-agent-hook/test-session_test-turn_contextlint-tool_contextlint-tool-issues.txt
+Contextlint diagnostics:
+[verify] command: python -I -c <inline-script> node contextlint <workspace>/contextlint.config.json __VELVET_GLOVE_CONTEXTLINT_FILES__ <workspace>/docs/example.md <workspace>/docs/selected-clean.md
+status: Some(1)
+classification: Some(Issues)
+stdout:
+[{"file":"(project)","line":0,"message":"Required file \"docs/missing-architecture.md\" not found","ruleId":"STR-001","severity":"error"},{"file":"docs/unselected.md","line":0,"message":"Missing required section \"Required\"","ruleId":"SEC-001","severity":"error"}]
+artifact: <workspace>/.velvet-glove/contextlint-agent-hook/test-session_test-turn_contextlint-tool_contextlint-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

@@ -150,14 +150,15 @@ just tool-case astro multi-file-project
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case prettier multi-file
+just tool-case contextlint multi-file-project
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Fifteen behavior-rich contracts across eleven environments: jq data formats,
-# Buf data formats, shared Node, dedicated Prettier, Python, Go, Rust, Cargo
-# Clippy/Fmt, Ruby, security, and native macOS.
+# Sixteen behavior-rich contracts across twelve environments: jq data formats,
+# Buf data formats, shared Node, dedicated Prettier, dedicated Contextlint,
+# Python, Go, Rust, Cargo Clippy/Fmt, Ruby, security, and native macOS.
 just tool-representatives
 
 cargo fmt --all -- --check
@@ -222,6 +223,21 @@ and compatibility-deferred surfaces. Exact provenance, signal and descendant
 cleanup, private-config handling, and the remaining file-replacement and late
 partial-write limitations are in the
 [Prettier contract](docs/pinned-tool-environments.md#prettier-validation-contract).
+
+The dedicated Contextlint lane installs the exact `@contextlint/cli` and
+`@contextlint/core` 1.1.1 pair in a separate locked npm graph and executes it
+only through checksum-pinned Node 24.19.0. Its isolated adapter ignores config
+include patterns for scope, inventories and snapshots every physical Markdown
+file outside physical fixed-name exclusions, rejects Contextlint glob-magic
+paths and every encountered symlink, copies the validated JSON config into a
+private root, and requires an exact private SEC-001 completion probe before it
+accepts project JSON. The four-case matrix proves clean, warning-only source,
+cross-file/project, and operational-failure behavior on both immediate and
+compatibility-deferred surfaces. Exact package integrities and tag provenance,
+permission and trace bindings, signal/descendant cleanup, and the remaining
+unwalked-subtree, workspace-topology/referenced-target replacement, and
+escaped-process limitations are in the [Contextlint
+contract](docs/pinned-tool-environments.md#contextlint-validation-contract).
 
 The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
 stdout as the formatting signal while preserving native status-two failure

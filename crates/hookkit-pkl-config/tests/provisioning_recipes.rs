@@ -470,6 +470,49 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             ("NPM_CONFIG_USERCONFIG".to_owned(), "/dev/null".to_owned()),
         ])
     );
+    let contextlint_environment = environments
+        .get("macos-arm64-contextlint")
+        .expect("dedicated Contextlint environment");
+    assert_eq!(contextlint_environment.provisioning_group, "contextlint");
+    assert_eq!(
+        contextlint_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["contextlint-node", "contextlint-npm"])
+    );
+    assert_eq!(
+        contextlint_environment
+            .auxiliary_programs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["contextlint-node", "contextlint-npm"])
+    );
+    let contextlint_bootstrap = contextlint_environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "contextlint-npm-ci")
+        .expect("dedicated Contextlint npm bootstrap");
+    assert_eq!(contextlint_bootstrap.network, "required");
+    assert_eq!(
+        contextlint_bootstrap.lockfile.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/contextlint/package-lock.json")
+    );
+    assert_eq!(
+        contextlint_bootstrap.argv,
+        [
+            "{state}/contextlint-environment-node-24.19.0-contextlint-1.1.1/node/bin/node",
+            "{state}/contextlint-environment-node-24.19.0-contextlint-1.1.1/node/lib/node_modules/npm/bin/npm-cli.js",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--prefix",
+            "{state}/contextlint-environment-node-24.19.0-contextlint-1.1.1/package",
+        ]
+    );
     let mise_lock = std::fs::read_to_string(root.join(&registry.mise.lock)).expect("mise lock");
     for component in registry.shared_components.iter().chain(
         registry
@@ -483,6 +526,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         groups,
         BTreeSet::from([
             "cargo-clippy",
+            "contextlint",
             "data-formats",
             "go",
             "node",
@@ -620,6 +664,32 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             assert_eq!(package["engines"]["node"], "24.19.0");
             assert_eq!(package["dependencies"]["prettier"], "3.9.6");
         }
+        if recipe.tool_id == "contextlint" {
+            validate_npm_lock_package(
+                &root,
+                &recipe.integrity,
+                "@contextlint/cli",
+                &recipe.version,
+                "sha512-QCyjqmdaoanH9L8AduX2jH7vRm2yryHpxroLai0PHHP2lijBTG96UEICCuSIHbkoQ4FXulrokQst5+eTf34v9g==",
+            );
+            validate_npm_lock_entry(
+                &root,
+                &recipe.integrity,
+                "@contextlint/core",
+                &recipe.version,
+                "sha512-ui2ymL90ZlV260NZD8pgki6fwCUM1bX2wj1LbDy5H4u7w8JyTvxIBORxzhWlklDUmsXf1wVxIZXdbvuRYRsqfQ==",
+            );
+            let package: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join(
+                    "crates/hookkit-pkl-config/validation/provisioning/contextlint/package.json",
+                ))
+                .expect("read Contextlint package manifest"),
+            )
+            .expect("parse Contextlint package manifest");
+            assert_eq!(package["engines"]["node"], "24.19.0");
+            assert_eq!(package["dependencies"]["@contextlint/cli"], "1.1.1");
+            assert_eq!(package["dependencies"]["@contextlint/core"], "1.1.1");
+        }
         match &tool.provenance.upstream {
             UpstreamProvenance::Recorded {
                 version,
@@ -655,6 +725,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "buf-format",
             "cargo-clippy",
             "cargo-fmt",
+            "contextlint",
             "go-fmt",
             "jq",
             "prettier",
@@ -767,6 +838,53 @@ fn prettier_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
         !mise_lock.contains("24.19.0"),
         "dedicated Prettier Node must not alter the shared mise graph"
     );
+}
+
+#[test]
+fn contextlint_provisioning_uses_a_separate_exact_runtime_and_case_only_binding() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    let harness = std::fs::read_to_string(root.join("crates/velvet-glove/tests/tool_fixtures.rs"))
+        .expect("real-tool fixture harness");
+
+    assert!(outer.contains("fetch_component_archive contextlint-node"));
+    assert!(outer.contains(
+        "contextlint_root=\"$state_dir/contextlint-environment-node-24.19.0-contextlint-1.1.1\""
+    ));
+    assert!(outer.contains("\"$contextlint_install_root/node/bin/node\" \\"));
+    assert!(
+        outer.contains("\"$contextlint_install_root/node/lib/node_modules/npm/bin/npm-cli.js\" \\")
+    );
+    assert!(outer.contains("verify_macho_closure \"$contextlint_root/node\" contextlint-node"));
+    assert!(outer.contains("! -f $contextlint_cli"));
+    assert!(outer.contains("\"$contextlint_node\" \"$contextlint_npm_cli\" ls --all --prefix"));
+    assert!(inner.contains(
+        "export VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT=\"$state_dir/contextlint-environment-node-24.19.0-contextlint-1.1.1\""
+    ));
+    assert!(
+        inner.contains("contextlint_node=\"$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/node/bin/node\"")
+    );
+    assert!(inner.contains(
+        "contextlint_cli=\"$VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT/package/node_modules/@contextlint/cli/dist/index.js\""
+    ));
+    let path_export = inner
+        .lines()
+        .find(|line| line.starts_with("export PATH="))
+        .expect("controlled PATH export");
+    assert!(
+        !path_export.contains("contextlint-environment"),
+        "dedicated Contextlint graph must not leak into the shared representative PATH"
+    );
+    assert!(
+        harness.contains(
+            "const CONTEXTLINT_ROOT_ENV: &str = \"VELVET_GLOVE_FIXTURE_CONTEXTLINT_ROOT\";"
+        )
+    );
+    assert!(harness.contains("\"node\" if contextlint_toolchain.is_some()"));
+    assert!(harness.contains("Contextlint trace did not pass the dedicated managed CLI"));
 }
 
 fn validate_components<'a>(
@@ -1240,6 +1358,21 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert_eq!(component.probe.argv, ["prettier-node", "--version"]);
                     assert_eq!(component.probe.expected, "v24.19.0");
                 }
+                "contextlint-node" => {
+                    assert_eq!(component.version, "24.19.0");
+                    assert_eq!(
+                        component.integrity.url.as_deref(),
+                        Some("https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz")
+                    );
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d")
+                    );
+                    assert_eq!(component.integrity.min_os_version.as_deref(), Some("11.0"));
+                    assert!(component.runtime_component_ids.is_empty());
+                    assert_eq!(component.probe.argv, ["contextlint-node", "--version"]);
+                    assert_eq!(component.probe.expected, "v24.19.0");
+                }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");
                     assert_eq!(
@@ -1359,6 +1492,15 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     );
                     assert_eq!(component.version, "11.17.0");
                     assert_eq!(component.probe.argv, ["prettier-npm", "--version"]);
+                    assert_eq!(component.probe.expected, "11.17.0");
+                }
+                "contextlint-npm" => {
+                    assert_eq!(
+                        component.integrity.component_id.as_deref(),
+                        Some("contextlint-node")
+                    );
+                    assert_eq!(component.version, "11.17.0");
+                    assert_eq!(component.probe.argv, ["contextlint-npm", "--version"]);
                     assert_eq!(component.probe.expected, "11.17.0");
                 }
                 other => panic!("unexpected runtime-bundled component {other}"),

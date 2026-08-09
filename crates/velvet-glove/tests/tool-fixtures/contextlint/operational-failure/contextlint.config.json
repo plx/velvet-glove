@@ -1,0 +1,7 @@
+{
+  "$schema": "http://127.0.0.1:9/contextlint-schema-must-not-be-fetched.json",
+  "include": ["nothing-matches/**/*.md"],
+  "rules": [
+    { "rule": "ref001" }
+  ]
+}
