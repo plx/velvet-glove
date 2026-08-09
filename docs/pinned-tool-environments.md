@@ -6,6 +6,7 @@ single command. For example:
 ```sh
 just tool-case jq multi-file-fragments
 just tool-case buf-format multi-file
+just tool-case vacuum multi-file
 just tool-case betterleaks multi-file
 just tool-case biome multi-file
 just tool-case prettier multi-file
@@ -16,7 +17,7 @@ just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all seventeen behavior-rich representative contracts across thirteen environments
+Run all eighteen behavior-rich representative contracts across fourteen environments
 with:
 
 ```sh
@@ -75,6 +76,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | --- | --- | --- | --- |
 | Data formats | jq 1.8.2 | SHA-256 + SLSA | `jq/multi-file-fragments` |
 | Buf data formats | Buf 1.72.0; Python 3.14.5; Apple diff | mise SHA-256; signed upstream checksum manifest; exact host-program probe | `buf-format/multi-file` |
+| Vacuum data formats | Vacuum 0.30.0; Python 3.14.5 | official release archive SHA-256; exact member/binary/license/README closure; independently audited upstream checksums and Sigstore bundle | `vacuum/multi-file` |
 | Node | Node 24.18.0; Astro 7.2.0; @astrojs/check 0.9.10; TypeScript 6.0.3; Biome 2.5.7; sort-package-json 3.6.1 | mise SHA-256; npm SHA-512 integrity graph | `astro/multi-file-project`, `biome/multi-file`, `sort-package-json/unformatted` |
 | Prettier | Node 24.19.0; npm 11.17.0; Prettier 3.9.6; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `prettier/multi-file` |
 | Contextlint | Node 24.19.0; npm 11.17.0; @contextlint/cli and core 1.1.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `contextlint/multi-file-project` |
@@ -252,6 +254,130 @@ module/symbol metadata; an exact v1.72.0 source scan finds it only at module
 level and not imported or called. This is a recorded scanner limitation, not
 an audit-clean or future-security claim. The release binary has only an ad-hoc
 linker signature rather than a Developer ID signature or notarization.
+
+### Vacuum validation contract
+
+The dedicated Vacuum data-formats environment pins the official
+[`vacuum_0.30.0_darwin_arm64.tar.gz`](https://github.com/daveshanley/vacuum/releases/download/v0.30.0/vacuum_0.30.0_darwin_arm64.tar.gz)
+archive at SHA-256
+`bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8`.
+The annotated `v0.30.0` tag object
+`5502edc731a0f54a549620ea64e67eb9ef533739` peels to source and release
+commit `328ff253522138616096eeabf1dc1c8895dac215`. The archive contains exactly
+`LICENSE`, `README.md`, and `vacuum`; their reviewed license, README, and
+binary SHA-256 values are
+`a4c0921c8f302fdb282c41bcb85e09375561f9c9b38e77c258d89d17492555cf`,
+`b57124010840e63ce1263938b623b8e663599e265958d5ae2731ae7aca605522`,
+and
+`b8fc23e87917742f2b81bb55addc8d1b968759c7ad5e7372ad23748197c53afa`.
+The embedded license is MIT. The exact product probe is
+`vacuum version` → `0.30.0`.
+
+The upstream
+[`checksums.txt`](https://github.com/daveshanley/vacuum/releases/download/v0.30.0/checksums.txt)
+and
+[`checksums.txt.sigstore.json`](https://github.com/daveshanley/vacuum/releases/download/v0.30.0/checksums.txt.sigstore.json)
+were independently audited at SHA-256
+`2dac5adb73fe190e2657108f2ab408fafbc0fe5323b33825b03a6537de0207c8`
+and
+`08dc6453c5f396db405f04f3c0709424fb0a549200e7fbb3768d268c0c2a07bc`.
+The bundle subject digest is the checksums-file digest. Its certificate names
+repository `daveshanley/vacuum`, workflow `Publish`, source commit
+`328ff253522138616096eeabf1dc1c8895dac215`, and SAN
+`https://github.com/daveshanley/vacuum/.github/workflows/publish.yaml@refs/heads/main`,
+with issuance at 2026-07-23T12:18:43Z by `sigstore-intermediate`. These bundle
+details are a committed, independently reviewed provenance record; the runner
+does not fetch or cryptographically verify the Sigstore bundle at run time.
+Its enforced artifact boundary is the official archive SHA-256 plus the exact
+extracted closure above.
+
+The binary is a thin arm64 Mach-O with minimum macOS 12.0 and only system
+dynamic-library dependencies. The runner checks those properties and binds
+the embedded hardened-runtime flag `0x10000(runtime)` and TeamIdentifier
+`HFX5KEHACT` after verifying the binary bytes. Those embedded fields are
+metadata checks, not a claim that an Apple code signature or the unsigned
+upstream tag establishes artifact trust. The provenance file participates in
+the content-addressed installation identity, so the outer provisioner and
+denied-network runner resolve the same exact cached binary.
+
+The evaluated command uses shared pinned Python 3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> vacuum {extra-args} __VELVET_GLOVE_VACUUM_FILES__ {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Every configured extra argument is rejected. After validating the complete
+selection, the adapter runs one batch with these fixed native arguments:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+vacuum lint --config=vacuum.conf.yaml --base=. --no-update-check --remote=false --no-style --no-banner --details --errors --silent --all-results --no-clip --fail-severity=error --fix=false --timeout=5 --lookup-timeout=500 --turbo=false --hard-mode=false --skip-check=false --ext-refs=false --resolve-all-refs=false --nested-refs-doc-context=false --allow-private-networks=false --allow-http=false --fetch-timeout=5 INPUT...
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The explicit empty config and private base prevent user or project Vacuum
+configuration from participating. Update checks, remote lookup, HTTP and
+private-network access, formatting, result clipping, and fast or skip modes
+are fixed off; all error-severity findings are requested. A clean result must
+be status zero with no output. Native status one is a source issue only when
+stdout contains Vacuum's stable rule and category fields and stderr is empty.
+Native status two is operational failure. All other statuses, incomplete
+issue evidence, unexpected clean output, signal, spawn, scope, mutation,
+cleanup, or output-limit behavior fail operationally.
+
+`--remote=false` does not disable Vacuum's local `$ref` resolver. The exact
+0.30.0/libopenapi 0.38.7 source dispatches file lookup only for the literal
+`$ref` key; exact-binary probes also found no local or external read for
+`$dynamicRef`, `$recursiveRef`, or external `operationRef`. The adapter still
+fails closed before launch on raw or mixed-escaped `$ref`, `$dynamicRef`, and
+`$recursiveRef`, and on every `\x24`, `\u0024`, or `\U00000024` spelling
+regardless of context. This deliberately rejects some harmless strings and
+comments, but prevents an encoded key from reopening local resolution without
+depending on a YAML parser. External `operationRef` remains syntactically
+usable; remote access is disabled both by the fixed arguments and the active
+lane sandbox.
+
+Each selected path must be a normalized absolute UTF-8 path to a unique
+regular `.json`, `.yaml`, or `.yml` file with link count one. Symlinks,
+hard-link aliases, duplicate identities, control characters, more than 256
+files, a file over 16 MiB, or a batch over 64 MiB are rejected. The adapter
+reads through no-follow descriptors and snapshots content, device, inode,
+mode, size, mtime, and ctime. Because even a validated original path could be
+replaced between preflight and child launch, Vacuum never receives an original
+path: every byte sequence is copied to a unique owned 0600 file under an owned
+0700 private tree, and diagnostics are mapped back to stable source-relative
+names. Originals are reopened and compared after the child exits.
+
+The child receives private `HOME`, XDG configuration/cache, `TMPDIR`, current
+directory, config, and base paths, with `PATH=/usr/bin:/bin`, fixed C/UTC/color
+settings, and Vacuum, proxy, dynamic-loader, and Go runtime poison removed.
+Combined output is capped at 16 MiB. HUP, INT, and TERM are forwarded to an
+owned process group; both normal and exceptional exits perform bounded
+descendant sweeps, and cleanup blocks and drains late signals before emitting
+one normalized diagnostic. Private directory names and ANSI escapes are
+removed from forwarded output.
+
+The four-case matrix covers a silent clean document, a stable rule violation,
+a clean-plus-violating multi-file batch, and malformed input that must remain
+operational. Claude and Codex immediate hooks and the compatibility-translated
+deferred lifecycle run the same evaluated command without mutating sources.
+The focused lifecycle matrix additionally exercises no-op status spoofing,
+source replacement, hostile umasks, private-path failures, output exhaustion,
+signals during spawn and stop, ignoring descendants, and normal-exit orphans.
+
+This contract intentionally validates self-contained copied documents, not
+OpenAPI projects that depend on local reference files. Its reference-byte
+guard is conservative and can over-reject escaped dollar text. A descendant
+that deliberately escapes into a new session or process group cannot be
+contained by the adapter, and the preflight/postcheck cannot eliminate all
+external filesystem races; the copied-input design prevents those races from
+changing what Vacuum reads.
 
 ### gofmt validation contract
 
@@ -1340,11 +1466,11 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These seventeen smoke contracts establish the reproducible environment
+These eighteen smoke contracts establish the reproducible environment
 substrate; they do not by themselves promote a tool's full pinned-real-tool
 coverage tier.
 The generated coverage report retains gaps until every required target, surface,
-and semantic case has evidence; jq, Buf Format, Betterleaks, Astro,
+and semantic case has evidence; jq, Buf Format, Vacuum, Betterleaks, Astro,
 Asciidoctor, Biome, Prettier, Contextlint, dclint, gofmt, Cargo Clippy, and
 Cargo Fmt are covered only after each complete case matrix passes. Linux,
 Intel, and full-catalog scheduling remain separate follow-up work.

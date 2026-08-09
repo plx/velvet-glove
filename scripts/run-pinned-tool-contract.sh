@@ -73,6 +73,7 @@ clippy_extract_dir=
 prettier_extract_dir=
 contextlint_extract_dir=
 dclint_extract_dir=
+vacuum_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
 cleanup() {
@@ -93,6 +94,9 @@ cleanup() {
   esac
   case $dclint_extract_dir in
     "$state_dir"/dclint-extract.*) rm -rf -- "$dclint_extract_dir" ;;
+  esac
+  case $vacuum_extract_dir in
+    "$state_dir"/vacuum-extract.*) rm -rf -- "$vacuum_extract_dir" ;;
   esac
   case $ruby_extract_dir in
     "$state_dir"/ruby-extract.*) rm -rf -- "$ruby_extract_dir" ;;
@@ -292,6 +296,13 @@ groups=$("$jq_bin" -r --arg selection "$selection" \
    | [.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId] as $environmentIds
    | [.environments[] | select(.id as $id | $environmentIds | index($id)) | .provisioningGroup]
    | unique | join(",")' "$registry")
+
+vacuum_selected=false
+if "$jq_bin" -en --arg selection "$selection" \
+  '$selection | split(",") | map(split("/")[0]) | index("vacuum") != null' \
+  >/dev/null; then
+  vacuum_selected=true
+fi
 
 tool_specs=()
 while IFS= read -r tool_spec; do
@@ -828,6 +839,138 @@ if needs_group dclint; then
   fi
   if [[ $(env -i "${provisioning_env[@]}" "$dclint_node" "$dclint_cli" --version) != "3.1.0" ]]; then
     echo "error: controlled dclint CLI failed its exact version probe" >&2
+    exit 1
+  fi
+fi
+
+if [[ $vacuum_selected == true ]]; then
+  vacuum_provenance="$provisioning_dir/vacuum/provenance.json"
+  if [[ ! -f $vacuum_provenance || -L $vacuum_provenance ]]; then
+    echo "error: Vacuum provenance record is unavailable or not a regular file" >&2
+    exit 1
+  fi
+  vacuum_archive=$(fetch_component_archive vacuum)
+  vacuum_identity=$(pinned_component_provenance_identity \
+    "$jq_bin" \
+    "$registry" \
+    vacuum \
+    "$vacuum_provenance" \
+    crates/hookkit-pkl-config/validation/provisioning/vacuum/provenance.json)
+  vacuum_component_identity=$(printf '%s\n' "$vacuum_identity" | \
+    "$jq_bin" -c '.component')
+  if ! "$jq_bin" -e --argjson component "$vacuum_component_identity" '
+    .schemaVersion == 1
+    and .release.version == $component.version
+    and .archive.url == $component.integrity.url
+    and .archive.sha256 == $component.integrity.sha256
+    and .darwin.minimumOsVersion == $component.integrity.minOsVersion
+    and .darwin.allowedDylibPrefixes == $component.integrity.allowedDylibPrefixes
+    and .probe.argv == ["vacuum", "version"]
+    and .probe.expected == $component.version' "$vacuum_provenance" >/dev/null; then
+    echo "error: Vacuum provenance record disagrees with the pinned component" >&2
+    exit 1
+  fi
+  vacuum_root=$(pinned_component_cache_root \
+    "$state_dir" vacuum-0.30.0 "$vacuum_identity")
+  if [[ -e $vacuum_root && ( ! -d $vacuum_root || -L $vacuum_root ) ]]; then
+    echo "error: controlled Vacuum root is not a directory: $vacuum_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $vacuum_root ]]; then
+    echo "==> Installing the checksum-verified Vacuum 0.30.0 archive"
+    vacuum_extract_dir=$(mktemp -d "$state_dir/vacuum-extract.XXXXXX")
+    vacuum_archive_members=$(/usr/bin/tar -tzf "$vacuum_archive")
+    vacuum_expected_members=$("$jq_bin" -r '.archive.members[]' "$vacuum_provenance")
+    if [[ $vacuum_archive_members != "$vacuum_expected_members" ]]; then
+      echo "error: Vacuum archive members differ from the reviewed release closure" >&2
+      exit 1
+    fi
+    mkdir -p "$vacuum_extract_dir/archive" "$vacuum_extract_dir/install/bin" \
+      "$vacuum_extract_dir/install/share"
+    /usr/bin/tar -xzf "$vacuum_archive" -C "$vacuum_extract_dir/archive"
+    for vacuum_member in LICENSE README.md vacuum; do
+      if [[ ! -f $vacuum_extract_dir/archive/$vacuum_member || \
+        -L $vacuum_extract_dir/archive/$vacuum_member ]]; then
+        echo "error: Vacuum archive member is not a regular file: $vacuum_member" >&2
+        exit 1
+      fi
+    done
+    mv "$vacuum_extract_dir/archive/vacuum" "$vacuum_extract_dir/install/bin/vacuum"
+    mv "$vacuum_extract_dir/archive/LICENSE" "$vacuum_extract_dir/install/share/LICENSE"
+    mv "$vacuum_extract_dir/archive/README.md" "$vacuum_extract_dir/install/README.md"
+    chmod 755 "$vacuum_extract_dir/install/bin/vacuum"
+    chmod 644 "$vacuum_extract_dir/install/share/LICENSE" \
+      "$vacuum_extract_dir/install/README.md"
+    printf '%s\n' "$vacuum_identity" \
+      >"$vacuum_extract_dir/install/.velvet-glove-artifacts.json"
+    verify_macho_closure "$vacuum_extract_dir/install" vacuum
+    mv "$vacuum_extract_dir/install" "$vacuum_root"
+    rm -rf -- "$vacuum_extract_dir"
+    vacuum_extract_dir=
+  fi
+  if ! pinned_component_cache_valid \
+    "$vacuum_root" "$vacuum_identity" bin/vacuum; then
+    echo "error: controlled Vacuum installation does not match the declared archive and provenance: $vacuum_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $vacuum_root/share/LICENSE || -L $vacuum_root/share/LICENSE || \
+    ! -f $vacuum_root/README.md || -L $vacuum_root/README.md || \
+    -n $(/usr/bin/find "$vacuum_root" -type l -print -quit) || \
+    $(/usr/bin/find "$vacuum_root" -type f | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 4 || \
+    $(/usr/bin/find "$vacuum_root" -type d | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 3 || \
+    -n $(/usr/bin/find "$vacuum_root" -mindepth 1 ! -type d ! -type f -print -quit) ]]; then
+    echo "error: controlled Vacuum installation has an incomplete or linked closure" >&2
+    exit 1
+  fi
+  vacuum_expected_binary_sha256=$("$jq_bin" -r '.archive.binarySha256' "$vacuum_provenance")
+  vacuum_expected_license_sha256=$("$jq_bin" -r '.archive.licenseSha256' "$vacuum_provenance")
+  vacuum_expected_readme_sha256=$("$jq_bin" -r '.archive.readmeSha256' "$vacuum_provenance")
+  read -r vacuum_observed_binary_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$vacuum_root/bin/vacuum"
+  )
+  read -r vacuum_observed_license_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$vacuum_root/share/LICENSE"
+  )
+  read -r vacuum_observed_readme_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$vacuum_root/README.md"
+  )
+  if [[ $vacuum_observed_binary_sha256 != "$vacuum_expected_binary_sha256" || \
+    $vacuum_observed_license_sha256 != "$vacuum_expected_license_sha256" || \
+    $vacuum_observed_readme_sha256 != "$vacuum_expected_readme_sha256" ]]; then
+    echo "error: controlled Vacuum binary, license, or README digest drifted" >&2
+    exit 1
+  fi
+  if [[ $(/usr/bin/lipo -archs "$vacuum_root/bin/vacuum") != \
+    "$("$jq_bin" -r '.darwin.architecture' "$vacuum_provenance")" ]]; then
+    echo "error: controlled Vacuum binary is not the reviewed thin arm64 image" >&2
+    exit 1
+  fi
+  vacuum_observed_minos=$(/usr/bin/otool -l "$vacuum_root/bin/vacuum" | \
+    /usr/bin/awk '$1 == "cmd" && $2 == "LC_BUILD_VERSION" { found = 1; next }
+      found && $1 == "minos" { print $2; exit }')
+  if [[ $vacuum_observed_minos != \
+    "$("$jq_bin" -r '.darwin.minimumOsVersion' "$vacuum_provenance")" ]]; then
+    echo "error: controlled Vacuum binary minimum macOS version drifted" >&2
+    exit 1
+  fi
+  vacuum_codesign_metadata=$(/usr/bin/codesign -dvvv "$vacuum_root/bin/vacuum" 2>&1)
+  vacuum_runtime_flag=$("$jq_bin" -r '.darwin.hardenedRuntimeFlag' "$vacuum_provenance")
+  vacuum_team_identifier=$("$jq_bin" -r '.darwin.teamIdentifier' "$vacuum_provenance")
+  if [[ $vacuum_codesign_metadata != *"Format=Mach-O thin (arm64)"* || \
+    $vacuum_codesign_metadata != *"flags=$vacuum_runtime_flag"* || \
+    $vacuum_codesign_metadata != *"TeamIdentifier=$vacuum_team_identifier"* ]]; then
+    echo "error: controlled Vacuum embedded code-signing metadata drifted" >&2
+    exit 1
+  fi
+  verify_macho_closure "$vacuum_root" vacuum
+  set +e
+  vacuum_observed_version=$(env -i "${provisioning_env[@]}" \
+    "$vacuum_root/bin/vacuum" version 2>&1)
+  vacuum_probe_status=$?
+  set -e
+  if [[ $vacuum_probe_status -ne 0 || $vacuum_observed_version != \
+    "$("$jq_bin" -r '.probe.expected' "$vacuum_provenance")" ]]; then
+    echo "error: controlled Vacuum binary failed its exact version probe" >&2
     exit 1
   fi
 fi

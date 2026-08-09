@@ -1,0 +1,697 @@
+warning: vacuum: issues remain; diagnostics: <workspace>/.velvet-glove/vacuum-agent-hook/test-session_vacuum-tool_vacuum-tool-issues.txt
+vacuum diagnostics:
+[verify] command: python -I -c import os
+import re
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+MARKER = "__VELVET_GLOVE_VACUUM_FILES__"
+OUTPUT_LIMIT = 16 * 1024 * 1024
+FILE_LIMIT = 16 * 1024 * 1024
+BATCH_LIMIT = 64 * 1024 * 1024
+FILE_COUNT_LIMIT = 256
+REFERENCE_KEYWORDS = (b"$ref", b"$dynamicref", b"$recursiveref")
+PRIVATE_PLACEHOLDER = b"<vacuum-private>"
+PRIVATE_ROOT_PATTERN = re.compile(
+    r"(?:/private)?/tmp/velvet-glove-vacuum-[^\s/'\";:]+"
+)
+ANSI_ESCAPE = re.compile(br"\x1b\[[0-?]*[ -/]*[@-~]")
+FIXED_ARGUMENTS = [
+    "lint",
+    "--config=vacuum.conf.yaml",
+    "--base=.",
+    "--no-update-check",
+    "--remote=false",
+    "--no-style",
+    "--no-banner",
+    "--details",
+    "--errors",
+    "--silent",
+    "--all-results",
+    "--no-clip",
+    "--fail-severity=error",
+    "--fix=false",
+    "--timeout=5",
+    "--lookup-timeout=500",
+    "--turbo=false",
+    "--hard-mode=false",
+    "--skip-check=false",
+    "--ext-refs=false",
+    "--resolve-all-refs=false",
+    "--nested-refs-doc-context=false",
+    "--allow-private-networks=false",
+    "--allow-http=false",
+    "--fetch-timeout=5",
+]
+
+
+def fail(message):
+    print(f"velvet-glove-vacuum: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+class AdapterError(RuntimeError):
+    pass
+
+
+def abort(message):
+    raise AdapterError(message)
+
+
+if len(sys.argv) < 4 or sys.argv[2:].count(MARKER) != 1:
+    fail("invalid adapter arguments")
+requested_tool = sys.argv[1]
+payload = sys.argv[2:]
+marker_index = payload.index(MARKER)
+extra_args = payload[:marker_index]
+files = payload[marker_index + 1 :]
+if extra_args:
+    fail("extra arguments are unsupported because Vacuum flags change the controlled contract")
+if not files:
+    fail("no files selected")
+if len(files) > FILE_COUNT_LIMIT:
+    fail(f"selected batch exceeds the {FILE_COUNT_LIMIT}-file limit")
+
+
+def read_snapshot(path):
+    try:
+        path.encode("utf-8")
+    except UnicodeError as error:
+        abort(f"selected path is not UTF-8: {path!r}: {error}")
+    if any(ord(character) < 0x20 or ord(character) == 0x7f for character in path):
+        abort(f"selected path contains a control character: {path!r}")
+    if not os.path.isabs(path) or os.path.normpath(path) != path:
+        abort(f"selected path is not normalized and absolute: {path}")
+    if os.path.realpath(path) != path:
+        abort(f"selected path traverses a symlink: {path}")
+    descriptor = None
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            abort(f"selected path is not a unique regular file: {path}")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_dev != info.st_dev
+            or opened.st_ino != info.st_ino
+        ):
+            abort(f"selected path changed while opening it: {path}")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > FILE_LIMIT:
+                abort(f"selected file exceeds the {FILE_LIMIT}-byte limit: {path}")
+            chunks.append(chunk)
+        closed = os.fstat(descriptor)
+        if (
+            closed.st_dev != opened.st_dev
+            or closed.st_ino != opened.st_ino
+            or closed.st_mode != opened.st_mode
+            or closed.st_size != opened.st_size
+            or closed.st_mtime_ns != opened.st_mtime_ns
+            or closed.st_ctime_ns != opened.st_ctime_ns
+        ):
+            abort(f"selected path changed while reading it: {path}")
+        data = b"".join(chunks)
+        try:
+            data.decode("utf-8")
+        except UnicodeError as error:
+            abort(f"selected file is not UTF-8: {path}: {error}")
+        lowered = data.lower()
+        if any(keyword in lowered for keyword in REFERENCE_KEYWORDS):
+            abort(f"selected file contains unsupported external-reference syntax: {path}")
+        for encoded_dollar in (b"\\x24", b"\\u0024", b"\\u00000024"):
+            if encoded_dollar in lowered:
+                abort(f"selected file contains an unsupported encoded dollar token: {path}")
+        # Decode ASCII spellings that can complete a mixed literal/escaped
+        # reference key. This intentionally over-rejects such escapes in
+        # comments and string values so the byte preflight fails closed
+        # without a YAML parser or any opportunity for Vacuum to read a local
+        # reference.
+        reference_probe = lowered
+        for ordinal in range(ord("a"), ord("z") + 1):
+            character = bytes((ordinal,))
+            for escaped_ordinal in (ordinal, ordinal - 0x20):
+                codepoint = format(escaped_ordinal, "x").encode("ascii")
+                for prefix, width in ((b"\\x", 2), (b"\\u", 4), (b"\\u", 8)):
+                    encoded = prefix + (b"0" * (width - len(codepoint))) + codepoint
+                    reference_probe = reference_probe.replace(encoded, character)
+        if any(keyword in reference_probe for keyword in REFERENCE_KEYWORDS):
+            abort(f"selected file contains unsupported escaped external-reference syntax: {path}")
+        return {
+            "content": data,
+            "device": opened.st_dev,
+            "inode": opened.st_ino,
+            "mode": opened.st_mode,
+            "mtime": opened.st_mtime_ns,
+            "ctime": opened.st_ctime_ns,
+        }
+    except OSError as error:
+        abort(f"cannot read selected file {path}: {error}")
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+try:
+    snapshots = {}
+    identities = set()
+    batch_size = 0
+    for path in files:
+        if path in snapshots:
+            abort(f"selected path is duplicated: {path}")
+        snapshot = read_snapshot(path)
+        identity = (snapshot["device"], snapshot["inode"])
+        if identity in identities:
+            abort(f"selected file identity is duplicated: {path}")
+        identities.add(identity)
+        snapshots[path] = snapshot
+        batch_size += len(snapshot["content"])
+        if batch_size > BATCH_LIMIT:
+            abort(f"selected files exceed the {BATCH_LIMIT}-byte batch limit")
+
+    tool = shutil.which(requested_tool)
+    if tool is None:
+        abort(f"cannot resolve tool executable {requested_tool!r}")
+    tool = os.path.abspath(tool)
+    try:
+        tool_info = os.stat(tool)
+    except OSError as error:
+        abort(f"cannot inspect resolved tool {tool}: {error}")
+    if not stat.S_ISREG(tool_info.st_mode) or not os.access(tool, os.X_OK):
+        abort(f"resolved tool is not an executable regular file: {tool}")
+except AdapterError as error:
+    fail(error)
+
+private_root = None
+private_aliases = []
+file_replacements = []
+process = None
+pending_signals = []
+cleaning = False
+spawning = False
+raw_stdout = b""
+raw_stderr = b""
+adapter_error = None
+outer_status = 2
+reported_signals = set()
+
+
+class AdapterSignal(BaseException):
+    def __init__(self, signum):
+        super().__init__(f"received signal {signum}")
+        self.signum = signum
+
+
+def sanitize_bytes(data):
+    sanitized = data
+    for alias, replacement in file_replacements:
+        sanitized = sanitized.replace(os.fsencode(alias), os.fsencode(replacement))
+    for alias in private_aliases:
+        sanitized = sanitized.replace(os.fsencode(alias), PRIVATE_PLACEHOLDER)
+    sanitized = ANSI_ESCAPE.sub(b"", sanitized)
+    return b"\n".join(line.rstrip(b" \t") for line in sanitized.split(b"\n"))
+
+
+def sanitize_error(error):
+    message = str(error)
+    direct_aliases = []
+    if private_root is not None:
+        direct_aliases.extend((private_root, os.path.realpath(private_root)))
+    filename = getattr(error, "filename", None)
+    if isinstance(filename, str) and os.path.basename(filename).startswith(
+        "velvet-glove-vacuum-"
+    ):
+        direct_aliases.extend((filename, os.path.realpath(filename)))
+    for alias in sorted(set(direct_aliases), key=len, reverse=True):
+        message = message.replace(alias, PRIVATE_PLACEHOLDER.decode())
+    for alias, replacement in file_replacements:
+        message = message.replace(alias, replacement)
+    for alias in private_aliases:
+        message = message.replace(alias, PRIVATE_PLACEHOLDER.decode())
+    return PRIVATE_ROOT_PATTERN.sub(PRIVATE_PLACEHOLDER.decode(), message)
+
+
+def append_error(current, additional):
+    if current is None:
+        return additional
+    return RuntimeError(f"{current}; also: {additional}")
+
+
+def remember_signal(signum):
+    if signum not in pending_signals:
+        pending_signals.append(signum)
+
+
+def first_pending_signal():
+    return pending_signals[0] if pending_signals else None
+
+
+def apply_pending_signals(current):
+    for signum in pending_signals:
+        if signum not in reported_signals:
+            reported_signals.add(signum)
+            current = append_error(current, AdapterSignal(signum))
+    return current
+
+
+def drain_blocked_signals(current):
+    drained = False
+    while True:
+        queued = sorted(set(signal.sigpending()).intersection(handled_signals), key=int)
+        if not queued:
+            return current, drained
+        remember_signal(int(signal.sigwait({queued[0]})))
+        current = apply_pending_signals(current)
+        drained = True
+
+
+def write_owned_file(path, data):
+    descriptor = None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        cursor = 0
+        while cursor < len(data):
+            written = os.write(descriptor, data[cursor:])
+            if written <= 0:
+                abort(f"short write while creating controlled input {path}")
+            cursor += written
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size != len(data)
+        ):
+            abort(f"controlled input has unsafe metadata: {path}")
+    except OSError as error:
+        abort(f"cannot create controlled input {path}: {error}")
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def make_owned_directory(path):
+    try:
+        os.mkdir(path, 0o700)
+        os.chmod(path, 0o700)
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+            abort(f"controlled directory has unsafe metadata: {path}")
+    except OSError as error:
+        abort(f"cannot create controlled directory {path}: {error}")
+
+
+def group_alive(process_group):
+    try:
+        os.killpg(process_group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):
+        return True
+
+
+def signal_group(process_group, signum):
+    try:
+        os.killpg(process_group, signum)
+    except (OSError, ValueError):
+        pass
+
+
+def sweep_group(process_group, initial_signal=signal.SIGTERM):
+    signal_group(process_group, initial_signal)
+    deadline = time.monotonic() + 1.0
+    while group_alive(process_group) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if group_alive(process_group):
+        signal_group(process_group, signal.SIGKILL)
+        deadline = time.monotonic() + 1.0
+        while group_alive(process_group) and time.monotonic() < deadline:
+            time.sleep(0.01)
+    if group_alive(process_group):
+        raise RuntimeError("child process group survived SIGKILL")
+
+
+def stop_child(initial_signal=None):
+    global cleaning, process
+    child = process
+    if child is None:
+        return None
+    process_group = child.pid
+    stop_error = None
+    previous_cleaning = cleaning
+    cleaning = True
+    try:
+        signal_group(
+            process_group,
+            initial_signal if initial_signal is not None else signal.SIGTERM,
+        )
+        try:
+            child.wait(timeout=1)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            signal_group(process_group, signal.SIGKILL)
+            try:
+                child.wait(timeout=1)
+            except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                stop_error = append_error(stop_error, error)
+        try:
+            if group_alive(process_group):
+                sweep_group(process_group, signal.SIGKILL)
+        except BaseException as error:
+            stop_error = append_error(stop_error, error)
+        try:
+            if group_alive(process_group):
+                stop_error = append_error(
+                    stop_error,
+                    RuntimeError("child process group remained alive after bounded stop"),
+                )
+            else:
+                process = None
+        except BaseException as error:
+            stop_error = append_error(stop_error, error)
+    except BaseException as error:
+        stop_error = append_error(stop_error, error)
+    finally:
+        cleaning = previous_cleaning
+    return stop_error
+
+
+def forward_signal(signum, _frame):
+    remember_signal(signum)
+    if process is not None:
+        signal_group(process.pid, signum)
+    if not cleaning and not spawning:
+        raise AdapterSignal(signum)
+
+
+def run_child(arguments, environment):
+    global process, spawning
+    stdout_chunks = []
+    stderr_chunks = []
+    combined = 0
+    process_group = None
+    orphaned = False
+    selector = None
+    child = None
+    try:
+        pending = first_pending_signal()
+        if pending is not None:
+            raise AdapterSignal(pending)
+        spawning = True
+        try:
+            child = subprocess.Popen(
+                arguments,
+                cwd=private_root,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            process = child
+        finally:
+            spawning = False
+        process_group = child.pid
+        pending = first_pending_signal()
+        if pending is not None:
+            raise AdapterSignal(pending)
+        selector = selectors.DefaultSelector()
+        for stream, target in ((process.stdout, stdout_chunks), (process.stderr, stderr_chunks)):
+            if stream is None:
+                raise OSError("failed to capture Vacuum output")
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, target)
+        while selector.get_map():
+            pending = first_pending_signal()
+            if pending is not None:
+                raise AdapterSignal(pending)
+            for key, _ in selector.select(timeout=0.1):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if chunk:
+                    combined += len(chunk)
+                    if combined > OUTPUT_LIMIT:
+                        raise BufferError(f"combined output exceeded {OUTPUT_LIMIT} bytes")
+                    key.data.append(chunk)
+                else:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+            if process.poll() is not None and group_alive(process_group):
+                orphaned = True
+                sweep_group(process_group)
+        status = process.wait()
+        if group_alive(process_group):
+            orphaned = True
+            sweep_group(process_group)
+        process = None
+        if orphaned:
+            raise RuntimeError("child left same-group descendants after leader exit")
+        return status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+    finally:
+        if selector is not None:
+            try:
+                selector.close()
+            except OSError:
+                pass
+        for stream in (
+            getattr(child, "stdout", None) if child is not None else None,
+            getattr(child, "stderr", None) if child is not None else None,
+        ):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+
+handled_signals = tuple(
+    getattr(signal, name)
+    for name in ("SIGHUP", "SIGINT", "SIGTERM")
+    if hasattr(signal, name)
+)
+previous_handlers = {}
+try:
+    for signum in handled_signals:
+        previous_handlers[signum] = signal.signal(signum, forward_signal)
+    pending = first_pending_signal()
+    if pending is not None:
+        raise AdapterSignal(pending)
+
+    cleaning = True
+    try:
+        private_root = tempfile.mkdtemp(prefix="velvet-glove-vacuum-", dir="/tmp")
+    finally:
+        cleaning = False
+    pending = first_pending_signal()
+    if pending is not None:
+        raise AdapterSignal(pending)
+    private_aliases = list(dict.fromkeys((private_root, os.path.realpath(private_root))))
+    scope_root = os.path.dirname(files[0]) if len(files) == 1 else os.path.commonpath(files)
+    input_directory = os.path.join(private_root, "inputs")
+    make_owned_directory(input_directory)
+    write_owned_file(os.path.join(private_root, "vacuum.conf.yaml"), b"{}\n")
+    private_files = []
+    replacements = []
+    for index, path in enumerate(files):
+        stable_path = os.path.relpath(path, scope_root)
+        extension = os.path.splitext(path)[1].lower()
+        if extension not in (".yaml", ".yml", ".json"):
+            abort(f"selected file has an unsupported extension: {path}")
+        private_relative = f"inputs/{index:04d}{extension}"
+        private_path = os.path.join(private_root, private_relative)
+        write_owned_file(private_path, snapshots[path]["content"])
+        private_files.append(private_relative)
+        variants = {path, path.lstrip(os.sep)}
+        for alias in private_aliases:
+            variants.add(os.path.relpath(path, alias))
+            variants.add(os.path.relpath(path, os.path.realpath(alias)))
+        variants.update(
+            {
+                private_relative,
+                private_path,
+                private_path.lstrip(os.sep),
+            }
+        )
+        replacements.extend((variant, stable_path) for variant in variants if variant)
+    file_replacements = sorted(
+        set(replacements), key=lambda item: len(item[0]), reverse=True
+    )
+    private_home = os.path.join(private_root, "home")
+    private_config = os.path.join(private_root, "config")
+    private_cache = os.path.join(private_root, "cache")
+    private_tmp = os.path.join(private_root, "tmp")
+    for directory in (private_home, private_config, private_cache, private_tmp):
+        make_owned_directory(directory)
+
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        upper = name.upper()
+        if (
+            upper.startswith("VACUUM_")
+            or upper.startswith("DYLD_")
+            or upper.startswith("LD_")
+            or upper in (
+                "ALL_PROXY",
+                "DEBUG",
+                "FORCE_COLOR",
+                "GODEBUG",
+                "GOGC",
+                "GOMEMLIMIT",
+                "GOMAXPROCS",
+                "GOTRACEBACK",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "NO_COLOR",
+                "NO_PROXY",
+                "SSL_CERT_DIR",
+                "SSL_CERT_FILE",
+            )
+        ):
+            environment.pop(name, None)
+    environment.update(
+        {
+            "HOME": private_home,
+            "XDG_CONFIG_HOME": private_config,
+            "XDG_CACHE_HOME": private_cache,
+            "TMPDIR": private_tmp,
+            "PWD": private_root,
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            "TERM": "dumb",
+            "COLUMNS": "120",
+            "LINES": "40",
+            "NO_COLOR": "1",
+            "CLICOLOR": "0",
+            "FORCE_COLOR": "0",
+            "GODEBUG": "",
+            "GOMAXPROCS": "1",
+            "GOTRACEBACK": "none",
+        }
+    )
+    pending = first_pending_signal()
+    if pending is not None:
+        raise AdapterSignal(pending)
+
+    outer_status, raw_stdout, raw_stderr = run_child(
+        [tool, *FIXED_ARGUMENTS, *private_files], environment
+    )
+    for path, before in snapshots.items():
+        after = read_snapshot(path)
+        for key in ("content", "device", "inode", "mode", "mtime", "ctime"):
+            if after[key] != before[key]:
+                raise RuntimeError(f"Vacuum mutated selected file {path}: changed {key}")
+
+    if outer_status == 0:
+        if raw_stdout or raw_stderr:
+            raw_stdout = b""
+            raw_stderr = b""
+            raise RuntimeError("clean Vacuum lint emitted output under the silent contract")
+    elif outer_status == 1:
+        if raw_stderr:
+            raw_stdout = b""
+            raw_stderr = b""
+            raise RuntimeError("Vacuum violation status wrote stderr")
+        if b"\nrule: " not in raw_stdout or b"  category: " not in raw_stdout:
+            raw_stdout = b""
+            raise RuntimeError("Vacuum violation status lacked a stable rule diagnostic")
+    elif outer_status != 2:
+        raise RuntimeError(f"Vacuum returned unsupported status {outer_status}")
+except AdapterSignal as error:
+    stop_error = stop_child(error.signum)
+    raw_stdout = b""
+    raw_stderr = b""
+    adapter_error = append_error(error, stop_error) if stop_error is not None else error
+    reported_signals.add(error.signum)
+    outer_status = 2
+except BaseException as error:
+    stop_error = stop_child()
+    adapter_error = append_error(error, stop_error) if stop_error is not None else error
+    outer_status = 2
+finally:
+    cleaning = True
+    blocked_mask = None
+    try:
+        if private_root is not None:
+            try:
+                shutil.rmtree(private_root)
+            except OSError as error:
+                adapter_error = append_error(
+                    adapter_error,
+                    RuntimeError(f"cannot remove controlled Vacuum directory: {error}"),
+                )
+        try:
+            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+        except (OSError, ValueError) as error:
+            adapter_error = append_error(
+                adapter_error,
+                RuntimeError(f"cannot block cleanup signals: {error}"),
+            )
+        adapter_error = apply_pending_signals(adapter_error)
+        if blocked_mask is not None:
+            while True:
+                adapter_error, drained = drain_blocked_signals(adapter_error)
+                if not drained:
+                    break
+        if reported_signals:
+            raw_stdout = b""
+            raw_stderr = b""
+            outer_status = 2
+        if adapter_error is not None:
+            outer_status = 2
+    finally:
+        # Keep handled signals blocked through diagnostic emission and exit.
+        # Unblocking after restoring the previous handlers would reopen a
+        # post-cleanup termination window.
+        try:
+            for signum, handler in previous_handlers.items():
+                try:
+                    signal.signal(signum, handler)
+                except (OSError, ValueError):
+                    pass
+        finally:
+            cleaning = False
+
+if raw_stdout:
+    sys.stdout.buffer.write(sanitize_bytes(raw_stdout))
+if raw_stderr:
+    sys.stderr.buffer.write(sanitize_bytes(raw_stderr))
+if adapter_error is not None:
+    fail(sanitize_error(adapter_error))
+raise SystemExit(outer_status) vacuum __VELVET_GLOVE_VACUUM_FILES__ <workspace>/example-openapi.yaml <workspace>/selected-clean-openapi.yaml
+status: Some(1)
+classification: Some(Issues)
+stdout:
+example-openapi.yaml:2:1  ✗           `info` section must have a `description`
+$.info
+rule: info-description  category: Contract Information
+artifact: <workspace>/.velvet-glove/vacuum-agent-hook/test-session_vacuum-tool_vacuum-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

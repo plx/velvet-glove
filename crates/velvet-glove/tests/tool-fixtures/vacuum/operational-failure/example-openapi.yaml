@@ -1,0 +1,6 @@
+openapi: 3.0.0
+info:
+  title: Malformed API
+  description: A parser failure is an input error, not a lint violation
+  version: [broken
+paths: {}

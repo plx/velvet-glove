@@ -129,6 +129,75 @@ if [ "$logical_program" = dclint ]; then
   printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
   printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
 fi
+if [ "$logical_program" = vacuum ]; then
+  printf '%s\n' "${PATH-}" >"$record/env-PATH"
+  printf '%s\n' "${HOME-}" >"$record/env-HOME"
+  printf '%s\n' "${PWD-}" >"$record/env-PWD"
+  printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
+  printf '%s\n' "${XDG_CONFIG_HOME-}" >"$record/env-XDG_CONFIG_HOME"
+  printf '%s\n' "${XDG_CACHE_HOME-}" >"$record/env-XDG_CACHE_HOME"
+  printf '%s\n' "${COLUMNS-}" >"$record/env-COLUMNS"
+  printf '%s\n' "${LINES-}" >"$record/env-LINES"
+  printf '%s\n' "${GODEBUG-}" >"$record/env-GODEBUG"
+  printf '%s\n' "${GOGC-}" >"$record/env-GOGC"
+  printf '%s\n' "${GOMEMLIMIT-}" >"$record/env-GOMEMLIMIT"
+  printf '%s\n' "${GOMAXPROCS-}" >"$record/env-GOMAXPROCS"
+  printf '%s\n' "${GOTRACEBACK-}" >"$record/env-GOTRACEBACK"
+  printf '%s\n' "${VACUUM_CONFIG-}" >"$record/env-VACUUM_CONFIG"
+  printf '%s\n' "${VACUUM_FIX-}" >"$record/env-VACUUM_FIX"
+  printf '%s\n' "${VACUUM_FUNCTIONS-}" >"$record/env-VACUUM_FUNCTIONS"
+  printf '%s\n' "${VACUUM_HARD_MODE-}" >"$record/env-VACUUM_HARD_MODE"
+  printf '%s\n' "${VACUUM_REMOTE-}" >"$record/env-VACUUM_REMOTE"
+  printf '%s\n' "${VACUUM_RULESET-}" >"$record/env-VACUUM_RULESET"
+  printf '%s\n' "${VACUUM_VELVET_GLOVE_POISON-}" >"$record/env-VACUUM_VELVET_GLOVE_POISON"
+  printf '%s\n' "${ALL_PROXY-}" >"$record/env-ALL_PROXY"
+  printf '%s\n' "${HTTP_PROXY-}" >"$record/env-HTTP_PROXY"
+  printf '%s\n' "${HTTPS_PROXY-}" >"$record/env-HTTPS_PROXY"
+  printf '%s\n' "${NO_PROXY-}" >"$record/env-NO_PROXY"
+  printf '%s\n' "${SSL_CERT_DIR-}" >"$record/env-SSL_CERT_DIR"
+  printf '%s\n' "${SSL_CERT_FILE-}" >"$record/env-SSL_CERT_FILE"
+  printf '%s\n' "${DYLD_INSERT_LIBRARIES-}" >"$record/env-DYLD_INSERT_LIBRARIES"
+  printf '%s\n' "${DYLD_PRINT_LIBRARIES-}" >"$record/env-DYLD_PRINT_LIBRARIES"
+  printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
+  printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
+  if [ -f vacuum.conf.yaml ] && [ ! -L vacuum.conf.yaml ]; then
+    printf '%s\n' file >"$record/vacuum-config-kind"
+  else
+    printf '%s\n' unsafe >"$record/vacuum-config-kind"
+  fi
+  /usr/bin/wc -c <vacuum.conf.yaml | /usr/bin/tr -d ' ' >"$record/vacuum-config-size"
+  if [ "$(/bin/cat vacuum.conf.yaml)" = '{}' ]; then
+    printf '%s\n' controlled >"$record/vacuum-config-content"
+  else
+    printf '%s\n' unexpected >"$record/vacuum-config-content"
+  fi
+  if config_mode=$(/usr/bin/stat -f '%Lp' vacuum.conf.yaml 2>/dev/null); then
+    :
+  else
+    config_mode=$(/usr/bin/stat -c '%a' vacuum.conf.yaml)
+  fi
+  printf '%s\n' "$config_mode" >"$record/vacuum-config-mode"
+  private_input_index=0
+  for argument in "$@"; do
+    case $argument in
+      inputs/*)
+        if [ -f "$argument" ] && [ ! -L "$argument" ]; then
+          printf '%s\n' file >"$record/vacuum-input-$private_input_index-kind"
+        else
+          printf '%s\n' unsafe >"$record/vacuum-input-$private_input_index-kind"
+        fi
+        if input_mode=$(/usr/bin/stat -f '%Lp' "$argument" 2>/dev/null); then
+          :
+        else
+          input_mode=$(/usr/bin/stat -c '%a' "$argument")
+        fi
+        printf '%s\n' "$input_mode" >"$record/vacuum-input-$private_input_index-mode"
+        private_input_index=$((private_input_index + 1))
+        ;;
+    esac
+  done
+  printf '%s\n' "$private_input_index" >"$record/vacuum-input-count"
+fi
 if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ] || [ "$logical_program" = cargo-fmt ] || [ "$logical_program" = rustfmt ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"

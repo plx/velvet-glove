@@ -6,6 +6,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RECIPES_JSON: &str = include_str!("../validation/provisioning/recipes.json");
+const VACUUM_PROVENANCE_JSON: &str =
+    include_str!("../validation/provisioning/vacuum/provenance.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -474,6 +476,20 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         .get("macos-arm64-contextlint")
         .expect("dedicated Contextlint environment");
     assert_eq!(contextlint_environment.provisioning_group, "contextlint");
+    let vacuum_environment = environments
+        .get("macos-arm64-vacuum")
+        .expect("dedicated Vacuum environment");
+    assert_eq!(vacuum_environment.provisioning_group, "data-formats");
+    assert_eq!(
+        vacuum_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["vacuum"])
+    );
+    assert!(vacuum_environment.auxiliary_programs.is_empty());
+    assert!(vacuum_environment.bootstrap.is_empty());
     assert_eq!(
         contextlint_environment
             .components
@@ -804,7 +820,8 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "rubocop",
             "rustfmt",
             "sort-package-json",
-            "swiftlint"
+            "swiftlint",
+            "vacuum"
         ])
     );
 
@@ -837,6 +854,24 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         "rustfmt 1.9.0-stable (8bab26f4f6 2026-07-14)"
     );
 
+    let vacuum = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "vacuum")
+        .expect("Vacuum pinned recipe");
+    assert_eq!(vacuum.id, "vacuum-macos-arm64");
+    assert_eq!(vacuum.environment_id, "macos-arm64-vacuum");
+    assert_eq!(vacuum.version, "0.30.0");
+    assert_eq!(vacuum.case_executables, ["vacuum", "python"]);
+    assert_eq!(
+        vacuum.cases,
+        ["clean", "source-issue", "multi-file", "operational-failure"]
+    );
+    assert_eq!(vacuum.representative_case, "multi-file");
+    assert_eq!(vacuum.probe.argv, ["vacuum", "version"]);
+    assert_eq!(vacuum.probe.match_kind, "exact");
+    assert_eq!(vacuum.probe.expected, "0.30.0");
+
     let cargo_fmt_environment = environments
         .get(cargo_fmt.environment_id.as_str())
         .expect("cargo-fmt controlled environment");
@@ -857,6 +892,182 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-fmt closure omits {required}"
         );
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn vacuum_provenance_and_content_addressed_binding_are_exact() {
+    let root = repository_root();
+    let provenance: serde_json::Value =
+        serde_json::from_str(VACUUM_PROVENANCE_JSON).expect("Vacuum provenance JSON");
+    assert_eq!(
+        provenance,
+        serde_json::json!({
+            "schemaVersion": 1,
+            "release": {
+                "version": "0.30.0",
+                "tag": "v0.30.0",
+                "tagObject": "5502edc731a0f54a549620ea64e67eb9ef533739",
+                "sourceCommit": "328ff253522138616096eeabf1dc1c8895dac215",
+                "releaseUrl": "https://github.com/daveshanley/vacuum/releases/tag/v0.30.0"
+            },
+            "archive": {
+                "url": "https://github.com/daveshanley/vacuum/releases/download/v0.30.0/vacuum_0.30.0_darwin_arm64.tar.gz",
+                "sha256": "bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8",
+                "members": ["LICENSE", "README.md", "vacuum"],
+                "binarySha256": "b8fc23e87917742f2b81bb55addc8d1b968759c7ad5e7372ad23748197c53afa",
+                "licenseSha256": "a4c0921c8f302fdb282c41bcb85e09375561f9c9b38e77c258d89d17492555cf",
+                "readmeSha256": "b57124010840e63ce1263938b623b8e663599e265958d5ae2731ae7aca605522"
+            },
+            "upstreamEvidence": {
+                "checksums": {
+                    "url": "https://github.com/daveshanley/vacuum/releases/download/v0.30.0/checksums.txt",
+                    "sha256": "2dac5adb73fe190e2657108f2ab408fafbc0fe5323b33825b03a6537de0207c8"
+                },
+                "sigstoreBundle": {
+                    "url": "https://github.com/daveshanley/vacuum/releases/download/v0.30.0/checksums.txt.sigstore.json",
+                    "sha256": "08dc6453c5f396db405f04f3c0709424fb0a549200e7fbb3768d268c0c2a07bc",
+                    "subjectSha256": "2dac5adb73fe190e2657108f2ab408fafbc0fe5323b33825b03a6537de0207c8",
+                    "certificate": {
+                        "issuer": "sigstore-intermediate",
+                        "issuedAt": "2026-07-23T12:18:43Z",
+                        "san": "https://github.com/daveshanley/vacuum/.github/workflows/publish.yaml@refs/heads/main",
+                        "repository": "daveshanley/vacuum",
+                        "workflow": "Publish",
+                        "sourceCommit": "328ff253522138616096eeabf1dc1c8895dac215"
+                    }
+                }
+            },
+            "darwin": {
+                "architecture": "arm64",
+                "minimumOsVersion": "12.0",
+                "hardenedRuntimeFlag": "0x10000(runtime)",
+                "teamIdentifier": "HFX5KEHACT",
+                "allowedDylibPrefixes": ["/System/Library/", "/usr/lib/"]
+            },
+            "probe": {
+                "argv": ["vacuum", "version"],
+                "expected": "0.30.0"
+            }
+        })
+    );
+
+    let registry: serde_json::Value =
+        serde_json::from_str(RECIPES_JSON).expect("provisioning registry JSON");
+    let component = registry["environments"]
+        .as_array()
+        .expect("environments")
+        .iter()
+        .find(|environment| environment["id"] == "macos-arm64-vacuum")
+        .and_then(|environment| environment["components"].as_array())
+        .and_then(|components| components.first())
+        .expect("Vacuum component");
+    let recipe = registry["recipes"]
+        .as_array()
+        .expect("recipes")
+        .iter()
+        .find(|recipe| recipe["toolId"] == "vacuum")
+        .expect("Vacuum recipe");
+    for declaration in [component, recipe] {
+        assert_eq!(declaration["version"], provenance["release"]["version"]);
+        assert_eq!(
+            declaration["integrity"]["url"],
+            provenance["archive"]["url"]
+        );
+        assert_eq!(
+            declaration["integrity"]["sha256"],
+            provenance["archive"]["sha256"]
+        );
+        assert_eq!(
+            declaration["integrity"]["minOsVersion"],
+            provenance["darwin"]["minimumOsVersion"]
+        );
+        assert_eq!(declaration["probe"]["argv"], provenance["probe"]["argv"]);
+        assert_eq!(
+            declaration["probe"]["expected"],
+            provenance["probe"]["expected"]
+        );
+    }
+
+    let cache = std::fs::read_to_string(root.join("scripts/pinned-tool-cache.sh"))
+        .expect("shared pinned cache helper");
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    assert!(cache.contains("pinned_component_provenance_identity()"));
+    for (name, runner) in [("outer", outer.as_str()), ("inner", inner.as_str())] {
+        assert!(
+            runner.contains("vacuum_identity=$(pinned_component_provenance_identity \\"),
+            "{name} provenance-bound identity"
+        );
+        assert!(
+            runner.contains("vacuum_root=$(pinned_component_cache_root \\"),
+            "{name} content-addressed root"
+        );
+        assert!(
+            runner.contains(
+                "crates/hookkit-pkl-config/validation/provisioning/vacuum/provenance.json"
+            ),
+            "{name} provenance path"
+        );
+    }
+    assert!(inner.contains("resolved=\"$vacuum_bin\""));
+    assert!(inner.contains("probe_argv=(\"$vacuum_bin\" \"${probe_argv[@]:1}\")"));
+
+    let temporary = test_directory("vacuum-cache-reuse");
+    let identity = serde_json::json!({
+        "component": {
+            "id": "vacuum",
+            "version": "0.30.0",
+            "integrity": component["integrity"]
+        },
+        "provenance": {
+            "path": "crates/hookkit-pkl-config/validation/provisioning/vacuum/provenance.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+    })
+    .to_string();
+    let shell = r#"
+source "$1"
+first=$(pinned_component_cache_root "$2" vacuum-0.30.0 "$3")
+second=$(pinned_component_cache_root "$2" vacuum-0.30.0 "$3")
+[[ $first == "$second" ]]
+printf '%s\n' "$first"
+if pinned_component_cache_valid "$first" "$3" bin/vacuum; then
+  printf 'reused\n'
+else
+  printf 'install-required\n'
+fi
+"#;
+    let invoke = || {
+        Command::new("/bin/bash")
+            .args(["-c", shell, "vacuum-cache-reuse"])
+            .arg(root.join("scripts/pinned-tool-cache.sh"))
+            .arg(&temporary.0)
+            .arg(&identity)
+            .output()
+            .expect("execute Vacuum cache regression")
+    };
+    let initial = invoke();
+    assert!(initial.status.success());
+    let initial_stdout = String::from_utf8(initial.stdout).expect("UTF-8 cache output");
+    assert!(initial_stdout.ends_with("install-required\n"));
+    let cache_root = PathBuf::from(initial_stdout.lines().next().expect("Vacuum cache root"));
+    std::fs::create_dir_all(cache_root.join("bin")).expect("Vacuum cache bin");
+    std::fs::write(
+        cache_root.join(".velvet-glove-artifacts.json"),
+        format!("{identity}\n"),
+    )
+    .expect("Vacuum cache identity");
+    write_test_executable(&cache_root.join("bin/vacuum"));
+    let reused = invoke();
+    assert!(reused.status.success());
+    assert!(
+        String::from_utf8(reused.stdout)
+            .expect("UTF-8 cache reuse output")
+            .ends_with("reused\n")
+    );
 }
 
 #[test]
@@ -1514,6 +1725,24 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert!(component.runtime_component_ids.is_empty());
                     assert_eq!(component.probe.argv, ["dclint-node", "--version"]);
                     assert_eq!(component.probe.expected, "v24.19.0");
+                }
+                "vacuum" => {
+                    assert_eq!(component.version, "0.30.0");
+                    assert_eq!(
+                        component.integrity.url.as_deref(),
+                        Some(
+                            "https://github.com/daveshanley/vacuum/releases/download/v0.30.0/vacuum_0.30.0_darwin_arm64.tar.gz"
+                        )
+                    );
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("bebcc32f58db734bcf329ef6f0754d2b1051d55961ee92aac1d2b1192fad78e8")
+                    );
+                    assert_eq!(component.integrity.archive_root.as_deref(), Some("."));
+                    assert_eq!(component.integrity.min_os_version.as_deref(), Some("12.0"));
+                    assert!(component.runtime_component_ids.is_empty());
+                    assert_eq!(component.probe.argv, ["vacuum", "version"]);
+                    assert_eq!(component.probe.expected, "0.30.0");
                 }
                 "ruby" => {
                     assert_eq!(component.version, "3.4.10");

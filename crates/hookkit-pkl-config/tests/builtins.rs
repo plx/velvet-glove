@@ -93,6 +93,124 @@ fn jq_uses_per_file_parse_validation_and_distinguishes_tool_failures() {
 }
 
 #[test]
+fn vacuum_adapter_locks_the_pinned_read_only_batch_contract() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let vacuum = spec(&specs, "vacuum");
+
+    assert_eq!(vacuum.id, "vacuum");
+    assert_eq!(vacuum.display_name, "vacuum");
+    assert_eq!(vacuum.executable, "vacuum");
+    assert_eq!(vacuum.phase_invocation, InvocationGranularity::Batch);
+    assert_eq!(
+        vacuum.install_hint.as_deref(),
+        Some(
+            "use the checksum-pinned Vacuum 0.30.0 recipe documented in docs/pinned-tool-environments.md"
+        )
+    );
+    assert!(
+        vacuum.workflows.is_empty(),
+        "Vacuum uses compatibility translation"
+    );
+
+    let verify = vacuum.phases.get("verify").expect("Vacuum verify phase");
+    assert_eq!(verify.mode, PhaseMode::Verify);
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_eq!(verify.argv.len(), 7);
+    assert_eq!(verify.argv[0], literal("-I"));
+    assert_eq!(verify.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("Vacuum adapter must be a literal Python program")
+    };
+    for required in [
+        "__VELVET_GLOVE_VACUUM_FILES__",
+        "extra arguments are unsupported because Vacuum flags change the controlled contract",
+        "selected path is not normalized and absolute",
+        "os.path.realpath(path) != path",
+        "getattr(os, \"O_NOFOLLOW\", 0)",
+        "opened.st_nlink != 1",
+        "data.decode(\"utf-8\")",
+        "REFERENCE_KEYWORDS = (b\"$ref\", b\"$dynamicref\", b\"$recursiveref\")",
+        "if any(keyword in lowered for keyword in REFERENCE_KEYWORDS)",
+        "b\"\\\\x24\"",
+        "b\"\\\\u0024\"",
+        "b\"\\\\u00000024\"",
+        "FILE_COUNT_LIMIT = 256",
+        "selected batch exceeds the {FILE_COUNT_LIMIT}-file limit",
+        "selected files exceed the {BATCH_LIMIT}-byte batch limit",
+        "--config=vacuum.conf.yaml",
+        "--base=.",
+        "--no-update-check",
+        "--remote=false",
+        "--no-style",
+        "--no-banner",
+        "--details",
+        "--errors",
+        "--silent",
+        "--all-results",
+        "--no-clip",
+        "--fail-severity=error",
+        "--fix=false",
+        "--turbo=false",
+        "--hard-mode=false",
+        "--allow-private-networks=false",
+        "--allow-http=false",
+        "tempfile.mkdtemp(prefix=\"velvet-glove-vacuum-\", dir=\"/tmp\")",
+        "write_owned_file(os.path.join(private_root, \"vacuum.conf.yaml\"), b\"{}\\n\")",
+        "private_relative = f\"inputs/{index:04d}{extension}\"",
+        "os.fchmod(descriptor, 0o600)",
+        "stat.S_IMODE(info.st_mode) != 0o600",
+        "make_owned_directory(input_directory)",
+        "os.chmod(path, 0o700)",
+        "stat.S_IMODE(info.st_mode) != 0o700",
+        "\"HOME\": private_home",
+        "\"XDG_CONFIG_HOME\": private_config",
+        "\"XDG_CACHE_HOME\": private_cache",
+        "upper.startswith(\"VACUUM_\")",
+        "upper.startswith(\"DYLD_\")",
+        "upper.startswith(\"LD_\")",
+        "start_new_session=True",
+        "spawning = True",
+        "process = child",
+        "previous_cleaning = cleaning",
+        "cleaning = True",
+        "return stop_error",
+        "apply_pending_signals",
+        "selectors.DefaultSelector",
+        "combined output exceeded {OUTPUT_LIMIT} bytes",
+        "class AdapterSignal(BaseException)",
+        "os.killpg(process_group, signum)",
+        "child left same-group descendants after leader exit",
+        "child process group survived SIGKILL",
+        "selector.close()",
+        "shutil.rmtree(private_root)",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "signal.sigpending()",
+        "signal.sigwait({queued[0]})",
+        "<vacuum-private>",
+        "PRIVATE_ROOT_PATTERN.sub",
+        "ANSI_ESCAPE.sub",
+        "Vacuum mutated selected file",
+        "for key in (\"content\", \"device\", \"inode\", \"mode\", \"mtime\", \"ctime\")",
+        "Vacuum violation status lacked a stable rule diagnostic",
+        "raise SystemExit(outer_status)",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "Vacuum adapter omits {required:?}"
+        );
+    }
+    assert_eq!(verify.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(verify.argv[4], token(ArgToken::ExtraArgs));
+    assert_eq!(verify.argv[5], literal("__VELVET_GLOVE_VACUUM_FILES__"));
+    assert_eq!(verify.argv[6], token(ArgToken::Files));
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(verify.writes, WriteBehavior::None);
+    assert_eq!(vacuum.phase_order, vec!["verify"]);
+}
+
+#[test]
 fn betterleaks_batches_paths_and_separates_findings_from_failures() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
