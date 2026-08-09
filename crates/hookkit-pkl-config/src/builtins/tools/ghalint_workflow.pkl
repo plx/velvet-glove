@@ -416,11 +416,12 @@ ghalintWorkflowAdapter: String = #"""
       return resolved
 
 
-  def private_config(project, source_snapshot):
+  def private_config(temporary, source_snapshot, private_state):
       root = tempfile.mkdtemp(
           prefix="velvet-glove-ghalint-workflow-",
-          dir=temporary_root(project),
+          dir=temporary,
       )
+      private_state["root"] = root
       os.chmod(root, 0o700)
       config = os.path.join(root, "ghalint.yaml")
       data = (
@@ -495,9 +496,27 @@ ghalintWorkflowAdapter: String = #"""
       return environment
 
 
-  def process_group_exists(pid):
+  process = None
+  process_group = None
+  pending_signal = None
+  reported_signal = None
+  cleaning = True
+
+
+  def signal_group(group, signum):
+      if group is None:
+          return
       try:
-          os.killpg(pid, 0)
+          os.killpg(group, signum)
+      except (OSError, ValueError):
+          pass
+
+
+  def process_group_exists(group):
+      if group is None:
+          return False
+      try:
+          os.killpg(group, 0)
           return True
       except ProcessLookupError:
           return False
@@ -505,75 +524,272 @@ ghalintWorkflowAdapter: String = #"""
           return True
 
 
-  def terminate_group(pid):
-      for chosen, deadline in ((signal.SIGTERM, 0.5), (signal.SIGKILL, 0.5)):
-          try:
-              os.killpg(pid, chosen)
-          except ProcessLookupError:
-              return
-          end = time.monotonic() + deadline
-          while time.monotonic() < end:
-              if not process_group_exists(pid):
-                  return
-              time.sleep(0.01)
-
-
-  def run_child(argv, cwd, environment, signal_state):
-      blocked = None
-      if hasattr(signal, "pthread_sigmask"):
-          blocked = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
+  def sweep_process_group(group):
+      if not process_group_exists(group):
+          return False
       try:
-          child = subprocess.Popen(
-              argv,
-              cwd=cwd,
-              env=environment,
-              stdin=subprocess.DEVNULL,
-              stdout=subprocess.PIPE,
-              stderr=subprocess.PIPE,
-              start_new_session=True,
-          )
-          signal_state["child"] = child.pid
-      except OSError as error:
-          reject(f"cannot launch pinned ghalint: {error}")
+          os.killpg(group, signal.SIGKILL)
+      except ProcessLookupError:
+          return True
+      deadline = time.monotonic() + 1
+      while process_group_exists(group) and time.monotonic() < deadline:
+          time.sleep(0.01)
+      if process_group_exists(group):
+          reject("cannot reap same-group descendants after ghalint exit")
+      return True
+
+
+  def stop_child(initial_signal=None):
+      global process
+      global process_group
+      global cleaning
+      child = process
+      group = process_group
+      if child is None and group is None:
+          return None
+      failures = []
+      previous_cleaning = cleaning
+      cleaning = True
+      try:
+          running = child is not None
+          if child is not None:
+              try:
+                  running = child.poll() is None
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot poll ghalint child: {error}")
+          if running and group is not None:
+              chosen = initial_signal if initial_signal is not None else signal.SIGTERM
+              try:
+                  os.killpg(group, chosen)
+              except ProcessLookupError:
+                  pass
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot signal ghalint child process group: {error}")
+              if child is not None:
+                  try:
+                      child.wait(timeout=1)
+                  except subprocess.TimeoutExpired:
+                      pass
+                  except (OSError, ValueError, ChildProcessError) as error:
+                      failures.append(f"cannot stop ghalint child gracefully: {error}")
+          if group is not None:
+              try:
+                  os.killpg(group, signal.SIGKILL)
+              except ProcessLookupError:
+                  pass
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot SIGKILL ghalint child process group: {error}")
+          if child is not None:
+              try:
+                  child.wait(timeout=1)
+              except (OSError, ValueError, ChildProcessError, subprocess.TimeoutExpired) as error:
+                  failures.append(f"cannot reap ghalint child: {error}")
+          if group is not None:
+              try:
+                  deadline = time.monotonic() + 1
+                  while process_group_exists(group) and time.monotonic() < deadline:
+                      time.sleep(0.01)
+                  if process_group_exists(group):
+                      failures.append("ghalint child process group survived SIGKILL")
+              except (OSError, ValueError) as error:
+                  failures.append(
+                      f"cannot verify ghalint child process-group cleanup: {error}"
+                  )
       finally:
-          if blocked is not None:
-              signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+          process = None
+          process_group = None
+          cleaning = previous_cleaning
+      return "; ".join(failures) if failures else None
 
-      selector = selectors.DefaultSelector()
-      output = {"stdout": bytearray(), "stderr": bytearray()}
+
+  def forward_signal(signum, _frame):
+      global pending_signal
+      if pending_signal is None:
+          pending_signal = signum
+      if process_group is not None and not cleaning:
+          signal_group(process_group, signum)
+          raise AdapterSignal(signum)
+
+
+  def append_adapter_error(primary, secondary):
+      if secondary is None:
+          return primary
+      if primary is None:
+          return secondary
+      return ContractError(f"{primary}; {secondary}")
+
+
+  def apply_pending_signal(primary):
+      global reported_signal
+      if pending_signal is None or pending_signal == reported_signal:
+          return primary
+      reported_signal = pending_signal
+      return append_adapter_error(
+          primary, ContractError(f"received signal {pending_signal}")
+      )
+
+
+  def drain_blocked_signals(primary):
+      global pending_signal
+      drained = False
+      while True:
+          queued = sorted(
+              set(signal.sigpending()).intersection(HANDLED_SIGNALS), key=int
+          )
+          if not queued:
+              return primary, drained
+          pending_signal = int(signal.sigwait({queued[0]}))
+          primary = apply_pending_signal(primary)
+          drained = True
+
+
+  def owned_private_root(error, temporary):
+      if temporary is None or not isinstance(error, OSError) or error.filename is None:
+          return None
       try:
-          for name, stream in (("stdout", child.stdout), ("stderr", child.stderr)):
+          filename = os.fsdecode(error.filename)
+          candidate = os.path.abspath(filename)
+          relative_path = os.path.relpath(candidate, temporary)
+      except (OSError, TypeError, ValueError):
+          return None
+      components = relative_path.split(os.sep)
+      if (
+          not components
+          or components[0] in ("", ".", "..")
+          or not components[0].startswith("velvet-glove-ghalint-workflow-")
+      ):
+          return None
+      root = os.path.join(temporary, components[0])
+      if os.path.dirname(root) != temporary or not beneath(temporary, candidate):
+          return None
+      return root
+
+
+  def sanitize_private_error(error, assigned_root, temporary):
+      message = str(error)
+      roots = []
+      if assigned_root is not None:
+          roots.extend((assigned_root, os.path.realpath(assigned_root)))
+      inferred_root = owned_private_root(error, temporary)
+      if inferred_root is not None:
+          roots.append(inferred_root)
+      for root in sorted(set(roots), key=len, reverse=True):
+          if root:
+              message = message.replace(root, "<ghalint-private>")
+      return message
+
+
+  def run_child(argv, cwd, environment):
+      global process
+      global process_group
+      global pending_signal
+      global reported_signal
+      global cleaning
+      stdout_chunks = []
+      stderr_chunks = []
+      total = 0
+      child = None
+      selector = selectors.DefaultSelector()
+      previous_mask = None
+      leader_status = None
+      leader_exit_deadline = None
+      left_descendants = False
+      try:
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
+          try:
+              queued = sorted(
+                  set(signal.sigpending()).intersection(HANDLED_SIGNALS), key=int
+              )
+              if queued:
+                  pending_signal = int(signal.sigwait({queued[0]}))
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
+              child = subprocess.Popen(
+                  argv,
+                  cwd=cwd,
+                  env=environment,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  start_new_session=True,
+              )
+              process = child
+              process_group = child.pid
+          finally:
+              signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          for stream, target in (
+              (process.stdout, stdout_chunks),
+              (process.stderr, stderr_chunks),
+          ):
+              if stream is None:
+                  reject("failed to capture ghalint output")
               os.set_blocking(stream.fileno(), False)
-              selector.register(stream, selectors.EVENT_READ, name)
-          while selector.get_map():
-              if signal_state["signal"] is not None:
-                  raise AdapterSignal(signal_state["signal"])
+              selector.register(stream, selectors.EVENT_READ, target)
+          while selector.get_map() or leader_status is None:
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
               for key, _ in selector.select(0.1):
-                  chunk = os.read(key.fileobj.fileno(), 65536)
+                  try:
+                      chunk = os.read(key.fileobj.fileno(), 65536)
+                  except BlockingIOError:
+                      continue
                   if not chunk:
                       selector.unregister(key.fileobj)
+                      key.fileobj.close()
                       continue
-                  output[key.data].extend(chunk)
-                  if len(output["stdout"]) + len(output["stderr"]) > MAX_OUTPUT_BYTES:
+                  key.data.append(chunk)
+                  total += len(chunk)
+                  if total > MAX_OUTPUT_BYTES:
                       reject(f"combined ghalint output exceeds {MAX_OUTPUT_BYTES} bytes")
-          status = child.wait()
-          if signal_state["signal"] is not None:
-              raise AdapterSignal(signal_state["signal"])
-      except BaseException:
-          terminate_group(child.pid)
-          try:
-              child.wait(timeout=1)
-          except (subprocess.TimeoutExpired, ChildProcessError):
-              pass
+              if leader_status is None:
+                  leader_status = process.poll()
+                  if leader_status is not None:
+                      previous_cleaning = cleaning
+                      cleaning = True
+                      try:
+                          left_descendants = sweep_process_group(process_group)
+                      finally:
+                          cleaning = previous_cleaning
+                      leader_exit_deadline = time.monotonic() + 0.25
+              if (
+                  leader_status is not None
+                  and selector.get_map()
+                  and time.monotonic() >= leader_exit_deadline
+              ):
+                  reject("ghalint child exited without closing output pipes")
+          if left_descendants:
+              reject("ghalint left a same-group descendant after exit")
+          process = None
+          process_group = None
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          return leader_status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+      except AdapterSignal as error:
+          reported_signal = error.signum
+          cleanup_error = stop_child(error.signum)
+          if cleanup_error is not None:
+              reject(f"{error}; child cleanup failed: {cleanup_error}")
+          raise
+      except BaseException as error:
+          cleanup_error = stop_child()
+          if cleanup_error is not None:
+              raise append_adapter_error(
+                  error, ContractError(f"child cleanup failed: {cleanup_error}")
+              ) from error
           raise
       finally:
           selector.close()
-          signal_state["child"] = None
-      leftover = process_group_exists(child.pid)
-      if leftover:
-          terminate_group(child.pid)
-          reject("ghalint left a same-group descendant after exit")
-      return status, bytes(output["stdout"]), bytes(output["stderr"])
+          if child is not None:
+              for stream in (child.stdout, child.stderr):
+                  if stream is not None:
+                      try:
+                          stream.close()
+                      except OSError:
+                          pass
 
 
   def parse_fields(text):
@@ -759,46 +975,49 @@ ghalintWorkflowAdapter: String = #"""
 
 
   def execute():
-      if len(sys.argv) < 5:
-          reject("adapter invocation is incomplete")
-      tool, tool_snapshot = resolve_tool(sys.argv[1])
-      project = validate_project(sys.argv[2])
-      marker_indices = [
-          index for index, value in enumerate(sys.argv[3:], start=3) if value == MARKER
-      ]
-      if len(marker_indices) != 1:
-          reject(f"adapter requires exactly one {MARKER!r} marker")
-      marker = marker_indices[0]
-      extra = sys.argv[3:marker]
-      workflows, inventory = workflow_inventory(project)
-      selected_files(sys.argv[marker + 1:], workflows, inventory)
-      inventory_relatives = frozenset(relative(project, path) for path in inventory)
-      config_path, config_snapshot = config_source(project, extra)
-      baseline_files, baseline_directories = scan_workspace(project)
-      temporary = temporary_root(project)
-      private_root = None
-      signal_state = {"child": None, "signal": None}
+      global cleaning
+      global pending_signal
+      global reported_signal
+      if not all(
+          hasattr(signal, name) for name in ("pthread_sigmask", "sigpending", "sigwait")
+      ):
+          reject("Python does not support the required atomic signal cleanup primitives")
 
-      def handle_signal(signum, _frame):
-          if signal_state["signal"] is None:
-              signal_state["signal"] = signum
-          child = signal_state["child"]
-          if child is not None:
-              try:
-                  os.killpg(child, signum)
-              except ProcessLookupError:
-                  pass
-
-      previous_handlers = {
-          chosen: signal.signal(chosen, handle_signal) for chosen in HANDLED_SIGNALS
-      }
+      previous_handlers = {}
+      temporary = None
+      private_state = {"root": None}
+      result = None
+      error = None
+      pending_signal = None
+      reported_signal = None
       try:
+          for chosen in HANDLED_SIGNALS:
+              previous_handlers[chosen] = signal.signal(chosen, forward_signal)
+          cleaning = False
+          if len(sys.argv) < 5:
+              reject("adapter invocation is incomplete")
+          tool, tool_snapshot = resolve_tool(sys.argv[1])
+          project = validate_project(sys.argv[2])
+          marker_indices = [
+              index for index, value in enumerate(sys.argv[3:], start=3)
+              if value == MARKER
+          ]
+          if len(marker_indices) != 1:
+              reject(f"adapter requires exactly one {MARKER!r} marker")
+          marker = marker_indices[0]
+          extra = sys.argv[3:marker]
+          workflows, inventory = workflow_inventory(project)
+          selected_files(sys.argv[marker + 1:], workflows, inventory)
+          inventory_relatives = frozenset(relative(project, path) for path in inventory)
+          config_path, config_snapshot = config_source(project, extra)
+          baseline_files, baseline_directories = scan_workspace(project)
+          temporary = temporary_root(project)
           private_root, private_path, private_snapshot = private_config(
-              project, config_snapshot
+              temporary, config_snapshot, private_state
           )
           environment = child_environment(tool, private_root, temporary)
           version_status, version_stdout, version_stderr = run_child(
-              [tool, "--version"], project, environment, signal_state
+              [tool, "--version"], project, environment
           )
           if (
               version_status != 0
@@ -828,7 +1047,6 @@ ghalintWorkflowAdapter: String = #"""
               ],
               project,
               environment,
-              signal_state,
           )
           same_file(tool, tool_snapshot, "ghalint executable", 128 * 1024 * 1024)
           if config_path is not None:
@@ -846,46 +1064,124 @@ ghalintWorkflowAdapter: String = #"""
           if status == 0:
               if stderr:
                   reject("clean ghalint execution emitted stderr")
-              return 0
-          if status != 1:
-              reject(f"ghalint exited with operational status {status}")
-          records, operational = parse_logs(
-              stderr, inventory_relatives, private_path
-          )
-          if operational:
-              reject("; ".join(sorted(set(operational))))
-          if not records:
-              reject("ghalint status one contained no source diagnostics")
-          records.sort(key=lambda record: json.dumps(record, sort_keys=True))
-          report = json.dumps(
-              {"status": "issues", "issues": records},
-              ensure_ascii=True,
-              sort_keys=True,
-              separators=(",", ":"),
-          )
-          sys.stdout.buffer.write((report + "\n").encode("ascii"))
-          return 1
-      except AdapterSignal as error:
-          raise ContractError(str(error))
+              result = (0, b"")
+          else:
+              if status != 1:
+                  reject(f"ghalint exited with operational status {status}")
+              records, operational = parse_logs(
+                  stderr, inventory_relatives, private_path
+              )
+              if operational:
+                  reject("; ".join(sorted(set(operational))))
+              if not records:
+                  reject("ghalint status one contained no source diagnostics")
+              records.sort(key=lambda record: json.dumps(record, sort_keys=True))
+              report = json.dumps(
+                  {"status": "issues", "issues": records},
+                  ensure_ascii=True,
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              result = (1, (report + "\n").encode("ascii"))
+      except AdapterSignal as caught:
+          error = ContractError(f"received signal {caught.signum}")
+          reported_signal = caught.signum
+      except ContractError as caught:
+          error = caught
+      except BaseException as caught:
+          error = caught
       finally:
-          for chosen, previous in previous_handlers.items():
-              signal.signal(chosen, previous)
+          cleaning = True
+          try:
+              child_cleanup_error = stop_child()
+              if child_cleanup_error is not None:
+                  error = append_adapter_error(
+                      error,
+                      ContractError(f"child cleanup failed: {child_cleanup_error}"),
+                  )
+          except BaseException as cleanup_error:
+              error = append_adapter_error(
+                  error,
+                  ContractError(f"cannot stop native ghalint: {cleanup_error}"),
+              )
+          private_root = private_state["root"]
           if private_root is not None:
               try:
                   shutil.rmtree(private_root)
-              except OSError as error:
-                  active = sys.exc_info()[1]
-                  message = f"cannot remove private ghalint directory: {error}"
-                  if active is not None:
-                      message = f"{active}; {message}"
-                  raise ContractError(message) from error
+              except BaseException as cleanup_error:
+                  error = append_adapter_error(
+                      error,
+                      ContractError(
+                          f"cannot remove private ghalint directory: {cleanup_error}"
+                      ),
+                  )
+
+          blocked_mask = None
+          try:
+              try:
+                  blocked_mask = signal.pthread_sigmask(
+                      signal.SIG_BLOCK, HANDLED_SIGNALS
+                  )
+              except (OSError, ValueError) as mask_error:
+                  error = append_adapter_error(
+                      error,
+                      ContractError(f"cannot block cleanup signals: {mask_error}"),
+                  )
+              error = apply_pending_signal(error)
+              if blocked_mask is not None:
+                  while True:
+                      error, drained = drain_blocked_signals(error)
+                      if not drained:
+                          break
+
+                  for chosen, previous in previous_handlers.items():
+                      try:
+                          signal.signal(chosen, previous)
+                      except (OSError, ValueError) as handler_error:
+                          error = append_adapter_error(
+                              error,
+                              ContractError(
+                                  f"cannot restore signal handler: {handler_error}"
+                              ),
+                          )
+
+                  while True:
+                      error = apply_pending_signal(error)
+                      error, drained = drain_blocked_signals(error)
+                      if not drained:
+                          break
+              # This adapter is a one-shot process. Keep handled signals blocked
+              # through diagnostics and exit after the deterministic cutoff.
+          finally:
+              cleaning = True
+
+      if error is not None:
+          message = sanitize_private_error(
+              error, private_state["root"], temporary
+          )
+          if not isinstance(error, ContractError):
+              message = f"unexpected adapter failure ({type(error).__name__}): {message}"
+          raise ContractError(message)
+      if result is None:
+          reject("adapter completed without a result")
+      status, output = result
+      if output:
+          sys.stdout.buffer.write(output)
+      return status
 
 
   try:
-      raise SystemExit(execute())
+      adapter_status = execute()
   except ContractError as error:
       print(f"velvet-glove-ghalint-workflow: {error}", file=sys.stderr)
       raise SystemExit(2)
+  except BaseException:
+      print(
+          "velvet-glove-ghalint-workflow: unexpected adapter failure",
+          file=sys.stderr,
+      )
+      raise SystemExit(2)
+  raise SystemExit(adapter_status)
   """#
 
 ghalintWorkflowArgv: Listing<String | Config.ArgToken> = new Listing<String | Config.ArgToken> {
