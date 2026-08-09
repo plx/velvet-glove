@@ -34,13 +34,14 @@ dclintAdapter: String = #"""
   SKIPPED_DIRECTORIES = {".git", ".velvet-glove", "node" + "_modules", "target"}
   HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
   VALIDATION_RULES = {"invalid-yaml", "invalid-schema", "unknown-error"}
+  UNSAFE_WRITE_RULES = {"no-version-field"}
   RULE_FIXABILITY = {
       "no-build-and-image": False,
       "no-duplicate-container-names": False,
       "no-duplicate-exported-ports": False,
       "no-quotes-in-volumes": True,
       "no-unbound-port-interfaces": False,
-      "no-version-field": True,
+      "no-version-field": False,
       "require-project-name-field": False,
       "require-quotes-in-ports": True,
       "service-container-name-regex": False,
@@ -276,6 +277,11 @@ dclintAdapter: String = #"""
           if rule not in RULE_FIXABILITY or rule in VALIDATION_RULES:
               reject(f"dclint config rule is unsupported: {rule!r}")
           if type(value) is int and value in (0, 1, 2):
+              if rule in UNSAFE_WRITE_RULES and value != 0:
+                  reject(
+                      f"dclint rule {rule!r} cannot be enabled because its "
+                      "3.1.0 fixer can delete nested extension data"
+                  )
               continue
           if (
               isinstance(value, list)
@@ -283,6 +289,11 @@ dclintAdapter: String = #"""
               and type(value[0]) is int
               and value[0] in (0, 1, 2)
           ):
+              if rule in UNSAFE_WRITE_RULES and value[0] != 0:
+                  reject(
+                      f"dclint rule {rule!r} cannot be enabled because its "
+                      "3.1.0 fixer can delete nested extension data"
+                  )
               validate_rule_options(rule, value[1])
               continue
           reject(f"dclint config rule {rule!r} has an unsupported value")
@@ -291,6 +302,7 @@ dclintAdapter: String = #"""
   def normalize_config(config):
       validate_config(config)
       rules = config.setdefault("rules", {})
+      rules.setdefault("no-version-field", 0)
       rule = "top-level-properties-order"
       safe_options = {"customOrder": list(TOP_LEVEL_ORDER)}
       value = rules.get(rule)

@@ -144,6 +144,36 @@ if MODE == "capture-config":
     with open(CONFIG_CAPTURE, "wb") as output:
         output.write(contents)
     emit([report_record(path, []) for path in files], 0)
+if MODE == "nested-version-preservation":
+    with open(config_path(), "r", encoding="ascii") as source:
+        config = json.load(source)
+    no_version = config.get("rules", {}).get("no-version-field")
+    disabled = no_version == 0 or (
+        isinstance(no_version, list) and no_version and no_version[0] == 0
+    )
+    with open(files[0], "r", encoding="utf-8") as source:
+        contents = source.read()
+    dirty_services = "services:\n  zebra: {}\n  alpha: {}\n" in contents
+    if fix:
+        if not disabled:
+            contents = "".join(
+                line
+                for line in contents.splitlines(keepends=True)
+                if not line.lstrip().startswith("version:")
+            )
+        contents = contents.replace(
+            "services:\n  zebra: {}\n  alpha: {}\n",
+            "services:\n  alpha: {}\n  zebra: {}\n",
+        )
+        with open(files[0], "w", encoding="utf-8") as output:
+            output.write(contents)
+        emit([report_record(files[0], [])], 0)
+    messages = (
+        [message("services-alphabetical-order", True, "warning")]
+        if dirty_services
+        else []
+    )
+    emit([report_record(files[0], messages)], 1 if messages else 0)
 if MODE == "private-config-destroy":
     private = config_path()
     parent = os.path.dirname(private)

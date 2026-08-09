@@ -272,7 +272,7 @@ const CONTEXTLINT_POISONED_ENV: &[&str] = &[
 const DCLINT_FILES_MARKER: &str = "__VELVET_GLOVE_DCLINT_FILES__";
 const DCLINT_PRIVATE_CONFIG_ARGUMENT: &str = "--config=<private-config>";
 const DCLINT_PRIVATE_CONFIG_SHA256: &str =
-    "a7dcae6e1d0ec043aeeb03cb1a654fdc8369bc9cd467964a788ed78b034df178";
+    "d18839f8d0202f6139bdc65206a222a792df2a57b7f1e308636f6e652e548fbf";
 const DCLINT_POISON_ENV_VALUE: &str = "velvet-glove-dclint-adapter-must-clear-this";
 const DCLINT_SCRUBBED_ENV: &[&str] = &[
     "DCLINT_CONFIG",
@@ -9478,7 +9478,7 @@ fn verify_dclint_private_config_argument(
     assert_record(record, "dclint-config-kind", "file")?;
     assert_record(record, "dclint-config-mode", "600")?;
     assert_record(record, "dclint-config-links", "1")?;
-    assert_record(record, "dclint-config-bytes", "166")?;
+    assert_record(record, "dclint-config-bytes", "187")?;
     assert_record(record, "dclint-config-sha256", DCLINT_PRIVATE_CONFIG_SHA256)?;
     assert_record(
         record,
@@ -13319,6 +13319,7 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
             let invoked = root.join("invoked.jsonl");
             let dirty = project.join("a-dirty.yml");
             let selected_clean = project.join("b-selected-clean.yml");
+            let nested_version = project.join("c-nested-version.yml");
             let source_config_probe = project.join("source-config-probe.json");
             let orphan_pid_path = root.join("normal-exit-orphan.pid");
             let orphan_late_path = root.join("normal-exit-orphan.late");
@@ -13329,6 +13330,11 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                 .map_err(|error| format!("write dclint lifecycle dirty target: {error}"))?;
             std::fs::write(&selected_clean, b"clean\n")
                 .map_err(|error| format!("write dclint lifecycle clean target: {error}"))?;
+            let nested_version_input = b"x-meta:\n  # dclint disable-line no-version-field\n  version: keep-me\nservices:\n  zebra: {}\n  alpha: {}\n";
+            let nested_version_expected = b"x-meta:\n  # dclint disable-line no-version-field\n  version: keep-me\nservices:\n  alpha: {}\n  zebra: {}\n";
+            std::fs::write(&nested_version, nested_version_input).map_err(|error| {
+                format!("write dclint lifecycle nested-version target: {error}")
+            })?;
             std::fs::write(&unselected, b"unselected sentinel\n")
                 .map_err(|error| format!("write dclint lifecycle unselected target: {error}"))?;
             std::fs::create_dir(&retained_directory)
@@ -13506,6 +13512,37 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                 return Err("dclint lifecycle fixed-state repeat was not an exact no-op".to_owned());
             }
 
+            let output = run(
+                "nested-version-preservation",
+                "nested-version-preservation",
+                &[],
+                &[&nested_version],
+            )?;
+            assert_outcome("nested-version-preservation", &output, 0, "")?;
+            if read_invocations()?.len() != 3
+                || std::fs::read(&nested_version).ok().as_deref() != Some(nested_version_expected)
+            {
+                return Err(
+                    "dclint did not preserve nested extension version data while applying an unrelated fix"
+                        .to_owned(),
+                );
+            }
+            let nested_version_fingerprint = fingerprint(&nested_version)?;
+            let output = run(
+                "nested-version-preservation-idempotent",
+                "nested-version-preservation",
+                &[],
+                &[&nested_version],
+            )?;
+            assert_outcome("nested-version-preservation-idempotent", &output, 0, "")?;
+            if read_invocations()?.len() != 1
+                || fingerprint(&nested_version)? != nested_version_fingerprint
+            {
+                return Err(
+                    "dclint nested-version preservation repeat was not an exact no-op".to_owned(),
+                );
+            }
+
             for (lifecycle_mode, diagnostic) in [
                 ("noop-fix", "native fix was a no-op"),
                 (
@@ -13656,6 +13693,16 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
                     "customOrder must be an exact permutation",
                 ),
                 (
+                    "unsafe-no-version-numeric",
+                    r#"{"rules":{"no-version-field":1}}"#,
+                    "3.1.0 fixer can delete nested extension data",
+                ),
+                (
+                    "unsafe-no-version-array",
+                    r#"{"rules":{"no-version-field":[2,{}]}}"#,
+                    "3.1.0 fixer can delete nested extension data",
+                ),
+                (
                     "duplicate-service-key-groups",
                     r#"{"rules":{"service-keys-order":[2,{"groups":{"Core Definitions":["image"],"Other":["image"]}}]}}"#,
                     "service key 'image' is assigned to multiple groups",
@@ -13737,6 +13784,7 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
             )
             .map_err(|error| format!("parse normalized custom-order config: {error}"))?;
             if read_invocations()?.len() != 1
+                || captured["rules"]["no-version-field"] != 0
                 || captured["rules"]["top-level-properties-order"][0] != 2
                 || captured["rules"]["top-level-properties-order"][1]["customOrder"]
                     != custom_top_level_order
@@ -13768,6 +13816,7 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
             )
             .map_err(|error| format!("parse normalized numeric-order config: {error}"))?;
             if read_invocations()?.len() != 1
+                || captured["rules"]["no-version-field"] != 0
                 || captured["rules"]["top-level-properties-order"][0] != 2
                 || captured["rules"]["top-level-properties-order"][1]["customOrder"]
                     != safe_top_level_order
@@ -13790,6 +13839,7 @@ fn verify_dclint_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result
             )
             .map_err(|error| format!("parse normalized default-order config: {error}"))?;
             if read_invocations()?.len() != 1
+                || captured["rules"]["no-version-field"] != 0
                 || captured["rules"]["top-level-properties-order"][0] != 1
                 || captured["rules"]["top-level-properties-order"][1]["customOrder"]
                     != safe_top_level_order

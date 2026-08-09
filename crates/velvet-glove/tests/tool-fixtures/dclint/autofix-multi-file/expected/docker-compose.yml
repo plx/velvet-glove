@@ -1,3 +1,6 @@
+x-meta:
+  # dclint disable-line no-version-field
+  version: keep-me
 x-runtime:
   source: fixture
 name: fixture-autofix

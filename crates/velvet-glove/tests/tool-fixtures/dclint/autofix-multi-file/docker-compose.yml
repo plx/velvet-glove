@@ -1,5 +1,8 @@
 x-runtime:
   source: fixture
+x-meta:
+  # dclint disable-line no-version-field
+  version: keep-me
 name: fixture-autofix
 services:
   zebra:
