@@ -2071,15 +2071,18 @@ if [[ $golines_selected == true ]]; then
     echo "==> Building exact patched golines 0.13.0+velvet-glove.1 with locked Go 1.26.5"
     golines_archive=$(fetch_component_archive golines)
     golines_build_dir="$state_dir/golines-build-0.13.0-vg1"
+    golines_mod_cache="$state_dir/golines-go-mod-cache"
+    golines_bootstrap_cache="$state_dir/golines-bootstrap-go-build-cache"
+    golines_build_cache="$state_dir/golines-go-build-cache"
     if [[ -e $golines_build_dir ]]; then
       echo "warning: removing stale transactional golines build directory" >&2
       rm -rf -- "$golines_build_dir"
     fi
     mkdir -p \
       "$golines_build_dir/install/bin" \
-      "$golines_build_dir/go-mod-cache" \
-      "$golines_build_dir/bootstrap-go-build-cache" \
-      "$golines_build_dir/go-build-cache"
+      "$golines_mod_cache" \
+      "$golines_bootstrap_cache" \
+      "$golines_build_cache"
     /usr/bin/tar -xf "$golines_archive" -C "$golines_build_dir"
     if [[ ! -d $golines_build_dir/golines-0.13.0 || \
       -L $golines_build_dir/golines-0.13.0 ]]; then
@@ -2090,9 +2093,6 @@ if [[ $golines_selected == true ]]; then
     golines_source="$golines_build_dir/source"
     golines_staging_root="$golines_build_dir/install"
     golines_staging_binary="$golines_staging_root/bin/golines"
-    golines_mod_cache="$golines_build_dir/go-mod-cache"
-    golines_bootstrap_cache="$golines_build_dir/bootstrap-go-build-cache"
-    golines_build_cache="$golines_build_dir/go-build-cache"
     if [[ $(/usr/bin/shasum -a 256 "$golines_source/main.go" | /usr/bin/awk '{print $1}') != \
         f4b5292ae055fd299e5ea8d2b42af8b907bb9bf1002e7c5bb3796f8e1069949f || \
       $(/usr/bin/shasum -a 256 "$golines_source/go.mod" | /usr/bin/awk '{print $1}') != \

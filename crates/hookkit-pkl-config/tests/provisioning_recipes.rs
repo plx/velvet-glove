@@ -2209,6 +2209,12 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
         "golines proxy object differs from the reviewed closure",
         "GOENV=off",
         "GOWORK=off",
+        "golines_mod_cache=\"$state_dir/golines-go-mod-cache\"",
+        "golines_bootstrap_cache=\"$state_dir/golines-bootstrap-go-build-cache\"",
+        "golines_build_cache=\"$state_dir/golines-go-build-cache\"",
+        "\"GOMODCACHE=$golines_mod_cache\"",
+        "\"GOCACHE=$golines_bootstrap_cache\"",
+        "\"GOCACHE=$golines_build_cache\"",
         "exec --locked --fresh-env --deny-net --",
         "-buildvcs=false",
         "0.13.0+velvet-glove.1",
@@ -2233,6 +2239,104 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
             && !golines_block.contains("mod download all\n"),
         "golines bootstrap must not expand the reviewed 12-module runtime closure"
     );
+    for forbidden in [
+        "$golines_build_dir/go-mod-cache",
+        "$golines_build_dir/bootstrap-go-build-cache",
+        "$golines_build_dir/go-build-cache",
+    ] {
+        assert!(
+            !golines_block.contains(forbidden),
+            "golines runner must not place declared persistent caches under its transactional build root: {forbidden:?}"
+        );
+    }
+
+    let registry: Registry = serde_json::from_str(RECIPES_JSON).expect("strict recipe registry");
+    let environment = registry
+        .environments
+        .iter()
+        .find(|environment| environment.id == "macos-arm64-golines")
+        .expect("golines environment");
+    let component = environment
+        .components
+        .iter()
+        .find(|component| component.id == "golines")
+        .expect("golines component");
+    let download = environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "golines-go-mod-download")
+        .expect("golines module download");
+    let verify = environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "golines-go-mod-verify")
+        .expect("golines module verification");
+    let build = environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "golines-go-build")
+        .expect("golines build");
+    let assignment = |name: &str| {
+        let prefix = format!("{name}=");
+        let value = golines_block
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("golines runner omitted {name} assignment"));
+        value.trim_matches('"').replace("$state_dir", "{state}")
+    };
+    let runner_mod_cache = assignment("golines_mod_cache");
+    let runner_bootstrap_cache = assignment("golines_bootstrap_cache");
+    let runner_build_cache = assignment("golines_build_cache");
+    for declared in [
+        download.environment.get("GOMODCACHE"),
+        verify.environment.get("GOMODCACHE"),
+        build.environment.get("GOMODCACHE"),
+        component.integrity.build_environment.get("GOMODCACHE"),
+    ] {
+        assert_eq!(
+            declared.map(String::as_str),
+            Some(runner_mod_cache.as_str())
+        );
+    }
+    for declared in [
+        download.environment.get("GOCACHE"),
+        verify.environment.get("GOCACHE"),
+    ] {
+        assert_eq!(
+            declared.map(String::as_str),
+            Some(runner_bootstrap_cache.as_str())
+        );
+    }
+    for declared in [
+        build.environment.get("GOCACHE"),
+        component.integrity.build_environment.get("GOCACHE"),
+    ] {
+        assert_eq!(
+            declared.map(String::as_str),
+            Some(runner_build_cache.as_str())
+        );
+    }
+    let source_build: serde_json::Value =
+        serde_json::from_str(GOLINES_SOURCE_BUILD_JSON).expect("golines source-build provenance");
+    assert_eq!(
+        source_build["build"]["environment"]["GOMODCACHE"],
+        runner_mod_cache
+    );
+    assert_eq!(
+        source_build["build"]["environment"]["GOCACHE"],
+        runner_build_cache
+    );
+    for index in [1, 2] {
+        assert_eq!(
+            source_build["build"]["bootstrap"][index]["environment"]["GOMODCACHE"],
+            runner_mod_cache
+        );
+        assert_eq!(
+            source_build["build"]["bootstrap"][index]["environment"]["GOCACHE"],
+            runner_bootstrap_cache
+        );
+    }
     for required in [
         "golines_selected=false",
         "index(\"golines\") != null",
