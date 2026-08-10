@@ -16812,7 +16812,7 @@
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "immediate"
           ],
@@ -16833,9 +16833,21 @@
           "surfaceCases": [
             "immediate-phase-order"
           ],
-          "references": [],
-          "reason": "Pinned Go 1.26.5 artifacts are intentionally deferred until the frozen adapter receives blocker audit.",
-          "trackingIssue": 25
+          "references": [
+            "recipe:go-vet-macos-arm64",
+            "artifact:clean/pinned-environment.json#go-1.26.5",
+            "artifact:clean/fixtures/report.json#go-vet/clean/immediate",
+            "artifact:multi-package/pinned-environment.json#go-1.26.5",
+            "artifact:multi-package/fixtures/report.json#go-vet/multi-package/immediate",
+            "artifact:operational-failure/pinned-environment.json#go-1.26.5",
+            "artifact:operational-failure/fixtures/report.json#go-vet/operational-failure/immediate",
+            "artifact:printf-mismatch/pinned-environment.json#go-1.26.5",
+            "artifact:printf-mismatch/fixtures/report.json#go-vet/printf-mismatch/immediate",
+            "artifact:test-findings/pinned-environment.json#go-1.26.5",
+            "artifact:test-findings/fixtures/report.json#go-vet/test-findings/immediate"
+          ],
+          "reason": null,
+          "trackingIssue": null
         },
         {
           "tier": "rendered-command",
@@ -16869,7 +16881,7 @@
         },
         {
           "tier": "pinned-real-tool",
-          "status": "gap",
+          "status": "covered",
           "surfaces": [
             "deferred"
           ],
@@ -16890,9 +16902,21 @@
           "surfaceCases": [
             "deferred-lifecycle"
           ],
-          "references": [],
-          "reason": "Pinned Go 1.26.5 artifacts are intentionally deferred until the frozen adapter receives blocker audit.",
-          "trackingIssue": 25
+          "references": [
+            "recipe:go-vet-macos-arm64",
+            "artifact:clean/pinned-environment.json#go-1.26.5",
+            "artifact:clean/fixtures/report.json#go-vet/clean/deferred",
+            "artifact:multi-package/pinned-environment.json#go-1.26.5",
+            "artifact:multi-package/fixtures/report.json#go-vet/multi-package/deferred",
+            "artifact:operational-failure/pinned-environment.json#go-1.26.5",
+            "artifact:operational-failure/fixtures/report.json#go-vet/operational-failure/deferred",
+            "artifact:printf-mismatch/pinned-environment.json#go-1.26.5",
+            "artifact:printf-mismatch/fixtures/report.json#go-vet/printf-mismatch/deferred",
+            "artifact:test-findings/pinned-environment.json#go-1.26.5",
+            "artifact:test-findings/fixtures/report.json#go-vet/test-findings/deferred"
+          ],
+          "reason": null,
+          "trackingIssue": null
         }
       ],
       "exceptions": []

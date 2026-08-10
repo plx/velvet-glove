@@ -1939,7 +1939,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             outcome: ExpectedOutcome::Issues,
             diagnostic_contains: &[
                 "example.go:6:14",
-                "fmt.Printf format %d has arg \"string\" of wrong type string",
+                r#"fmt.Printf format %d has arg \"string\" of wrong type string"#,
             ],
             diagnostic_excludes: &[],
             trace_plan: GO_VET_TRACE_PLAN,
@@ -1955,7 +1955,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             outcome: ExpectedOutcome::Issues,
             diagnostic_contains: &[
                 "other/workspace_only.go:6:14",
-                "fmt.Printf format %d has arg \"workspace-only\" of wrong type string",
+                r#"fmt.Printf format %d has arg \"workspace-only\" of wrong type string"#,
             ],
             diagnostic_excludes: &["selected_clean.go:6"],
             trace_plan: GO_VET_TRACE_PLAN,
