@@ -5456,9 +5456,16 @@ exit 7
     }
     assert_record(&record, "golines-native-stdin-fd-kind", "Regular File")
         .expect("native stdin kind");
-    assert_record(&record, "golines-native-stdin-fd-mode", "600").expect("native stdin mode");
+    assert_record(&record, "golines-native-stdin-fd-mode", "400")
+        .expect("native stdin read-only access mode");
     assert_record(&record, "golines-native-stdin-fd-links", "0")
         .expect("native stdin unlink state");
+    assert_record(&record, "golines-native-stdin-backing-kind", "Regular File")
+        .expect("native stdin backing kind");
+    assert_record(&record, "golines-native-stdin-backing-mode", "600")
+        .expect("native stdin backing mode");
+    assert_record(&record, "golines-native-stdin-backing-links", "1")
+        .expect("native stdin pre-unlink link count");
     assert_record(
         &record,
         "golines-native-stdin-fd-size",
@@ -5475,6 +5482,14 @@ exit 7
         )
         .expect("capture stdin identity");
     }
+    let native_inode =
+        read_record(&record, "golines-native-stdin-fd-inode").expect("native stdin inode");
+    assert_record(&record, "golines-native-stdin-backing-inode", &native_inode)
+        .expect("backing stdin inode");
+    read_record(&record, "golines-native-stdin-backing-device")
+        .expect("backing stdin device")
+        .parse::<u64>()
+        .expect("numeric backing stdin device");
     assert_eq!(
         std::fs::read(record.join("golines-stdin")).expect("traced stdin bytes"),
         input
@@ -14507,9 +14522,19 @@ fn verify_golines_trace_environment(
             &controlled_owner.to_string(),
         )?;
     }
+    assert_record(record, "golines-native-stdin-backing-kind", "Regular File")?;
+    assert_record(record, "golines-native-stdin-backing-mode", "600")?;
+    assert_record(record, "golines-native-stdin-backing-links", "1")?;
+    assert_record(
+        record,
+        "golines-native-stdin-backing-owner",
+        &controlled_owner.to_string(),
+    )?;
     assert_record(record, "golines-native-stdin-path-kind", "missing")?;
     assert_record(record, "golines-native-stdin-fd-kind", "Regular File")?;
-    assert_record(record, "golines-native-stdin-fd-mode", "600")?;
+    // macOS /dev/fd exposes the access mode of this deliberately read-only
+    // descriptor. The same inode's filesystem mode is bound separately above.
+    assert_record(record, "golines-native-stdin-fd-mode", "400")?;
     assert_record(record, "golines-native-stdin-fd-links", "0")?;
     assert_record(
         record,
@@ -14534,6 +14559,14 @@ fn verify_golines_trace_environment(
     }
     assert_record(record, "golines-capture-stdin-fd-device", &native_device)?;
     assert_record(record, "golines-capture-stdin-fd-inode", &native_inode)?;
+    // macOS reports /dev/fd through the devfs device namespace, while the
+    // pre-unlink path reports its backing filesystem device. The shared inode
+    // plus the exact private path metadata binds that transition.
+    let backing_device = read_record(record, "golines-native-stdin-backing-device")?;
+    backing_device.parse::<u64>().map_err(|error| {
+        format!("golines native stdin backing has malformed device {backing_device:?}: {error}")
+    })?;
+    assert_record(record, "golines-native-stdin-backing-inode", &native_inode)?;
     let observed_stdin = std::fs::read(record.join("golines-stdin"))
         .map_err(|error| format!("read golines trace stdin: {error}"))?;
     if observed_stdin != expected_stdin {

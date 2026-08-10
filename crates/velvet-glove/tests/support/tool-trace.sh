@@ -669,7 +669,13 @@ if [ "$logical_program" = golines ]; then
   /usr/bin/stat -f '%l' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-links"
   golines_native_stdin=$(/usr/bin/mktemp "${TMPDIR:?}/golines-native-stdin.XXXXXX")
   /bin/chmod 600 "$golines_native_stdin"
-  exec 4<>"$golines_native_stdin"
+  /usr/bin/stat -f '%HT' "$golines_native_stdin" >"$record/golines-native-stdin-backing-kind"
+  /usr/bin/stat -f '%Lp' "$golines_native_stdin" >"$record/golines-native-stdin-backing-mode"
+  /usr/bin/stat -f '%u' "$golines_native_stdin" >"$record/golines-native-stdin-backing-owner"
+  /usr/bin/stat -f '%l' "$golines_native_stdin" >"$record/golines-native-stdin-backing-links"
+  /usr/bin/stat -f '%d' "$golines_native_stdin" >"$record/golines-native-stdin-backing-device"
+  /usr/bin/stat -f '%i' "$golines_native_stdin" >"$record/golines-native-stdin-backing-inode"
+  exec 4<"$golines_native_stdin"
   exec 5<"$golines_native_stdin"
   exec 3<>"$golines_native_stdin"
   /bin/rm "$golines_native_stdin"
@@ -693,8 +699,10 @@ if [ "$logical_program" = golines ]; then
   IFS= read -r golines_native_inode <"$record/golines-native-stdin-fd-inode"
   IFS= read -r golines_capture_device <"$record/golines-capture-stdin-fd-device"
   IFS= read -r golines_capture_inode <"$record/golines-capture-stdin-fd-inode"
+  IFS= read -r golines_backing_inode <"$record/golines-native-stdin-backing-inode"
   if [ "$golines_native_device" != "$golines_capture_device" ] || \
-    [ "$golines_native_inode" != "$golines_capture_inode" ]; then
+    [ "$golines_native_inode" != "$golines_capture_inode" ] || \
+    [ "$golines_native_inode" != "$golines_backing_inode" ]; then
     exit 97
   fi
   /bin/cat <&5 >"$record/golines-stdin"
