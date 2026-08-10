@@ -848,9 +848,15 @@ syntax-error operational batch, and an explicitly selected generated file.
 Claude and Codex goldens cover immediate behavior plus explicit deferred check,
 remedy, independent final check, exact diff, and idempotence. Exact tool traces
 bind two setup children plus two native calls per selected source for verify,
-and one additional post-commit call per source for write, including stdin file
-type, ownership, mode, unlink state, exact bytes, and private executable
-identity.
+and one additional post-commit call per source for write. They bind the
+adapter-to-shim stdin state separately from the shim-to-native state: the shim
+copies the exact bytes through independently positioned descriptors for one
+private mode-0600 file, unlinks that file before populating it, and gives the
+native child the same device and inode that the trace records. Thus every
+native call is proven to receive an unlinked regular file with the exact
+expected size, bytes, and SHA-256; the no-stdin version probe's inherited
+`/dev/null` remains visible only in the separate wrapper-input evidence. Traces
+also bind the private executable identity.
 
 The evaluated adversarial lifecycle covers extra arguments, malformed paths,
 aliases and topology races, hostile environments, executable/sidecar/native

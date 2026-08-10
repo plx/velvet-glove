@@ -5350,6 +5350,152 @@ fn tool_trace_shim_dispatches_distinct_program_bindings() {
 }
 
 #[test]
+fn tool_trace_shim_records_the_actual_native_golines_stdin() {
+    let root = unique_temp_dir("velvet-glove-golines-native-stdin-trace-test");
+    let shim_dir = root.join("shims");
+    let real_dir = root.join("real");
+    let trace_dir = root.join("trace");
+    let native_record = root.join("native-record");
+    let private_tmp = root.join("private-tmp");
+    for directory in [
+        &shim_dir,
+        &real_dir,
+        &trace_dir,
+        &native_record,
+        &private_tmp,
+    ] {
+        std::fs::create_dir_all(directory).expect("golines stdin trace test directory");
+    }
+    #[cfg(unix)]
+    {
+        let mut permissions = std::fs::metadata(&private_tmp)
+            .expect("private trace TMPDIR metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&private_tmp, permissions)
+            .expect("private trace TMPDIR permissions");
+    }
+
+    let shim = shim_dir.join("golines");
+    let real = real_dir.join("golines");
+    std::fs::write(&shim, include_bytes!("support/tool-trace.sh")).expect("trace shim");
+    std::fs::write(
+        &real,
+        r#"#!/bin/sh
+set -eu
+: "${VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD:?}"
+/usr/bin/stat -f '%HT' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/kind"
+/usr/bin/stat -f '%Lp' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/mode"
+/usr/bin/stat -f '%u' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/owner"
+/usr/bin/stat -f '%l' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/links"
+/usr/bin/stat -f '%d' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/device"
+/usr/bin/stat -f '%i' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/inode"
+/usr/bin/stat -f '%z' /dev/fd/0 >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/size"
+/bin/cat >"$VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD/content"
+exit 7
+"#,
+    )
+    .expect("fake native golines");
+    std::fs::write(
+        shim_dir.join("golines.real-program"),
+        format!("{}\n", real.display()),
+    )
+    .expect("native golines binding");
+    #[cfg(unix)]
+    for executable in [&shim, &real] {
+        let mut permissions = std::fs::metadata(executable)
+            .expect("golines stdin executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(executable, permissions)
+            .expect("golines stdin executable permissions");
+    }
+
+    let input = b"package p\n\nfunc f() { println(\"native stdin\") }\n";
+    let mut child = Command::new(&shim)
+        .env(TOOL_TRACE_DIR_ENV, &trace_dir)
+        .env(TOOL_TRACE_SENTINEL_ENV, TOOL_TRACE_SENTINEL)
+        .env(TMPDIR_ENV, &private_tmp)
+        .env("VELVET_GLOVE_NATIVE_GOLINES_STDIN_RECORD", &native_record)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("run golines stdin trace shim");
+    child
+        .stdin
+        .as_mut()
+        .expect("golines trace wrapper stdin")
+        .write_all(input)
+        .expect("write golines trace wrapper stdin");
+    drop(child.stdin.take());
+    let status = child.wait().expect("wait for golines stdin trace shim");
+    assert_eq!(status.code(), Some(7));
+
+    let invocations = sorted_entries(&trace_dir.join("invocations")).expect("trace records");
+    assert_eq!(invocations.len(), 1);
+    let record = invocations[0].path();
+    assert_ne!(
+        read_record(&record, "golines-wrapper-stdin-fd-kind").expect("wrapper stdin kind"),
+        "Regular File",
+        "the focused regression deliberately gives the wrapper a pipe"
+    );
+    assert_record(&record, "golines-native-stdin-path-kind", "missing")
+        .expect("unlinked native stdin path");
+    for (trace_name, native_name) in [
+        ("golines-native-stdin-fd-kind", "kind"),
+        ("golines-native-stdin-fd-mode", "mode"),
+        ("golines-native-stdin-fd-owner", "owner"),
+        ("golines-native-stdin-fd-links", "links"),
+        ("golines-native-stdin-fd-device", "device"),
+        ("golines-native-stdin-fd-inode", "inode"),
+        ("golines-native-stdin-fd-size", "size"),
+    ] {
+        let traced = read_record(&record, trace_name).expect("traced native stdin metadata");
+        let observed = std::fs::read_to_string(native_record.join(native_name))
+            .expect("fake native stdin metadata");
+        assert_eq!(traced, observed.trim_end(), "native stdin {native_name}");
+    }
+    assert_record(&record, "golines-native-stdin-fd-kind", "Regular File")
+        .expect("native stdin kind");
+    assert_record(&record, "golines-native-stdin-fd-mode", "600").expect("native stdin mode");
+    assert_record(&record, "golines-native-stdin-fd-links", "0")
+        .expect("native stdin unlink state");
+    assert_record(
+        &record,
+        "golines-native-stdin-fd-size",
+        &input.len().to_string(),
+    )
+    .expect("native stdin size");
+    for field in ["device", "inode"] {
+        let native = read_record(&record, &format!("golines-native-stdin-fd-{field}"))
+            .expect("native stdin identity");
+        assert_record(
+            &record,
+            &format!("golines-capture-stdin-fd-{field}"),
+            &native,
+        )
+        .expect("capture stdin identity");
+    }
+    assert_eq!(
+        std::fs::read(record.join("golines-stdin")).expect("traced stdin bytes"),
+        input
+    );
+    assert_eq!(
+        std::fs::read(native_record.join("content")).expect("native stdin bytes"),
+        input
+    );
+    assert_record(&record, "golines-stdin-size", &input.len().to_string())
+        .expect("traced stdin byte count");
+    assert_record(
+        &record,
+        "golines-stdin-sha256",
+        &sha256_with_system_tool(input).expect("input SHA-256"),
+    )
+    .expect("traced stdin SHA-256");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn tool_trace_shim_does_not_treat_prettier_config_as_eslint_private_state() {
     let root = unique_temp_dir("velvet-glove-prettier-config-trace-test");
     let shim_dir = root.join("shims");
@@ -14343,24 +14489,51 @@ fn verify_golines_trace_environment(
 
     let expected_stdin =
         golines_expected_trace_stdin(harness, project, expected, position, baseline_is_final)?;
+    let controlled_owner = std::fs::metadata(&harness.trace_root)
+        .map_err(|error| format!("inspect controlled golines trace owner: {error}"))?
+        .uid();
     if position == 0 {
         // The no-stdin version probe deliberately inherits /dev/null. Its
         // character-device kind is contract-relevant; host /dev ownership,
         // mode, and link count are not adapter-controlled semantic inputs.
-        assert_record(record, "golines-stdin-fd-kind", "Character Device")?;
+        assert_record(record, "golines-wrapper-stdin-fd-kind", "Character Device")?;
     } else {
-        assert_record(record, "golines-stdin-fd-kind", "Regular File")?;
-        assert_record(record, "golines-stdin-fd-mode", "600")?;
-        assert_record(record, "golines-stdin-fd-links", "0")?;
-        let controlled_owner = std::fs::metadata(&harness.trace_root)
-            .map_err(|error| format!("inspect controlled golines trace owner: {error}"))?
-            .uid();
+        assert_record(record, "golines-wrapper-stdin-fd-kind", "Regular File")?;
+        assert_record(record, "golines-wrapper-stdin-fd-mode", "600")?;
+        assert_record(record, "golines-wrapper-stdin-fd-links", "0")?;
         assert_record(
             record,
-            "golines-stdin-fd-owner",
+            "golines-wrapper-stdin-fd-owner",
             &controlled_owner.to_string(),
         )?;
     }
+    assert_record(record, "golines-native-stdin-path-kind", "missing")?;
+    assert_record(record, "golines-native-stdin-fd-kind", "Regular File")?;
+    assert_record(record, "golines-native-stdin-fd-mode", "600")?;
+    assert_record(record, "golines-native-stdin-fd-links", "0")?;
+    assert_record(
+        record,
+        "golines-native-stdin-fd-owner",
+        &controlled_owner.to_string(),
+    )?;
+    assert_record(
+        record,
+        "golines-native-stdin-fd-size",
+        &expected_stdin.len().to_string(),
+    )?;
+    let native_device = read_record(record, "golines-native-stdin-fd-device")?;
+    let native_inode = read_record(record, "golines-native-stdin-fd-inode")?;
+    native_device.parse::<u64>().map_err(|error| {
+        format!("golines native stdin has malformed device {native_device:?}: {error}")
+    })?;
+    let parsed_inode = native_inode.parse::<u64>().map_err(|error| {
+        format!("golines native stdin has malformed inode {native_inode:?}: {error}")
+    })?;
+    if parsed_inode == 0 {
+        return Err("golines native stdin unexpectedly has inode zero".to_owned());
+    }
+    assert_record(record, "golines-capture-stdin-fd-device", &native_device)?;
+    assert_record(record, "golines-capture-stdin-fd-inode", &native_inode)?;
     let observed_stdin = std::fs::read(record.join("golines-stdin"))
         .map_err(|error| format!("read golines trace stdin: {error}"))?;
     if observed_stdin != expected_stdin {

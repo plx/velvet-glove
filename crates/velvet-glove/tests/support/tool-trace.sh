@@ -662,22 +662,59 @@ if [ "$eslint_private_controls" -eq 1 ]; then
   printf '%s\n' "$eslint_cache" >"$record/eslint-cache-location"
 fi
 
-set +e
 if [ "$logical_program" = golines ]; then
-  /usr/bin/stat -f '%HT' /dev/fd/0 >"$record/golines-stdin-fd-kind"
-  /usr/bin/stat -f '%Lp' /dev/fd/0 >"$record/golines-stdin-fd-mode"
-  /usr/bin/stat -f '%u' /dev/fd/0 >"$record/golines-stdin-fd-owner"
-  /usr/bin/stat -f '%l' /dev/fd/0 >"$record/golines-stdin-fd-links"
-  /bin/cat >"$record/golines-stdin"
+  /usr/bin/stat -f '%HT' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-kind"
+  /usr/bin/stat -f '%Lp' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-mode"
+  /usr/bin/stat -f '%u' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-owner"
+  /usr/bin/stat -f '%l' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-links"
+  golines_native_stdin=$(/usr/bin/mktemp "${TMPDIR:?}/golines-native-stdin.XXXXXX")
+  /bin/chmod 600 "$golines_native_stdin"
+  exec 4<>"$golines_native_stdin"
+  exec 5<"$golines_native_stdin"
+  exec 3<>"$golines_native_stdin"
+  /bin/rm "$golines_native_stdin"
+  if [ -e "$golines_native_stdin" ]; then
+    printf '%s\n' present >"$record/golines-native-stdin-path-kind"
+    exit 96
+  fi
+  printf '%s\n' missing >"$record/golines-native-stdin-path-kind"
+  /bin/cat >&3
+  exec 3>&-
+  /usr/bin/stat -f '%HT' /dev/fd/4 >"$record/golines-native-stdin-fd-kind"
+  /usr/bin/stat -f '%Lp' /dev/fd/4 >"$record/golines-native-stdin-fd-mode"
+  /usr/bin/stat -f '%u' /dev/fd/4 >"$record/golines-native-stdin-fd-owner"
+  /usr/bin/stat -f '%l' /dev/fd/4 >"$record/golines-native-stdin-fd-links"
+  /usr/bin/stat -f '%d' /dev/fd/4 >"$record/golines-native-stdin-fd-device"
+  /usr/bin/stat -f '%i' /dev/fd/4 >"$record/golines-native-stdin-fd-inode"
+  /usr/bin/stat -f '%z' /dev/fd/4 >"$record/golines-native-stdin-fd-size"
+  /usr/bin/stat -f '%d' /dev/fd/5 >"$record/golines-capture-stdin-fd-device"
+  /usr/bin/stat -f '%i' /dev/fd/5 >"$record/golines-capture-stdin-fd-inode"
+  IFS= read -r golines_native_device <"$record/golines-native-stdin-fd-device"
+  IFS= read -r golines_native_inode <"$record/golines-native-stdin-fd-inode"
+  IFS= read -r golines_capture_device <"$record/golines-capture-stdin-fd-device"
+  IFS= read -r golines_capture_inode <"$record/golines-capture-stdin-fd-inode"
+  if [ "$golines_native_device" != "$golines_capture_device" ] || \
+    [ "$golines_native_inode" != "$golines_capture_inode" ]; then
+    exit 97
+  fi
+  /bin/cat <&5 >"$record/golines-stdin"
+  exec 5<&-
   /usr/bin/wc -c <"$record/golines-stdin" | /usr/bin/tr -d ' ' >"$record/golines-stdin-size"
   /usr/bin/shasum -a 256 "$record/golines-stdin" | /usr/bin/awk '{print $1}' >"$record/golines-stdin-sha256"
-  "$real_program" "$@" <"$record/golines-stdin"
+fi
+
+set +e
+if [ "$logical_program" = golines ]; then
+  "$real_program" "$@" <&4 4<&-
   status=$?
 else
   "$real_program" "$@"
   status=$?
 fi
 set -e
+if [ "$logical_program" = golines ]; then
+  exec 4<&-
+fi
 if [ -n "$eslint_cache" ]; then
   if [ -f "$eslint_cache" ]; then
     printf '%s\n' file >"$record/eslint-cache-kind"
