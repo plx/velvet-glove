@@ -1314,7 +1314,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     assert_eq!(golines.integrity.kind, "go-source-build");
     assert_eq!(
         golines.integrity.patch_sha256.as_deref(),
-        Some("c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3")
+        Some("356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65")
     );
     assert_eq!(
         golines.integrity.built_artifact_sha256.as_deref(),
@@ -1345,11 +1345,19 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         ]
     );
     let download = &golines_environment.bootstrap[1];
-    assert_eq!(download.argv[4], "download");
-    assert_eq!(download.argv.len(), 17);
+    assert_eq!(
+        download.argv,
+        [
+            "go",
+            "-C",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "mod",
+            "download"
+        ]
+    );
     assert!(
         !download.argv.iter().any(|argument| argument == "all"),
-        "golines bootstrap must fetch only the 12 binary runtime modules"
+        "golines bootstrap must use no-argument download, never download all"
     );
 
     let cargo_fmt_environment = environments
@@ -2201,12 +2209,15 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
         "index(\"golines\") != null",
         "golines-build-0.13.0-vg1",
         "golines/source-build.json",
-        "c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3",
+        "356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65",
         "8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b",
         "21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe",
-        ".closure.runtimeModuleObjects | length) == 12",
-        "golines source-build provenance did not declare exactly 12 runtime modules",
+        ".closure.verificationModuleObjects | length) == 17",
+        ".closure.graphModuleModObjects | length) == 13",
+        ".closure.compiledRuntimeModules | length) == 12",
         "golines proxy object differs from the reviewed closure",
+        "golines module-graph metadata differs from the reviewed closure",
+        "golines downloaded module-object counts differ from the reviewed 17+13 closure",
         "GOENV=off",
         "GOWORK=off",
         "golines_mod_cache=\"$state_dir/golines-go-mod-cache\"",
@@ -2237,7 +2248,11 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
     assert!(
         !golines_block.contains("mod download all \\")
             && !golines_block.contains("mod download all\n"),
-        "golines bootstrap must not expand the reviewed 12-module runtime closure"
+        "golines bootstrap must use no-argument download, never download all"
+    );
+    assert!(
+        golines_block.contains("\"$golines_go_bin\" -C \"$golines_source\" mod download\n"),
+        "golines runner must execute exact no-argument go mod download"
     );
     for forbidden in [
         "$golines_build_dir/go-mod-cache",
@@ -2337,6 +2352,10 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
             runner_bootstrap_cache
         );
     }
+    assert_eq!(
+        source_build["build"]["bootstrap"][1]["argv"],
+        serde_json::to_value(&download.argv).expect("golines registry download argv JSON")
+    );
     for required in [
         "golines_selected=false",
         "index(\"golines\") != null",
@@ -3089,7 +3108,7 @@ fn validate_golines_source_build(root: &Path, integrity: &Integrity, owner: &str
     );
     assert_eq!(
         integrity.patch_sha256.as_deref(),
-        Some("c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3")
+        Some("356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65")
     );
     assert_eq!(integrity.archive_format.as_deref(), Some("tar-gz"));
     assert_eq!(integrity.archive_root.as_deref(), Some("golines-0.13.0"));
@@ -3236,16 +3255,93 @@ fn validate_golines_source_build(root: &Path, integrity: &Integrity, owner: &str
         "4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75"
     );
     assert_eq!(
-        provenance["closure"]["runtimeModuleObjects"]
+        provenance["closure"]["originalFiles"]["go.sum"],
+        "f5daf220ab282cad769bf51509e86ca3c7ed3299117c00d1cab4cf54354f4f16"
+    );
+    assert_eq!(
+        provenance["closure"]["verificationModuleObjects"]
             .as_array()
-            .expect("golines runtime module objects")
+            .expect("golines verification module objects")
+            .len(),
+        17
+    );
+    assert_eq!(
+        provenance["closure"]["graphModuleModObjects"]
+            .as_array()
+            .expect("golines graph module mod objects")
+            .len(),
+        13
+    );
+    assert_eq!(
+        provenance["closure"]["compiledRuntimeModules"]
+            .as_array()
+            .expect("golines compiled runtime modules")
             .len(),
         12
     );
+    assert_eq!(
+        provenance["closure"]["compiledRuntimeModules"],
+        serde_json::json!([
+            "github.com/alecthomas/kingpin/v2@v2.4.0",
+            "github.com/alecthomas/units@v0.0.0-20240927000941-0f3dac36c52b",
+            "github.com/dave/dst@v0.27.3",
+            "github.com/fatih/structtag@v1.2.0",
+            "github.com/pmezard/go-difflib@v1.0.0",
+            "github.com/sirupsen/logrus@v1.9.3",
+            "github.com/xhit/go-str2duration/v2@v2.1.0",
+            "golang.org/x/mod@v0.27.0",
+            "golang.org/x/sync@v0.16.0",
+            "golang.org/x/sys@v0.44.0",
+            "golang.org/x/term@v0.43.0",
+            "golang.org/x/tools@v0.36.0"
+        ])
+    );
+    for object in provenance["closure"]["verificationModuleObjects"]
+        .as_array()
+        .expect("golines verification module objects")
+    {
+        assert!(
+            object["moduleSum"]
+                .as_str()
+                .is_some_and(|sum| sum.starts_with("h1:"))
+        );
+        assert!(
+            object["goModSum"]
+                .as_str()
+                .is_some_and(|sum| sum.starts_with("h1:"))
+        );
+        assert_eq!(object["zip"]["sha256"].as_str().map(str::len), Some(64));
+        assert!(object["zip"]["size"].as_u64().is_some_and(|size| size > 0));
+        assert_eq!(object["mod"]["sha256"].as_str().map(str::len), Some(64));
+        assert!(object["mod"]["size"].as_u64().is_some_and(|size| size > 0));
+    }
+    for object in provenance["closure"]["graphModuleModObjects"]
+        .as_array()
+        .expect("golines graph module mod objects")
+    {
+        assert!(
+            object["goModSum"]
+                .as_str()
+                .is_some_and(|sum| sum.starts_with("h1:"))
+        );
+        assert_eq!(object["sha256"].as_str().map(str::len), Some(64));
+        assert!(object["size"].as_u64().is_some_and(|size| size > 0));
+    }
     let download = provenance["build"]["bootstrap"][1]["argv"]
         .as_array()
         .expect("golines module download argv");
-    assert_eq!(download.len(), 17);
+    assert_eq!(
+        download,
+        serde_json::json!([
+            "go",
+            "-C",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "mod",
+            "download"
+        ])
+        .as_array()
+        .expect("expected golines module download argv")
+    );
     assert!(!download.iter().any(|argument| argument == "all"));
     for environment in [
         &provenance["build"]["environment"],

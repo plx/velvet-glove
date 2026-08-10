@@ -1983,7 +1983,7 @@ if [[ $golines_selected == true ]]; then
     $golines_source_sha256 != \
       ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e || \
     $golines_patch_sha256 != \
-      c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3 || \
+      356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65 || \
     $golines_manifest_sha256 != \
       8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b || \
     $golines_lock_sha256 != \
@@ -2025,8 +2025,25 @@ if [[ $golines_selected == true ]]; then
       and .closure.patchSha256 == $patch
       and .closure.moduleManifestSha256 == $manifest
       and .closure.moduleLockSha256 == $lock
-      and (.closure.runtimeModuleObjects | length) == 12
-      and .closure.runtimeModulePolicy == "Bootstrap exactly the 12 modules embedded by the pinned binary. Do not use `go mod download all`; the committed go.sum also records test-only modules that are not runtime build inputs."
+      and (.closure.verificationModuleObjects | length) == 17
+      and (.closure.graphModuleModObjects | length) == 13
+      and (.closure.compiledRuntimeModules | length) == 12
+      and (.closure.verificationModuleObjects | all(
+        (.module | type) == "string"
+        and (.version | type) == "string"
+        and (.moduleSum | startswith("h1:"))
+        and (.goModSum | startswith("h1:"))
+        and (.zip.sha256 | length) == 64
+        and .zip.size > 0
+        and (.mod.sha256 | length) == 64
+        and .mod.size > 0))
+      and (.closure.graphModuleModObjects | all(
+        (.module | type) == "string"
+        and (.version | type) == "string"
+        and (.goModSum | startswith("h1:"))
+        and (.sha256 | length) == 64
+        and .size > 0))
+      and .closure.modulePolicy == "Run no-argument `go mod download` (never `go mod download all`) to materialize exactly 17 checksum-pinned module zip/mod pairs plus 13 checksum-pinned graph-only mod records required by Go 1.26.5; the final binary embeds exactly the separately recorded 12 compiled runtime modules."
       and .toolchain.componentId == "golines-go"
       and .toolchain.version == "1.26.5"
       and .build.environment.GOENV == "off"
@@ -2098,7 +2115,7 @@ if [[ $golines_selected == true ]]; then
       $(/usr/bin/shasum -a 256 "$golines_source/go.mod" | /usr/bin/awk '{print $1}') != \
         1981e8cea70c114c08916c9fc46adb810e458d8c7af057d2d437a533a77ec660 || \
       $(/usr/bin/shasum -a 256 "$golines_source/go.sum" | /usr/bin/awk '{print $1}') != \
-        5a29e3cb78df02fee0483a45e7ce92b83a6c3b1ebac46ca6971df9c2dc1081fe ]]; then
+        f5daf220ab282cad769bf51509e86ca3c7ed3299117c00d1cab4cf54354f4f16 ]]; then
       echo "error: golines source archive does not contain the reviewed unpatched inputs" >&2
       exit 1
     fi
@@ -2129,20 +2146,11 @@ if [[ $golines_selected == true ]]; then
       "SOURCE_DATE_EPOCH=1755811321"
       "GOMODCACHE=$golines_mod_cache"
     )
-    golines_modules=()
-    while IFS=$'\t' read -r module version; do
-      golines_modules+=("$module@$version")
-    done < <("$jq_bin" -r '.closure.runtimeModuleObjects[] | [.module, .version] | @tsv' \
-      "$golines_provenance")
-    if [[ ${#golines_modules[@]} -ne 12 ]]; then
-      echo "error: golines source-build provenance did not declare exactly 12 runtime modules" >&2
-      exit 1
-    fi
     env -i "${golines_go_env[@]}" \
       "GOCACHE=$golines_bootstrap_cache" \
       "GOPROXY=https://proxy.golang.org" \
       "GOSUMDB=sum.golang.org" \
-      "$golines_go_bin" -C "$golines_source" mod download "${golines_modules[@]}"
+      "$golines_go_bin" -C "$golines_source" mod download
     if ! /usr/bin/cmp -s "$golines_source/go.mod" "$golines_manifest" || \
       ! /usr/bin/cmp -s "$golines_source/go.sum" "$golines_lock"; then
       echo "error: golines network bootstrap changed the exact module inputs" >&2
@@ -2167,8 +2175,24 @@ if [[ $golines_selected == true ]]; then
         fi
       done
     done < <("$jq_bin" -r \
-      '.closure.runtimeModuleObjects[] | [.module, .version, .zip.sha256, .zip.size, .mod.sha256, .mod.size] | @tsv' \
+      '.closure.verificationModuleObjects[] | [.module, .version, .zip.sha256, .zip.size, .mod.sha256, .mod.size] | @tsv' \
       "$golines_provenance")
+    while IFS=$'\t' read -r module version mod_sha mod_size; do
+      object_path="$golines_mod_cache/cache/download/$module/@v/$version.mod"
+      if [[ ! -f $object_path || -L $object_path || \
+        $(/usr/bin/stat -f '%z' "$object_path") != "$mod_size" || \
+        $(/usr/bin/shasum -a 256 "$object_path" | /usr/bin/awk '{print $1}') != "$mod_sha" ]]; then
+        echo "error: golines module-graph metadata differs from the reviewed closure: $module@$version.mod" >&2
+        exit 1
+      fi
+    done < <("$jq_bin" -r \
+      '.closure.graphModuleModObjects[] | [.module, .version, .sha256, .size] | @tsv' \
+      "$golines_provenance")
+    if [[ $(/usr/bin/find "$golines_mod_cache/cache/download" -type f -name '*.zip' | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 17 || \
+      $(/usr/bin/find "$golines_mod_cache/cache/download" -type f -name '*.mod' | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 30 ]]; then
+      echo "error: golines downloaded module-object counts differ from the reviewed 17+13 closure" >&2
+      exit 1
+    fi
     env -i "${golines_go_env[@]}" \
       "GOCACHE=$golines_bootstrap_cache" \
       "GOPROXY=off" \

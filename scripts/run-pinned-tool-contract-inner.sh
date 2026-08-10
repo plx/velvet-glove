@@ -102,7 +102,7 @@ if [[ $golines_expected_sha256 != \
   $(printf '%s\n' "$golines_identity" | jq -r '.integrity.sha256') != \
     ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e || \
   $(printf '%s\n' "$golines_identity" | jq -r '.integrity.patchSha256') != \
-    c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3 || \
+    356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65 || \
   $(printf '%s\n' "$golines_identity" | \
     jq -r '.integrity.buildToolchainComponentId') != golines-go ]]; then
   echo "error: golines recipe does not cross-link the reviewed source, patch, artifact, and Go identity" >&2

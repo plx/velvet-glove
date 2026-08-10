@@ -16241,7 +16241,7 @@
           "status": "recorded",
           "url": "https://github.com/segmentio/golines/releases/tag/v0.13.0",
           "version": "0.13.0+velvet-glove.1",
-          "installationSource": "archived segmentio/golines v0.13.0 source at commit 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf plus the checksum-pinned velvet-glove closure patch at SHA-256 c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3, reproducibly built with locked Go 1.26.5 to SHA-256 4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75; the upstream binary and superseded unpatched Go 1.26.5 build are excluded by the recorded stale-toolchain and vulnerability evidence",
+          "installationSource": "archived segmentio/golines v0.13.0 source at commit 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf plus the checksum-pinned velvet-glove closure patch at SHA-256 356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65, reproducibly built with locked Go 1.26.5 to SHA-256 4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75; the upstream binary and superseded unpatched Go 1.26.5 build are excluded by the recorded stale-toolchain and vulnerability evidence",
           "versionCommand": [
             "golines",
             "--version"

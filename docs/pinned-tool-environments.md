@@ -96,7 +96,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Go | Go/gofmt/go vet 1.26.5; Python 3.14.5 | official Go archive SHA-256; exact mise archive lock | `go-fmt/multi-file`, `go-vet/test-findings` |
 | Errcheck Go | Go 1.26.5; errcheck 1.20.0; Python 3.14.5 | official Go archive SHA-256; Go proxy zip SHA-256; exact module sums; reproducible binary SHA-256 and embedded build metadata | `errcheck/multi-file` |
 | Goimports Go | Go 1.26.5; goimports/x/tools 0.48.0; Python 3.14.5 | official Go archive SHA-256; four-module proxy closure; exact module sums; reproducible binary SHA-256 and embedded build metadata | `goimports/multi-file` |
-| Golines Go | Go 1.26.5; golines 0.13.0+velvet-glove.1; Python 3.14.5 | official Go archive SHA-256; archived source and proxy cross-record; exact closure patch/module inputs; 12-module runtime object closure; reproducible binary SHA-256 and embedded build metadata | `golines/multi-file` |
+| Golines Go | Go 1.26.5; golines 0.13.0+velvet-glove.1; Python 3.14.5 | official Go archive SHA-256; archived source and proxy cross-record; exact closure patch/module inputs; 17 selected objects plus 13 graph-only `.mod` records; 12 compiled dependencies; reproducible binary SHA-256 and embedded build metadata | `golines/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Cargo Clippy/Fmt | Rust/Cargo 1.97.1; Clippy 0.1.97; cargo-fmt/rustfmt 1.9.0; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix`, `cargo-fmt/workspace-multi` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
@@ -771,7 +771,14 @@ attestation. An exact unpatched Go 1.26.5 rebuild is also excluded because its
 runtime graph retains `golang.org/x/crypto` v0.41.0; binary `govulncheck`
 reported 17 called vulnerabilities. Velvet Glove instead applies the committed
 `closure.patch`, pinned at SHA-256
-`c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3`.
+`356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65`.
+That canonical labeled unified patch is based directly on the checksum-pinned
+GitHub archive bytes: the original `main.go`, `go.mod`, and `go.sum` SHA-256
+values are
+`f4b5292ae055fd299e5ea8d2b42af8b907bb9bf1002e7c5bb3796f8e1069949f`,
+`1981e8cea70c114c08916c9fc46adb810e458d8c7af057d2d437a533a77ec660`,
+and
+`f5daf220ab282cad769bf51509e86ca3c7ed3299117c00d1cab4cf54354f4f16`.
 The patch replaces the vulnerable prefixed logging formatter, removes its
 unused vulnerable and test-only closure, and updates the required Go module
 inputs. The patched `main.go`, `go.mod`, and `go.sum` are pinned at SHA-256
@@ -782,12 +789,15 @@ and
 Both the patched source and the resulting binary scan clean with the pinned
 `govulncheck` evidence.
 
-Provisioning downloads exactly the 12 module objects embedded by the binary,
-with every proxy zip, `.mod`, module sum, and `go.mod` sum recorded. It does not
-run `go mod download all`: the patched module graph contains five additional
-test-only requirements that are not runtime build inputs. A fresh empty-cache
-`go mod verify` and denied-network build prove that this smaller closure is
-complete. Every bootstrap and build step fixes `GOENV=off`, `GOWORK=off`,
+Provisioning runs no-argument `go mod download`, never `go mod download all`.
+It records and validates all 17 selected module zip/`.mod` pairs and the 13
+additional graph-only `.mod` records that pinned Go 1.26.5 needs to load this
+module graph. The separately recorded `go version -m` closure contains exactly
+12 compiled dependencies. Two independent fresh caches each materialized
+exactly 17 zips and 30 `.mod` files, passed denied-network `go mod verify`, and
+produced the byte-identical pinned executable; this distinction avoids
+mislabeling test-side verification inputs as runtime dependencies. Every
+bootstrap and build step fixes `GOENV=off`, `GOWORK=off`,
 `GOTOOLCHAIN=local`, disabled CGO, and the Darwin arm64 v8.0 target. The
 checksum-locked Go 1.26.5 compiler runs this deterministic build:
 
