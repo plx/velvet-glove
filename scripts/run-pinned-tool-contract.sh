@@ -77,6 +77,7 @@ vacuum_extract_dir=
 eslint_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
+ghalint_build_dir=
 cleanup() {
   case $run_home in
     /private/tmp/velvet-glove-pinned.*) rm -rf -- "$run_home" ;;
@@ -107,6 +108,9 @@ cleanup() {
   esac
   case $betterleaks_build_dir in
     "$state_dir"/betterleaks-build-1.7.3-vg1) rm -rf -- "$betterleaks_build_dir" ;;
+  esac
+  case $ghalint_build_dir in
+    "$state_dir"/ghalint-build-1.5.6-vg1) rm -rf -- "$ghalint_build_dir" ;;
   esac
 }
 trap cleanup EXIT INT TERM
@@ -1260,6 +1264,164 @@ if needs_group security; then
     exit 1
   fi
   verify_macho_closure "$betterleaks_root" betterleaks
+fi
+
+if needs_group github-actions; then
+  ghalint_archive=$(fetch_component_archive ghalint-workflow)
+  ghalint_root="$state_dir/ghalint-1.5.6-vg1"
+  ghalint_identity=$(component_integrity_json ghalint-workflow)
+  ghalint_binary="$ghalint_root/bin/ghalint"
+  ghalint_expected_sha256=$(printf '%s\n' "$ghalint_identity" | \
+    "$jq_bin" -r '.integrity.builtArtifactSha256')
+  if [[ -e $ghalint_root && ! -d $ghalint_root ]]; then
+    echo "error: controlled ghalint root is not a directory: $ghalint_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $ghalint_root ]]; then
+    echo "==> Building the checksum-locked ghalint source closure"
+    ghalint_build_dir="$state_dir/ghalint-build-1.5.6-vg1"
+    if [[ -e $ghalint_build_dir ]]; then
+      echo "warning: removing stale transactional ghalint build directory" >&2
+      rm -rf -- "$ghalint_build_dir"
+    fi
+    ghalint_staging_root="$ghalint_build_dir/install"
+    ghalint_staging_binary="$ghalint_staging_root/bin/ghalint"
+    mkdir -p "$ghalint_build_dir" "$ghalint_staging_root/bin"
+    /usr/bin/tar -xf "$ghalint_archive" -C "$ghalint_build_dir"
+    ghalint_archive_root=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.archiveRoot')
+    ghalint_source="$ghalint_build_dir/source"
+    mv "$ghalint_build_dir/$ghalint_archive_root" "$ghalint_source"
+
+    ghalint_manifest_path=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.moduleManifestPath')
+    ghalint_lock_path=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.moduleLockPath')
+    ghalint_manifest_sha256=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.moduleManifestSha256')
+    ghalint_lock_sha256=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.moduleLockSha256')
+    ghalint_patch_path=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.path')
+    ghalint_patch_sha256=$(printf '%s\n' "$ghalint_identity" | \
+      "$jq_bin" -r '.integrity.patchSha256')
+    read -r observed_ghalint_patch_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$repository_root/$ghalint_patch_path"
+    )
+    if [[ $observed_ghalint_patch_sha256 != "$ghalint_patch_sha256" ]]; then
+      echo "error: ghalint closure patch checksum mismatch" >&2
+      exit 1
+    fi
+    env -i "${provisioning_env[@]}" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      /usr/bin/patch \
+        -d "$ghalint_source" \
+        -p1 \
+        -i "$repository_root/$ghalint_patch_path"
+    read -r observed_ghalint_manifest_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$ghalint_source/go.mod"
+    )
+    read -r observed_ghalint_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$ghalint_source/go.sum"
+    )
+    if [[ $observed_ghalint_manifest_sha256 != "$ghalint_manifest_sha256" || \
+      $observed_ghalint_lock_sha256 != "$ghalint_lock_sha256" ]]; then
+      echo "error: ghalint patched module closure checksum mismatch" >&2
+      exit 1
+    fi
+    if ! /usr/bin/cmp -s "$repository_root/$ghalint_manifest_path" "$ghalint_source/go.mod" || \
+      ! /usr/bin/cmp -s "$repository_root/$ghalint_lock_path" "$ghalint_source/go.sum"; then
+      echo "error: ghalint applied closure differs from the checked module inputs" >&2
+      exit 1
+    fi
+
+    go_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where go@1.26.5)
+    go_bin="$go_root/bin/go"
+    case $go_bin in
+      "$state_dir"/*) ;;
+      *)
+        echo "error: pinned Go resolved outside the controlled state: $go_bin" >&2
+        exit 1
+        ;;
+    esac
+    if [[ ! -x $go_bin ]]; then
+      echo "error: pinned Go executable is unavailable: $go_bin" >&2
+      exit 1
+    fi
+    mkdir -p "$state_dir/ghalint-go-mod-cache" "$state_dir/ghalint-go-build-cache"
+    ghalint_go_env=(
+      "${provisioning_env[@]}"
+      "PATH=$go_root/bin:/usr/bin:/bin"
+      "GOTOOLCHAIN=local"
+      "GOFLAGS=-mod=readonly"
+      "CGO_ENABLED=0"
+      "GOOS=darwin"
+      "GOARCH=arm64"
+      "SOURCE_DATE_EPOCH=1777591460"
+      "GOMODCACHE=$state_dir/ghalint-go-mod-cache"
+      "GOCACHE=$state_dir/ghalint-go-build-cache"
+    )
+    env -i "${ghalint_go_env[@]}" \
+      "GOPROXY=https://proxy.golang.org" \
+      "GOSUMDB=sum.golang.org" \
+      "$go_bin" -C "$ghalint_source" mod download all
+    env -i "${ghalint_go_env[@]}" \
+      "GOPROXY=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$go_bin" -C "$ghalint_source" mod verify
+    env -i "${ghalint_go_env[@]}" \
+      "GOPROXY=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$go_bin" -C "$ghalint_source" build \
+          -trimpath \
+          -buildvcs=false \
+          -ldflags '-s -w -buildid= -X=main.version=1.5.6+velvet-glove.1' \
+          -o "$ghalint_staging_binary" \
+          ./cmd/ghalint
+    read -r observed_ghalint_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$ghalint_staging_binary"
+    )
+    if [[ $observed_ghalint_sha256 != "$ghalint_expected_sha256" ]]; then
+      echo "error: reproducible ghalint artifact checksum mismatch" >&2
+      exit 1
+    fi
+    ghalint_build_metadata=$(
+      env -i "${ghalint_go_env[@]}" "$go_bin" version -m "$ghalint_staging_binary"
+    )
+    ghalint_build_metadata_first_line=${ghalint_build_metadata%%$'\n'*}
+    if [[ $ghalint_build_metadata_first_line != *': go1.26.5' || \
+      $ghalint_build_metadata != *$'\tpath\tgithub.com/suzuki-shunsuke/ghalint/cmd/ghalint'* || \
+      $ghalint_build_metadata != *$'\tdep\tgolang.org/x/text\tv0.39.0'* || \
+      $ghalint_build_metadata != *$'\tbuild\t-trimpath=true'* || \
+      $ghalint_build_metadata != *$'\tbuild\tCGO_ENABLED=0'* ]]; then
+      echo "error: ghalint binary module metadata does not match the declared closure" >&2
+      exit 1
+    fi
+    printf '%s\n' "$ghalint_identity" >"$ghalint_staging_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$ghalint_staging_root" ghalint-workflow
+    mv "$ghalint_staging_root" "$ghalint_root"
+    rm -rf -- "$ghalint_build_dir"
+    ghalint_build_dir=
+  fi
+  if [[ ! -x $ghalint_binary ]]; then
+    echo "error: controlled ghalint installation is incomplete: $ghalint_root" >&2
+    exit 1
+  fi
+  if [[ ! -f $ghalint_root/.velvet-glove-artifacts.json ]] || \
+    [[ $(<"$ghalint_root/.velvet-glove-artifacts.json") != "$ghalint_identity" ]]; then
+    echo "error: controlled ghalint installation does not match the declared source build" >&2
+    exit 1
+  fi
+  read -r observed_ghalint_sha256 _ < <(/usr/bin/shasum -a 256 "$ghalint_binary")
+  if [[ $observed_ghalint_sha256 != "$ghalint_expected_sha256" ]]; then
+    echo "error: controlled ghalint artifact checksum mismatch" >&2
+    exit 1
+  fi
+  if [[ $("$ghalint_binary" --version) != "ghalint version 1.5.6+velvet-glove.1" ]]; then
+    echo "error: controlled ghalint failed its exact patched-version probe" >&2
+    exit 1
+  fi
+  verify_macho_closure "$ghalint_root" ghalint-workflow
 fi
 
 if needs_group ruby; then

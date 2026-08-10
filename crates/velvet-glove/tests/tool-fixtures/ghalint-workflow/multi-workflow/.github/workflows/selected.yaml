@@ -1,0 +1,10 @@
+name: selected clean
+on:
+  push:
+permissions: {}
+jobs:
+  selected_clean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo clean

@@ -1,0 +1,10 @@
+name: valid workflow with invalid ghalint config
+on:
+  push:
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo clean

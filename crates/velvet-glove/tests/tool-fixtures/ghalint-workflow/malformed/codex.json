@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "ghalint (workflow) reports issues; inspect diagnostics at <workspace>/.velvet-glove/ghalint-workflow-agent-hook/test-session_test-turn_ghalint-workflow-tool_ghalint-workflow-tool-issues.txt."
+  }
+}

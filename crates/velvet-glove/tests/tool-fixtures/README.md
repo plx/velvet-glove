@@ -116,7 +116,7 @@ Run one selected case in its pinned, controlled macOS environment with:
 just tool-case jq multi-file-fragments
 ```
 
-Run the nineteen pinned representative contracts across fifteen controlled
+Run the twenty pinned representative contracts across sixteen controlled
 environments with `just tool-representatives`. See the
 [pinned environment guide](../../../../docs/pinned-tool-environments.md) for
 versions, integrity locks, platform constraints, bootstrap steps, active network
@@ -150,9 +150,9 @@ failed case's workspace, generated config, native input, stdout, stderr, exit
 status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Vacuum, Asciidoctor, Astro, Betterleaks, Biome, Prettier,
-Contextlint, dclint, ESLint, Buf Format, gofmt, Cargo Clippy, and Cargo Fmt contract
-cases are retained too.
+alongside it. Successful jq, Vacuum, Asciidoctor, Astro, Betterleaks, Biome,
+Prettier, Contextlint, dclint, ESLint, ghalint Workflow, Buf Format, gofmt,
+Cargo Clippy, and Cargo Fmt contract cases are retained too.
 Their evidence includes
 exact pass-through program/argv/cwd/environment traces (including
 Asciidoctor's nested FATAL preflight and WARNING validation, Astro's single
@@ -270,6 +270,36 @@ TypeScript are deliberately outside the supported file set. Concurrent
 selected-file or executable replacement, late partial native writes, and a
 descendant that deliberately escapes the owned session/process group remain
 outside the claim; the adapter does not attempt an unsafe rollback.
+
+ghalint Workflow traces bind the reproducibly built
+`ghalint 1.5.6+velvet-glove.1` executable and pinned Python 3.14.5 adapter.
+Every validation inventories the complete physical top-level
+`.github/workflows/*.yml`-then-`*.yaml` set, validates the marker-delimited
+nonempty selected candidate subset, and records the exact version probe plus
+one native workspace-wide `ghalint run` child. The source, module closure patch,
+patched `go.mod`/`go.sum`, locked Go 1.26.5 build, arm64 artifact digest, embedded
+module metadata, and system-only Mach-O closure are bound by the dedicated
+pinned environment.
+
+The six cases distinguish clean completion, ordinary policy findings, native
+action/GitHub-App/direct-workflow-secret policy field shapes, two structured
+workflow YAML parse shapes, invalid configuration, and complete multi-workflow
+scope, including a finding in an unselected top-level sibling. Status one is
+accepted as a source issue only when every timestamped
+native line matches the closed v1.5.6 policy or parse grammar; configuration
+records and every unknown or contradictory shape remain operational failures.
+Immediate and explicit deferred runs use independent pristine baselines, prove
+no retained-project mutation, and conservatively attribute workspace findings
+to every selected workflow. The evaluated lifecycle probe additionally covers
+the alternate configuration policy-name record, config and target aliases,
+zero or out-of-inventory candidates, executable/config/source replacement,
+unexpected-exception normalization, output bounds and per-child buffer reset,
+unwritable temporary roots without a child, private-path redaction, composed
+cleanup failures, signals before cleanup and after the blocked cutoff, and
+bounded inherited-pipe and closed-stdio same-group descendant cleanup. Physical
+fixed skipped subtrees, nested workflows, concurrent replacement races, and a
+descendant that deliberately escapes the owned session/process group remain
+outside the claim.
 
 gofmt traces bind the pinned executable behind an isolated Python adapter and
 record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain

@@ -64,6 +64,10 @@ if [[ ,$selection, == *,vacuum/* ]]; then
   vacuum_path_prefix="$vacuum_root/bin:"
 fi
 export VELVET_GLOVE_FIXTURE_ESLINT_ROOT="$state_dir/eslint-environment-node-24.19.0-eslint-10.8.1"
+ghalint_path_prefix=
+if [[ ,$selection, == *,ghalint-workflow/* ]]; then
+  ghalint_path_prefix="$state_dir/ghalint-1.5.6-vg1/bin:"
+fi
 export PIP_CONFIG_FILE=/dev/null
 export BUNDLE_APP_CONFIG="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/config"
 export BUNDLE_CACHE_PATH="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/cache"
@@ -72,7 +76,7 @@ export BUNDLE_FROZEN=1
 export BUNDLE_GEMFILE="$provisioning_dir/ruby/Gemfile"
 export BUNDLE_PATH__SYSTEM=true
 export BUNDLE_USER_HOME="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
-export PATH="${vacuum_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
+export PATH="${ghalint_path_prefix}${vacuum_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
 
 mkdir -p "$artifact_dir" "$artifact_dir/fixtures" "$CARGO_TARGET_DIR" "$TMPDIR"
 observed_file="$TMPDIR/observed-versions.jsonl"

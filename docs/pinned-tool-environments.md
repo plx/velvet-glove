@@ -13,12 +13,13 @@ just tool-case prettier multi-file
 just tool-case contextlint multi-file-project
 just tool-case dclint autofix-multi-file
 just tool-case eslint multi-file
+just tool-case ghalint-workflow multi-workflow
 just tool-case go-fmt multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all nineteen behavior-rich representative contracts across fifteen environments
+Run all twenty behavior-rich representative contracts across sixteen environments
 with:
 
 ```sh
@@ -51,10 +52,11 @@ Before a case runs, the driver:
    required version, and the declared compiler, Xcode, and SDK minimum probes
    pass;
 2. installs only the selected mise-managed tools in `--locked` mode and verifies
-   every directly managed Rust or Ruby archive, and every Betterleaks source,
-   patch, module-lock, and build-artifact digest, against committed values;
-3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, and Betterleaks Go
-   module graphs from their committed locks as applicable; Cargo runs from `/`
+   every directly managed Rust or Ruby archive, and every Betterleaks or
+   ghalint source, patch, module-lock, and build-artifact digest, against
+   committed values;
+3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, Betterleaks Go, and
+   ghalint Go module graphs from their committed locks as applicable; Cargo runs from `/`
    with an explicit manifest and controlled target root so ancestor `.cargo`
    files and host build caches cannot participate, while the patched Betterleaks
    build verifies modules and compiles with the network denied;
@@ -83,6 +85,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Contextlint | Node 24.19.0; npm 11.17.0; @contextlint/cli and core 1.1.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `contextlint/multi-file-project` |
 | dclint | Node 24.19.0; npm 11.17.0; dclint 3.1.0; Python 3.14.5 | official Node archive SHA-256; one-package npm SHA-512 integrity graph | `dclint/autofix-multi-file` |
 | ESLint | Node 24.19.0; npm 11.17.0; ESLint 10.8.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `eslint/multi-file` |
+| GitHub Actions | Go 1.26.5; ghalint 1.5.6+velvet-glove.1; Python 3.14.5 | mise SHA-256; source, closure patch, module graph, and reproducible built-artifact SHA-256 | `ghalint-workflow/multi-workflow` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
@@ -1251,6 +1254,119 @@ containment. ESLint still parses untrusted JavaScript and is not a code
 sandbox; the active macOS deny-network wrapper remains authoritative for
 network isolation.
 
+### ghalint workflow validation contract
+
+The dedicated GitHub Actions environment builds ghalint from the upstream
+[`v1.5.6` source archive](https://github.com/suzuki-shunsuke/ghalint/archive/refs/tags/v1.5.6.tar.gz),
+pinned at SHA-256
+`1188047b654a86390d49b776153c1a7b3eddde30ebcc0d024dfab9585785b02b`.
+The annotated tag peels to commit
+[`050e825989101021ece297e4d2f726f519ba89ee`](https://github.com/suzuki-shunsuke/ghalint/commit/050e825989101021ece297e4d2f726f519ba89ee).
+Velvet Glove applies the committed closure patch at SHA-256
+`5e3c2480665eefffa019adf5c57e27e1c1d05a74b9dccf2d5bc345017a17d6ed`,
+updating only `golang.org/x/text` from 0.28.0 to 0.39.0. The patched `go.mod`
+and `go.sum` are independently pinned at SHA-256
+`ada0a9434578f54fd6a50fe8ed9ef26374afa631d5527660723062663d686f16`
+and
+`53a4a1b1a7dcd2a6da2dc1cc0cc32ca4bcb5b8ea86832749e18879b8be594dbb`.
+
+Provisioning downloads that complete module graph, then enters the active
+deny-network sandbox for `go mod verify` and the reproducible build. Locked Go
+1.26.5 runs with `GOTOOLCHAIN=local`, `-mod=readonly`, `CGO_ENABLED=0`,
+`GOOS=darwin`, `GOARCH=arm64`, `-trimpath`, `-buildvcs=false`, an empty build
+ID, and source epoch `1777591460`. The resulting
+`ghalint 1.5.6+velvet-glove.1` arm64 Mach-O is pinned at SHA-256
+`03437b6c73d1332460d24f2c9fe22d3dea0fe68e4e52b0a8a534b3f2854274fa`.
+Its embedded module path, Go 1.26.5 compiler, x/text 0.39.0 dependency,
+trimpath, CGO setting, minimum macOS version, and system-only dynamic-library
+closure are checked before use. The upstream release binary is deliberately
+excluded because it embeds stale Go 1.26.2; the unchanged module `go 1.26.2`
+language directive does not authorize that binary. The exact product probe is
+`ghalint --version` → `ghalint version 1.5.6+velvet-glove.1`.
+
+The immediate phase and explicit deferred workflow use the same evaluated
+adapter through pinned Python 3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> ghalint <project-root> {extra-args} __VELVET_GLOVE_GHALINT_WORKFLOW_FILES__ {files}
+```
+
+The native validation child is:
+
+```text
+ghalint run [--config=<private-yaml>] <project-root>
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Extra arguments are either empty or exactly one normalized project-relative
+`--config=<path.yml|path.yaml>` outside fixed skipped directories. The adapter
+rejects ambiguous implicit configs; validates a unique regular, single-link,
+at-most-1-MiB source; and copies its exact bytes into a mode-0600 private file.
+The source and private identities are rechecked around both the exact version
+probe and validation child. `TMPDIR` must resolve to an existing normalized
+absolute directory outside the project. Dynamic-loader, Go, GitHub, ghalint,
+debug, locale, and color control channels are replaced by a minimal child
+environment with a fixed executable path.
+
+ghalint 1.5.6 discovers only direct files below `.github/workflows`, scanning
+`*.yml` before `*.yaml`; nested workflows and other suffixes are outside its
+native scope. The adapter independently inventories exactly that physical set,
+rejects ghalint's native zero-file success, and requires every marker-delimited
+selected candidate to be a unique member of that inventory. The selected
+subset triggers one authoritative native workspace scan; inventory is bounded
+to 4,096 workflows. Before spawning ghalint it also snapshots the complete
+retained project, excluding physical `.git`, `.velvet-glove`, `node_modules`,
+and `target` subtrees, with bounds of 8,192 files, 8,192 directories, 128 MiB
+total, and 16 MiB per file. Encountered symlinks, hard-linked files,
+nonregular objects, aliased workflows, or unstable identities fail closed.
+
+Native clean status zero is accepted only with empty stdout and stderr and an
+unchanged project. Native status one is ambiguous: ghalint uses it for policy
+findings, workflow YAML parse errors, invalid configuration, and other failures
+while emitting timestamped human logs. The adapter therefore accepts it only
+after every log line matches the closed v1.5.6 grammar. Policy records must name
+one of the pinned policy IDs and its exact documentation reference; action
+policies must carry `action`, job-secret findings must carry `env_name`, and
+the two direct workflow-secret messages map only to `workflow_secrets`.
+Workflow parse records may carry at most one pinned structured `permission` or
+`secrets` field. Configuration records may carry only the corresponding code
+reference, `path.Match` pattern reference, or policy name, and they always map
+to operational status two. Unknown messages, fields, policies, references,
+field combinations, malformed quoting, excess output, any other status, or a
+project mutation also map operationally. Accepted findings are emitted as
+stable JSON records, and workspace invocation conservatively attributes them
+to every selected candidate.
+
+The six cases are `clean`, ordinary `source-issue`, `policy-grammar`,
+`malformed`, `config-failure`, and `multi-workflow`. The grammar case executes
+real action-reference, GitHub App, and direct workflow-secret policies. The
+malformed case exercises independent `permission` and `secrets` YAML parse
+shapes; the invalid action pattern produces the native `pattern_reference`
+configuration shape. The representative supplies both top-level suffixes,
+selects one candidate, finds an issue in its unselected top-level sibling,
+leaves a nested ignored workflow outside scope, and proves conservative
+workspace attribution. All six run through Claude and Codex immediate hooks
+and the explicit deferred lifecycle from independent
+pristine baselines. Focused lifecycle probes additionally cover the alternate
+configuration `policy_name` shape, every grammar contradiction, selection and
+config aliases, source/config/executable replacement, retained-project
+mutation, unexpected-exception normalization, per-child output reset, private
+path redaction, unwritable temporary roots without a child, composed cleanup
+failures, pre-cleanup and post-block signals, and bounded inherited-pipe and
+closed-stdio same-group descendants with final SIGKILL-survival confirmation.
+
+Physical fixed skipped subtrees and nested workflows remain outside the
+retained/native scope. Concurrent project, workflow, config, or executable
+replacement cannot be eliminated between bounded checks and native path
+access. The read-only adapter does not perform rollback because every detected
+mutation is operational failure. A descendant that deliberately creates a new
+session or process group is outside containment. ghalint and its YAML parser
+still process untrusted project bytes and are not a code sandbox; the active
+macOS deny-network wrapper remains authoritative for network isolation.
+
 ### Cargo Clippy validation contract
 
 The dedicated Cargo Clippy environment installs selected components from the
@@ -1558,14 +1674,15 @@ The mise-managed archive URLs and checksums are in
 [`mise.lock`](../crates/hookkit-pkl-config/validation/provisioning/mise.lock).
 The independently verified Rust and Ruby URLs and SHA-256 digests are in the
 recipe registry. Shared Node, dedicated Prettier, dedicated Contextlint,
-dedicated dclint, dedicated ESLint, Python, and Ruby package closures live beside it under
-`node/`, `prettier/`, `contextlint/`, `dclint/`, `eslint/`, `python/`, and `ruby/`; the
-Betterleaks dependency closure and patch live under `betterleaks/`. Runtime
+dedicated dclint, dedicated ESLint, Python, and Ruby package closures live
+beside it under `node/`, `prettier/`, `contextlint/`, `dclint/`, `eslint/`,
+`python/`, and `ruby/`; the Betterleaks and ghalint dependency closures and
+patches live under `betterleaks/` and `ghalint-workflow/`. Runtime
 components, auxiliary programs, bootstrap
 commands, platform, architecture, minimum OS, and case-network policy are
 schema-checked there as well. The current macOS 26 floor is dictated by the
 official native Pkl 0.31.1 asset shared by the lane; the Rust, Ruby, and built
-Betterleaks artifacts themselves support earlier macOS releases. The Apple
+Betterleaks and ghalint artifacts themselves support earlier macOS releases. The Apple
 compiler and SDK are host-supplied prerequisites because Apple does not
 distribute them as portable redistributable archives; their paths and
 minimum-version probes are declared and recorded alongside the checksum-pinned
@@ -1586,13 +1703,14 @@ Override the state and artifact roots with
 `VELVET_GLOVE_PINNED_TOOL_STATE_DIR` and
 `VELVET_GLOVE_PINNED_TOOL_ARTIFACT_DIR`.
 
-These nineteen smoke contracts establish the reproducible environment
+These twenty smoke contracts establish the reproducible environment
 substrate; they do not by themselves promote a tool's full pinned-real-tool
 coverage tier.
 The generated coverage report retains gaps until every required target, surface,
 and semantic case has evidence; jq, Buf Format, Vacuum, Betterleaks, Astro,
-Asciidoctor, Biome, Prettier, Contextlint, dclint, ESLint, gofmt, Cargo Clippy, and
-Cargo Fmt are covered only after each complete case matrix passes. Linux,
+Asciidoctor, Biome, Prettier, Contextlint, dclint, ESLint, ghalint Workflow,
+gofmt, Cargo Clippy, and Cargo Fmt are covered only after each complete case
+matrix passes. Linux,
 Intel, and full-catalog scheduling remain separate follow-up work.
 
 ## Updating a pin

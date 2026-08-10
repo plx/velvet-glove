@@ -6,6 +6,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RECIPES_JSON: &str = include_str!("../validation/provisioning/recipes.json");
+const GHALINT_SOURCE_BUILD_JSON: &str =
+    include_str!("../validation/provisioning/ghalint-workflow/source-build.json");
 const VACUUM_PROVENANCE_JSON: &str =
     include_str!("../validation/provisioning/vacuum/provenance.json");
 
@@ -647,6 +649,40 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         eslint_lock["packages"]["node_modules/eslint"]["integrity"],
         "sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ=="
     );
+
+    let github_actions_environment = environments
+        .get("macos-arm64-github-actions")
+        .expect("dedicated GitHub Actions environment");
+    assert_eq!(
+        github_actions_environment.provisioning_group,
+        "github-actions"
+    );
+    assert_eq!(
+        github_actions_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["ghalint-workflow", "go"])
+    );
+    assert!(github_actions_environment.auxiliary_programs.is_empty());
+    assert_eq!(
+        github_actions_environment
+            .bootstrap
+            .iter()
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "ghalint-apply-closure",
+            "ghalint-go-mod-download",
+            "ghalint-go-mod-verify",
+            "ghalint-go-build",
+        ]
+    );
+    assert_eq!(github_actions_environment.bootstrap[0].network, "denied");
+    assert_eq!(github_actions_environment.bootstrap[1].network, "required");
+    assert_eq!(github_actions_environment.bootstrap[2].network, "denied");
+    assert_eq!(github_actions_environment.bootstrap[3].network, "denied");
     let mise_lock = std::fs::read_to_string(root.join(&registry.mise.lock)).expect("mise lock");
     for component in registry.shared_components.iter().chain(
         registry
@@ -664,6 +700,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "data-formats",
             "dclint",
             "eslint",
+            "github-actions",
             "go",
             "node",
             "prettier",
@@ -920,6 +957,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "contextlint",
             "dclint",
             "eslint",
+            "ghalint-workflow",
             "go-fmt",
             "jq",
             "prettier",
@@ -978,6 +1016,34 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     assert_eq!(vacuum.probe.match_kind, "exact");
     assert_eq!(vacuum.probe.expected, "0.30.0");
 
+    let ghalint = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "ghalint-workflow")
+        .expect("ghalint-workflow pinned recipe");
+    assert_eq!(ghalint.id, "ghalint-workflow-macos-arm64");
+    assert_eq!(ghalint.environment_id, "macos-arm64-github-actions");
+    assert_eq!(ghalint.version, "1.5.6+velvet-glove.1");
+    assert_eq!(ghalint.case_executables, ["ghalint", "python"]);
+    assert_eq!(
+        ghalint.cases,
+        [
+            "clean",
+            "config-failure",
+            "malformed",
+            "multi-workflow",
+            "policy-grammar",
+            "source-issue",
+        ]
+    );
+    assert_eq!(ghalint.representative_case, "multi-workflow");
+    assert_eq!(ghalint.probe.argv, ["ghalint", "--version"]);
+    assert_eq!(ghalint.probe.match_kind, "exact");
+    assert_eq!(
+        ghalint.probe.expected,
+        "ghalint version 1.5.6+velvet-glove.1"
+    );
+
     let cargo_fmt_environment = environments
         .get(cargo_fmt.environment_id.as_str())
         .expect("cargo-fmt controlled environment");
@@ -998,6 +1064,117 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-fmt closure omits {required}"
         );
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn ghalint_source_provenance_and_runner_binding_are_exact() {
+    let root = repository_root();
+    let provenance: serde_json::Value = serde_json::from_str(GHALINT_SOURCE_BUILD_JSON)
+        .expect("ghalint source-build provenance JSON");
+    assert_eq!(provenance["schemaVersion"], 1);
+    assert_eq!(provenance["status"], "integrated");
+    assert_eq!(
+        provenance["upstream"]["peeledCommit"],
+        "050e825989101021ece297e4d2f726f519ba89ee"
+    );
+    assert_eq!(
+        provenance["upstream"]["sourceArchive"]["sha256"],
+        "1188047b654a86390d49b776153c1a7b3eddde30ebcc0d024dfab9585785b02b"
+    );
+    assert_eq!(
+        provenance["closure"]["patchSha256"],
+        "5e3c2480665eefffa019adf5c57e27e1c1d05a74b9dccf2d5bc345017a17d6ed"
+    );
+    assert_eq!(
+        provenance["closure"]["moduleManifestSha256"],
+        "ada0a9434578f54fd6a50fe8ed9ef26374afa631d5527660723062663d686f16"
+    );
+    assert_eq!(
+        provenance["closure"]["moduleLockSha256"],
+        "53a4a1b1a7dcd2a6da2dc1cc0cc32ca4bcb5b8ea86832749e18879b8be594dbb"
+    );
+    assert_eq!(provenance["toolchain"]["version"], "1.26.5");
+    assert_eq!(provenance["build"]["sourceDateEpoch"], "1777591460");
+    assert_eq!(
+        provenance["artifact"]["sha256"],
+        "03437b6c73d1332460d24f2c9fe22d3dea0fe68e4e52b0a8a534b3f2854274fa"
+    );
+    assert_eq!(
+        provenance["artifact"]["embeddedBuildFacts"]["xText"],
+        "v0.39.0"
+    );
+    let registry: serde_json::Value =
+        serde_json::from_str(RECIPES_JSON).expect("provisioning registry JSON");
+    let component = registry["environments"]
+        .as_array()
+        .expect("provisioning environments")
+        .iter()
+        .flat_map(|environment| {
+            environment["components"]
+                .as_array()
+                .expect("environment components")
+        })
+        .find(|component| component["id"] == "ghalint-workflow")
+        .expect("ghalint source-build component");
+    assert_eq!(
+        provenance["component"]["installationSource"],
+        component["installationSource"]
+    );
+    assert_eq!(
+        provenance["build"]["argv"],
+        component["integrity"]["buildArgv"]
+    );
+    assert_eq!(
+        provenance["build"]["environment"],
+        component["integrity"]["buildEnvironment"]
+    );
+    assert_eq!(provenance["build"]["bootstrap"][1]["argv"][5], "all");
+    assert_eq!(
+        provenance["artifact"]["sha256"],
+        component["integrity"]["builtArtifactSha256"]
+    );
+
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    for required in [
+        "if needs_group github-actions; then",
+        "ghalint_archive=$(fetch_component_archive ghalint-workflow)",
+        "error: ghalint closure patch checksum mismatch",
+        "error: ghalint patched module closure checksum mismatch",
+        "GOPROXY=https://proxy.golang.org",
+        "GOSUMDB=sum.golang.org",
+        "mod download all",
+        "$mise_bin\" -C \"$provisioning_dir\" exec --locked --fresh-env --deny-net -- \\",
+        "mod verify",
+        "-X=main.version=1.5.6+velvet-glove.1",
+        "reproducible ghalint artifact checksum mismatch",
+        "github.com/suzuki-shunsuke/ghalint/cmd/ghalint",
+        "golang.org/x/text\\tv0.39.0",
+        "verify_macho_closure \"$ghalint_staging_root\" ghalint-workflow",
+        "ghalint version 1.5.6+velvet-glove.1",
+    ] {
+        assert!(
+            outer.contains(required),
+            "outer ghalint binding: {required}"
+        );
+    }
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    for required in [
+        "if [[ ,$selection, == *,ghalint-workflow/* ]]; then",
+        "ghalint_path_prefix=\"$state_dir/ghalint-1.5.6-vg1/bin:\"",
+        "export PATH=\"${ghalint_path_prefix}${vacuum_path_prefix}",
+    ] {
+        assert!(
+            inner.contains(required),
+            "inner ghalint binding: {required}"
+        );
+    }
+    assert!(
+        !inner.contains("export PATH=\"$state_dir/ghalint-1.5.6-vg1/bin:"),
+        "ghalint must be visible only for a selected ghalint contract"
+    );
 }
 
 #[test]
@@ -1440,6 +1617,14 @@ fn validate_integrity(root: &Path, integrity: &Integrity, owner: &str) {
             integrity.component_id.is_none(),
             "{owner}: source build has parent component"
         );
+        if integrity.path.as_deref()
+            == Some(
+                "crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/closure.patch",
+            )
+        {
+            validate_ghalint_source_build(root, integrity, owner);
+            return;
+        }
         assert_eq!(
             integrity.path.as_deref(),
             Some("crates/hookkit-pkl-config/validation/provisioning/betterleaks/closure.patch")
@@ -1738,6 +1923,119 @@ fn validate_integrity(root: &Path, integrity: &Integrity, owner: &str) {
     }
 }
 
+fn validate_ghalint_source_build(root: &Path, integrity: &Integrity, owner: &str) {
+    assert_eq!(
+        integrity.url.as_deref(),
+        Some("https://github.com/suzuki-shunsuke/ghalint/archive/refs/tags/v1.5.6.tar.gz")
+    );
+    assert_eq!(
+        integrity.sha256.as_deref(),
+        Some("1188047b654a86390d49b776153c1a7b3eddde30ebcc0d024dfab9585785b02b")
+    );
+    assert_eq!(
+        integrity.patch_sha256.as_deref(),
+        Some("5e3c2480665eefffa019adf5c57e27e1c1d05a74b9dccf2d5bc345017a17d6ed")
+    );
+    assert_eq!(integrity.archive_format.as_deref(), Some("tar-gz"));
+    assert_eq!(integrity.archive_root.as_deref(), Some("ghalint-1.5.6"));
+    assert_eq!(
+        integrity.module_manifest_path.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/go.mod")
+    );
+    assert_eq!(
+        integrity.module_manifest_sha256.as_deref(),
+        Some("ada0a9434578f54fd6a50fe8ed9ef26374afa631d5527660723062663d686f16")
+    );
+    assert_eq!(
+        integrity.module_lock_path.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/go.sum")
+    );
+    assert_eq!(
+        integrity.module_lock_sha256.as_deref(),
+        Some("53a4a1b1a7dcd2a6da2dc1cc0cc32ca4bcb5b8ea86832749e18879b8be594dbb")
+    );
+    assert_eq!(
+        integrity.built_artifact_sha256.as_deref(),
+        Some("03437b6c73d1332460d24f2c9fe22d3dea0fe68e4e52b0a8a534b3f2854274fa")
+    );
+    assert_eq!(
+        integrity.build_toolchain_component_id.as_deref(),
+        Some("go")
+    );
+    assert_eq!(
+        integrity.build_working_directory.as_deref(),
+        Some("{state}/ghalint-build-1.5.6-vg1/source")
+    );
+    assert_eq!(
+        integrity.build_argv,
+        [
+            "go",
+            "-C",
+            "{state}/ghalint-build-1.5.6-vg1/source",
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags",
+            "-s -w -buildid= -X=main.version=1.5.6+velvet-glove.1",
+            "-o",
+            "{state}/ghalint-build-1.5.6-vg1/install/bin/ghalint",
+            "./cmd/ghalint",
+        ]
+    );
+    assert_eq!(
+        integrity.build_environment,
+        BTreeMap::from([
+            ("CGO_ENABLED".to_owned(), "0".to_owned()),
+            ("GOARCH".to_owned(), "arm64".to_owned()),
+            (
+                "GOCACHE".to_owned(),
+                "{state}/ghalint-go-build-cache".to_owned(),
+            ),
+            ("GOFLAGS".to_owned(), "-mod=readonly".to_owned()),
+            (
+                "GOMODCACHE".to_owned(),
+                "{state}/ghalint-go-mod-cache".to_owned(),
+            ),
+            ("GOOS".to_owned(), "darwin".to_owned()),
+            ("GOPROXY".to_owned(), "off".to_owned()),
+            ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+            ("SOURCE_DATE_EPOCH".to_owned(), "1777591460".to_owned()),
+        ])
+    );
+    assert_eq!(integrity.min_os_version.as_deref(), Some("12.0"));
+    assert_eq!(
+        integrity.allowed_dylib_prefixes,
+        ["/System/Library/", "/usr/lib/"]
+    );
+
+    let patch_path = integrity.path.as_deref().expect("ghalint patch path");
+    let module_manifest_path = integrity
+        .module_manifest_path
+        .as_deref()
+        .expect("ghalint module manifest path");
+    let module_lock_path = integrity
+        .module_lock_path
+        .as_deref()
+        .expect("ghalint module lock path");
+    for path in [patch_path, module_manifest_path, module_lock_path] {
+        assert_file(root, path);
+    }
+    let patch = std::fs::read_to_string(root.join(patch_path))
+        .unwrap_or_else(|error| panic!("{owner}: read ghalint closure patch: {error}"));
+    assert!(patch.contains("-\tgolang.org/x/text v0.28.0 // indirect"));
+    assert!(patch.contains("+\tgolang.org/x/text v0.39.0 // indirect"));
+    let module_manifest = std::fs::read_to_string(root.join(module_manifest_path))
+        .unwrap_or_else(|error| panic!("{owner}: read ghalint go.mod: {error}"));
+    assert!(module_manifest.contains("go 1.26.2"));
+    assert!(module_manifest.contains("golang.org/x/text v0.39.0"));
+    let module_lock = std::fs::read_to_string(root.join(module_lock_path))
+        .unwrap_or_else(|error| panic!("{owner}: read ghalint go.sum: {error}"));
+    assert!(
+        module_lock
+            .contains("golang.org/x/text v0.39.0 h1:UbZz4pLOvn600D6Oh6GGEI6VAmndrEBLv8/6BEXzyus=")
+    );
+}
+
 fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Component) {
     match component.integrity.kind.as_str() {
         "mise-lock" => {
@@ -1962,16 +2260,28 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
             assert_eq!(component.probe.expected, component.version);
         }
         "go-source-build" => {
-            assert_eq!(component.id, "betterleaks");
-            assert_eq!(component.version, "1.7.3+velvet-glove.1");
             assert_eq!(component.mise_tool, None);
             assert!(component.runtime_component_ids.is_empty());
-            assert_eq!(component.probe.argv, ["betterleaks", "--version"]);
             assert_eq!(component.probe.match_kind, "exact");
-            assert_eq!(
-                component.probe.expected,
-                "betterleaks version 1.7.3+velvet-glove.1"
-            );
+            match component.id.as_str() {
+                "betterleaks" => {
+                    assert_eq!(component.version, "1.7.3+velvet-glove.1");
+                    assert_eq!(component.probe.argv, ["betterleaks", "--version"]);
+                    assert_eq!(
+                        component.probe.expected,
+                        "betterleaks version 1.7.3+velvet-glove.1"
+                    );
+                }
+                "ghalint-workflow" => {
+                    assert_eq!(component.version, "1.5.6+velvet-glove.1");
+                    assert_eq!(component.probe.argv, ["ghalint", "--version"]);
+                    assert_eq!(
+                        component.probe.expected,
+                        "ghalint version 1.5.6+velvet-glove.1"
+                    );
+                }
+                other => panic!("unexpected Go source-build component {other}"),
+            }
         }
         "runtime-bundled" => {
             assert_eq!(component.mise_tool, None);

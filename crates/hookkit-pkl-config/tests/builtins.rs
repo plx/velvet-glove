@@ -998,6 +998,106 @@ fn contextlint_adapter_locks_workspace_coverage_and_private_completion() {
 }
 
 #[test]
+fn ghalint_workflow_adapter_locks_native_inventory_and_status_grammar() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let ghalint = spec(&specs, "ghalintWorkflow");
+
+    assert_eq!(ghalint.id, "ghalint-workflow");
+    assert_eq!(ghalint.display_name, "ghalint (workflow)");
+    assert_eq!(ghalint.executable, "ghalint");
+    assert_eq!(
+        ghalint.install_hint.as_deref(),
+        Some("use the Velvet Glove ghalint 1.5.6+velvet-glove.1 source-build recipe")
+    );
+    assert_eq!(
+        ghalint.files,
+        FileSelection {
+            include: vec![
+                ".github/workflows/*.yml".into(),
+                ".github/workflows/*.yaml".into(),
+            ],
+            exclude: Vec::new(),
+        }
+    );
+    assert_eq!(ghalint.phase_invocation, InvocationGranularity::Workspace);
+    assert_eq!(ghalint.workflow_order, vec!["verify"]);
+    assert_eq!(ghalint.phase_order, vec!["verify"]);
+
+    let workflow = ghalint.workflows.get("verify").expect("verify workflow");
+    assert_eq!(workflow.check_scope, CheckScope::Workspace);
+    assert_eq!(workflow.invocation, InvocationGranularity::Workspace);
+    assert!(workflow.remedy.is_none());
+    let check = workflow.check.as_ref().expect("authoritative verify check");
+    assert_eq!(check.program.as_deref(), Some("python"));
+    assert_eq!(check.writes, WriteBehavior::None);
+    assert!(check.issues_on_stdout);
+    assert_eq!(check.argv.len(), 8);
+    assert_eq!(check.argv[0], literal("-I"));
+    assert_eq!(check.argv[1], literal("-c"));
+    let ArgvElement::Literal(adapter) = &check.argv[2] else {
+        panic!("ghalint-workflow adapter must be a literal Python program")
+    };
+    for required in [
+        "VERSION = \"1.5.6+velvet-glove.1\"",
+        "by_suffix[\".yml\"] + by_suffix[\".yaml\"]",
+        "ghalint workflow inventory is empty",
+        "selected workflow is outside the top-level native inventory",
+        "multiple implicit ghalint configs are ambiguous",
+        "ghalint accepts at most one controlled --config=<path> override",
+        "scan_workspace(project)",
+        "ghalint changed retained project file topology",
+        "ghalint changed retained project directory topology",
+        "start_new_session=True",
+        "combined ghalint output exceeds",
+        "ghalint left a same-group descendant after exit",
+        "ghalint child exited without closing output pipes",
+        "ghalint child process group survived SIGKILL",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)",
+        "drain_blocked_signals",
+        "<ghalint-private>",
+        "unexpected adapter failure",
+        "GHALINT_LOG_COLOR",
+        "GHALINT_LOG_LEVEL",
+        "VELVET_GLOVE_TOOL_TRACE_DIR",
+        "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+        "read a workflow file",
+        "secret should not be set to workflow's env",
+        "github.token should not be set to workflow's env",
+        "ACTION_POLICIES",
+        "\"permission\", \"secrets\"",
+        "\"pattern_reference\", \"policy_name\"",
+        "ghalint configuration is invalid",
+        "ghalint status one contained no source diagnostics",
+        "records.sort(key=lambda record: json.dumps(record, sort_keys=True))",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "ghalint-workflow adapter lost structural invariant {required:?}"
+        );
+    }
+    assert_eq!(check.argv[3], token(ArgToken::ToolExecutable));
+    assert_eq!(check.argv[4], token(ArgToken::ProjectRoot));
+    assert_eq!(check.argv[5], token(ArgToken::ExtraArgs));
+    assert_eq!(
+        check.argv[6],
+        literal("__VELVET_GLOVE_GHALINT_WORKFLOW_FILES__")
+    );
+    assert_eq!(check.argv[7], token(ArgToken::Files));
+    assert_exit_codes(&check.exit_codes, &[0], &[1], &[2]);
+
+    let phase = ghalint
+        .phases
+        .get("verify")
+        .expect("immediate verify phase");
+    assert_eq!(phase.program.as_deref(), Some("python"));
+    assert_eq!(phase.mode, PhaseMode::Verify);
+    assert_eq!(phase.writes, WriteBehavior::None);
+    assert_eq!(phase.argv, check.argv);
+    assert_exit_codes(&phase.exit_codes, &[0], &[1], &[2]);
+}
+
+#[test]
 fn cargo_fmt_builtin_uses_workspace_indicator() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
