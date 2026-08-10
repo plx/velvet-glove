@@ -1,0 +1,38 @@
+name: Guardrails
+
+# Fails when a PR modifies guarded validation-architecture files without the
+# `guardrail-change` label (human sign-off). See docs/validation-architecture.md.
+# `labeled`/`unlabeled` triggers re-run the check when the label is applied.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  protected-paths:
+    name: Guarded paths require human sign-off
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check guarded paths against label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'guardrail-change') }}
+        run: |
+          set -euo pipefail
+          guarded='^(docs/validation-architecture\.md|crates/hookkit-pkl-config/tests/guardrails\.rs|crates/velvet-glove/tests/guardrails\.rs|scripts/generate-tool-validation-issues\.sh|\.github/workflows/guardrail-check\.yml)$'
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          hits=$(grep -E "$guarded" <<<"$files" || true)
+          if [ -n "$hits" ] && [ "$HAS_LABEL" != "true" ]; then
+            echo "::error::This PR modifies guardrail files without the 'guardrail-change' label (human sign-off required):"
+            echo "$hits"
+            echo "If you are an autonomous agent: do not add the label yourself."
+            echo "Stop and ask a human to review the guardrail change."
+            exit 1
+          fi
+          echo "Guarded paths OK."

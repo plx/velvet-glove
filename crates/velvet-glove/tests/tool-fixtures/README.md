@@ -4,12 +4,10 @@ Each fixture exercises one builtin tool against a small on-disk example and
 verifies the runner's harness-specific output. Fixtures are auto-discovered by
 the `tool_fixtures.rs` integration test.
 
-Every `<tool-id>/<example-name>` directory is also declared in the catalog
-[`manifest.json`](../../../hookkit-pkl-config/validation/manifest.json).
-A nonignored manifest test rejects undeclared or missing fixture tools and
-cases. Fixture presence is inventory only: by itself it does not count as
-rendered-command or pinned-real-tool evidence in the generated validation
-coverage report.
+Fixture layout and size are bounded by the tripwires in
+[`tests/guardrails.rs`](../guardrails.rs); see
+[`docs/validation-architecture.md`](../../../../docs/validation-architecture.md)
+for the budgets and the overall validation contract.
 
 The ordinary test lane validates the complete inventory and sends canonical,
 typed Claude, Codex, and Antigravity inputs through the real `velvet-glove`
@@ -87,15 +85,14 @@ cargo test -p velvet-glove --test tool_fixtures run_all_tool_fixtures -- --ignor
 
 Discovery fails on a missing or empty root, zero tools, zero cases, filesystem
 errors, empty tool directories, and fixture directories without an enabled
-builtin owner. Missing host tool programs remain structured skips until the
-pinned provisioning lane supplies them. Set
+builtin owner. Missing host tool programs remain structured skips unless the
+environment provides them. Set
 `VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS=all` (or a comma-separated tool-id list)
 to promote unavailable selected programs to failures. Unknown or fixture-less
 tool ids are configuration errors rather than silent no-ops.
 
-Those skips describe only the ignored host-tool compatibility lane. The
-validation manifest records unmet supported-catalog requirements as explicit
-gaps; a skip here never promotes a coverage tier to covered.
+Those skips describe only the ignored host-tool compatibility lane; a skip
+here never counts as validation evidence for a tool.
 
 Every subprocess is bounded to 60 seconds. Override that positive whole-second
 limit with `VELVET_GLOVE_FIXTURE_TIMEOUT_SECS`.
