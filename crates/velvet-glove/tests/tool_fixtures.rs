@@ -16781,6 +16781,9 @@ fn verify_errcheck_adapter_adversarial_contract(
             let child_pid_path = root.join("signal-child.pid");
             let descendant_pid_path = root.join("signal-descendant.pid");
             let signal_ready_path = root.join("signal.ready");
+            let normal_leader_path = root.join("normal-exit-leader.pid");
+            let normal_descendant_path = root.join("normal-exit-descendant.pid");
+            let late_mutation_path = workspace.join("late-descendant-mutation");
 
             let environment_record = serde_json::json!({
                 "GOARCH": "arm64",
@@ -16866,6 +16869,34 @@ case "${ERRCHECK_PROBE_MODE-}" in
     printf '%s:1:1:\t%s\n' "${ERRCHECK_WORKSPACE}/./example.go" 'package probe'
     exit 1
     ;;
+  inherited-pipe)
+    (
+      trap '' HUP INT TERM
+      /bin/sleep 1
+      : > "${ERRCHECK_LATE_MUTATION}"
+      while :; do :; done
+    ) &
+    printf '%s\n' "$!" > "${ERRCHECK_NORMAL_DESCENDANT_PID}"
+    printf '%s\n' "$$" > "${ERRCHECK_NORMAL_LEADER_PID}"
+    exit 0
+    ;;
+  closed-stdio)
+    (
+      exec </dev/null >/dev/null 2>/dev/null
+      trap '' HUP INT TERM
+      /bin/sleep 1
+      : > "${ERRCHECK_LATE_MUTATION}"
+      while :; do :; done
+    ) &
+    printf '%s\n' "$!" > "${ERRCHECK_NORMAL_DESCENDANT_PID}"
+    printf '%s\n' "$$" > "${ERRCHECK_NORMAL_LEADER_PID}"
+    exec >/dev/null 2>/dev/null
+    exit 0
+    ;;
+  output-cap)
+    printf '%s\n' "$$" > "${ERRCHECK_NORMAL_LEADER_PID}"
+    exec /usr/bin/yes errcheck-current-output
+    ;;
   signal)
     trap 'exit 0' HUP INT TERM
     (
@@ -16893,27 +16924,34 @@ esac
                 "errcheck adversarial checker",
             )?;
 
+            let adapter_command_with_script =
+                |script: &str, selected_workspace: &Path, mode: &str| {
+                    let mut command = Command::new(&python);
+                    command
+                        .env_clear()
+                        .args(["-I", "-c", script])
+                        .arg("errcheck")
+                        .arg("go")
+                        .arg(ERRCHECK_WORKSPACE_MARKER)
+                        .arg(selected_workspace.join("go.mod"))
+                        .current_dir(selected_workspace)
+                        .env(PATH_ENV, &fake_bin)
+                        .env(TMPDIR_ENV, &adapter_tmp)
+                        .env("GOMODCACHE", &module_cache)
+                        .env("ERRCHECK_PROBE_MODE", mode)
+                        .env("ERRCHECK_GO_LOG", &go_log)
+                        .env("ERRCHECK_CHECKER_LOG", &checker_log)
+                        .env("ERRCHECK_WORKSPACE", selected_workspace)
+                        .env("ERRCHECK_CHILD_PID", &child_pid_path)
+                        .env("ERRCHECK_DESCENDANT_PID", &descendant_pid_path)
+                        .env("ERRCHECK_SIGNAL_READY", &signal_ready_path)
+                        .env("ERRCHECK_NORMAL_LEADER_PID", &normal_leader_path)
+                        .env("ERRCHECK_NORMAL_DESCENDANT_PID", &normal_descendant_path)
+                        .env("ERRCHECK_LATE_MUTATION", &late_mutation_path);
+                    command
+                };
             let adapter_command = |selected_workspace: &Path, mode: &str| {
-                let mut command = Command::new(&python);
-                command
-                    .env_clear()
-                    .args(["-I", "-c", adapter])
-                    .arg("errcheck")
-                    .arg("go")
-                    .arg(ERRCHECK_WORKSPACE_MARKER)
-                    .arg(selected_workspace.join("go.mod"))
-                    .current_dir(selected_workspace)
-                    .env(PATH_ENV, &fake_bin)
-                    .env(TMPDIR_ENV, &adapter_tmp)
-                    .env("GOMODCACHE", &module_cache)
-                    .env("ERRCHECK_PROBE_MODE", mode)
-                    .env("ERRCHECK_GO_LOG", &go_log)
-                    .env("ERRCHECK_CHECKER_LOG", &checker_log)
-                    .env("ERRCHECK_WORKSPACE", selected_workspace)
-                    .env("ERRCHECK_CHILD_PID", &child_pid_path)
-                    .env("ERRCHECK_DESCENDANT_PID", &descendant_pid_path)
-                    .env("ERRCHECK_SIGNAL_READY", &signal_ready_path);
-                command
+                adapter_command_with_script(adapter, selected_workspace, mode)
             };
             let run_adapter = |selected_workspace: &Path,
                                mode: &str,
@@ -17042,6 +17080,134 @@ esac
                 assert_errcheck_private_roots_removed(&adapter_tmp, mode)?;
             }
 
+            for mode in ["inherited-pipe", "closed-stdio"] {
+                for path in [
+                    &normal_leader_path,
+                    &normal_descendant_path,
+                    &late_mutation_path,
+                ] {
+                    let _ = std::fs::remove_file(path);
+                }
+                reset_logs()?;
+                let output =
+                    match run_adapter(&workspace, mode, &format!("{mode}-normal-exit-evidence")) {
+                        Ok(output) => output,
+                        Err(error) => {
+                            if let Ok(leader) =
+                                read_pid_file(&normal_leader_path, "errcheck normal-exit leader")
+                            {
+                                let _ = signal_process_group(leader, "KILL");
+                            }
+                            return Err(error);
+                        }
+                    };
+                let leader =
+                    read_pid_file(&normal_leader_path, &format!("errcheck {mode} leader"))?;
+                let descendant = read_pid_file(
+                    &normal_descendant_path,
+                    &format!("errcheck {mode} descendant"),
+                )?;
+                let leader_alive = process_survives(leader, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(leader, Duration::from_secs(1))?;
+                if leader_alive || descendant_alive || group_alive {
+                    let _ = signal_process_group(leader, "KILL");
+                }
+                std::thread::sleep(Duration::from_millis(1100));
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || leader_alive
+                    || descendant_alive
+                    || group_alive
+                    || late_mutation_path.exists()
+                    || !stderr
+                        .contains("native errcheck left same-group descendants after child exit")
+                {
+                    return Err(format!(
+                        "errcheck {mode} normal-exit descendant was not swept: status={:?}; leader={leader}:{leader_alive}; descendant={descendant}:{descendant_alive}; group={group_alive}; late_mutation={}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        late_mutation_path.exists(),
+                        String::from_utf8_lossy(&output.stdout),
+                    ));
+                }
+                assert_errcheck_private_roots_removed(&adapter_tmp, mode)?;
+            }
+
+            let output_limit_anchor = "LIMIT = 16 * 1024 * 1024\n";
+            let child_cleanup_anchor = concat!(
+                "            if process_group_exists():\n",
+                "                failures.append(\"native child process group survived SIGKILL\")\n",
+            );
+            let private_cleanup_anchor = "                shutil.rmtree(private_root)\n";
+            if adapter.matches(output_limit_anchor).count() != 1
+                || adapter.matches(child_cleanup_anchor).count() != 1
+                || adapter.matches(private_cleanup_anchor).count() != 1
+            {
+                return Err(
+                    "errcheck output/child/private cleanup composition probe lost its exact anchors"
+                        .to_owned(),
+                );
+            }
+            let composition_adapter = adapter
+                .replacen(output_limit_anchor, "LIMIT = 1024\n", 1)
+                .replacen(
+                    child_cleanup_anchor,
+                    concat!(
+                        "            if True:\n",
+                        "                failures.append(\"native child process group survived SIGKILL\")\n",
+                    ),
+                    1,
+                )
+                .replacen(
+                    private_cleanup_anchor,
+                    concat!(
+                        "                shutil.rmtree(private_root)\n",
+                        "                raise OSError(5, \"forced private cleanup failure\", private_root)\n",
+                    ),
+                    1,
+                );
+            let _ = std::fs::remove_file(&normal_leader_path);
+            reset_logs()?;
+            let mut composition_command =
+                adapter_command_with_script(&composition_adapter, &workspace, "output-cap");
+            let composition = run_with_timeout(
+                &mut composition_command,
+                b"",
+                timeout.min(Duration::from_secs(7)),
+                &root.join("cleanup-composition-evidence"),
+            )
+            .map_err(|error| format!("run errcheck cleanup-composition probe: {error}"))?;
+            let composition_leader =
+                read_pid_file(&normal_leader_path, "errcheck cleanup-composition leader")?;
+            let composition_leader_alive =
+                process_survives(composition_leader, Duration::from_secs(1))?;
+            let composition_group_alive =
+                process_group_survives(composition_leader, Duration::from_secs(1))?;
+            if composition_leader_alive || composition_group_alive {
+                let _ = signal_process_group(composition_leader, "KILL");
+            }
+            let composition_stderr = String::from_utf8_lossy(&composition.stderr);
+            if composition.status.code() != Some(2)
+                || !composition.stdout.is_empty()
+                || composition_leader_alive
+                || composition_group_alive
+                || !composition_stderr.contains("combined output exceeded 1024 bytes")
+                || !composition_stderr.contains("native child process group survived SIGKILL")
+                || !composition_stderr.contains("cannot remove controlled temporary directory")
+                || !composition_stderr.contains("forced private cleanup failure")
+                || !composition_stderr.contains("<errcheck-private>")
+                || composition_stderr.contains("velvet-glove-errcheck-")
+                || composition_stderr.matches("velvet-glove-errcheck:").count() != 1
+            {
+                return Err(format!(
+                    "errcheck output/child/private cleanup failures were not composed and sanitized: status={:?}; leader={composition_leader}:{composition_leader_alive}; group={composition_group_alive}; stdout_bytes={}; stderr={composition_stderr:?}",
+                    composition.status.code(),
+                    composition.stdout.len(),
+                ));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "cleanup composition")?;
+
             for alias_kind in ["symlink", "hardlink"] {
                 let alias_workspace = root.join(format!("{alias_kind}-workspace"));
                 std::fs::create_dir(&alias_workspace)
@@ -17076,6 +17242,247 @@ esac
                 }
                 assert_errcheck_private_roots_removed(&adapter_tmp, alias_kind)?;
             }
+
+            let unwritable_tmp = root.join("unwritable-adapter-tmp");
+            std::fs::create_dir(&unwritable_tmp)
+                .map_err(|error| format!("create errcheck unwritable TMPDIR: {error}"))?;
+            let mut unwritable_permissions = std::fs::metadata(&unwritable_tmp)
+                .map_err(|error| format!("inspect errcheck unwritable TMPDIR: {error}"))?
+                .permissions();
+            unwritable_permissions.set_mode(0o500);
+            std::fs::set_permissions(&unwritable_tmp, unwritable_permissions)
+                .map_err(|error| format!("make errcheck TMPDIR unwritable: {error}"))?;
+            reset_logs()?;
+            let mut unwritable_command = adapter_command(&workspace, "clean");
+            unwritable_command.env(TMPDIR_ENV, &unwritable_tmp);
+            let unwritable_result = run_with_timeout(
+                &mut unwritable_command,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("unwritable-tmp-evidence"),
+            );
+            let mut restored_permissions = std::fs::metadata(&unwritable_tmp)
+                .map_err(|error| format!("reinspect errcheck unwritable TMPDIR: {error}"))?
+                .permissions();
+            restored_permissions.set_mode(0o700);
+            std::fs::set_permissions(&unwritable_tmp, restored_permissions)
+                .map_err(|error| format!("restore errcheck TMPDIR permissions: {error}"))?;
+            let unwritable = unwritable_result
+                .map_err(|error| format!("run errcheck unwritable TMPDIR probe: {error}"))?;
+            let unwritable_stderr = String::from_utf8_lossy(&unwritable.stderr);
+            if unwritable.status.code() != Some(2)
+                || !unwritable.stdout.is_empty()
+                || !unwritable_stderr.contains("<errcheck-private>")
+                || unwritable_stderr.contains("velvet-glove-errcheck-")
+                || go_log.exists()
+                || checker_log.exists()
+            {
+                return Err(format!(
+                    "errcheck unwritable TMPDIR leaked a random private path or launched children: status={:?}; go_ran={}; checker_ran={}; stdout={:?}; stderr={unwritable_stderr:?}",
+                    unwritable.status.code(),
+                    go_log.exists(),
+                    checker_log.exists(),
+                    String::from_utf8_lossy(&unwritable.stdout),
+                ));
+            }
+            assert_errcheck_private_roots_removed(&unwritable_tmp, "unwritable TMPDIR")?;
+
+            let allocation_anchor = concat!(
+                "    allocation_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n",
+                "    try:\n",
+            );
+            if adapter.matches(allocation_anchor).count() != 1 {
+                return Err(
+                    "errcheck pre-allocation signal probe lost its exact SIG_BLOCK anchor"
+                        .to_owned(),
+                );
+            }
+            let allocation_adapter = adapter.replacen(
+                allocation_anchor,
+                concat!(
+                    "    allocation_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n",
+                    "    allocation_ready = os.environ.get(\"ERRCHECK_ALLOCATION_READY\")\n",
+                    "    allocation_release = os.environ.get(\"ERRCHECK_ALLOCATION_RELEASE\")\n",
+                    "    if allocation_ready is not None and allocation_release is not None:\n",
+                    "        ready_descriptor = os.open(allocation_ready, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n",
+                    "        os.close(ready_descriptor)\n",
+                    "        release_descriptor = os.open(allocation_release, os.O_RDONLY)\n",
+                    "        os.close(release_descriptor)\n",
+                    "    try:\n",
+                ),
+                1,
+            );
+            let allocation_ready = root.join("pre-allocation.ready");
+            let allocation_release = root.join("pre-allocation.release");
+            let allocation_fifo = Command::new("/usr/bin/mkfifo")
+                .arg(&allocation_release)
+                .status()
+                .map_err(|error| format!("create errcheck pre-allocation FIFO: {error}"))?;
+            if !allocation_fifo.success() {
+                return Err(format!(
+                    "create errcheck pre-allocation FIFO exited {allocation_fifo:?}"
+                ));
+            }
+            reset_logs()?;
+            let mut allocation_command =
+                adapter_command_with_script(&allocation_adapter, &workspace, "clean");
+            allocation_command
+                .env("ERRCHECK_ALLOCATION_READY", &allocation_ready)
+                .env("ERRCHECK_ALLOCATION_RELEASE", &allocation_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut allocation_outer = allocation_command
+                .spawn()
+                .map_err(|error| format!("spawn errcheck pre-allocation adapter: {error}"))?;
+            let allocation_outer_pid = allocation_outer.id();
+            let allocation_deadline =
+                std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+            while !allocation_ready.is_file() {
+                if let Some(status) = allocation_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll errcheck pre-allocation adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "errcheck pre-allocation adapter exited {status:?} before its hook"
+                    ));
+                }
+                if std::time::Instant::now() >= allocation_deadline {
+                    let _ = signal_process(allocation_outer_pid, "KILL");
+                    let _ = allocation_outer.wait();
+                    return Err("errcheck pre-allocation adapter did not reach its hook".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "pre-allocation cutoff")?;
+            if !signal_process(allocation_outer_pid, "TERM")?.success() {
+                let _ = signal_process(allocation_outer_pid, "KILL");
+                let _ = allocation_outer.wait();
+                return Err("send pre-allocation SIGTERM to errcheck adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&allocation_release)
+                .map_err(|error| format!("release errcheck pre-allocation hook: {error}"))?;
+            let (allocation_sender, allocation_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = allocation_sender.send(allocation_outer.wait_with_output());
+            });
+            let allocation_output = allocation_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(5)))
+                .map_err(|error| {
+                    let _ = signal_process(allocation_outer_pid, "KILL");
+                    format!("wait for errcheck pre-allocation adapter: {error}")
+                })?
+                .map_err(|error| format!("collect errcheck pre-allocation output: {error}"))?;
+            if allocation_output.status.code() != Some(2)
+                || !allocation_output.stdout.is_empty()
+                || allocation_output.stderr != b"velvet-glove-errcheck: received signal 15\n"
+                || go_log.exists()
+                || checker_log.exists()
+            {
+                return Err(format!(
+                    "errcheck pre-allocation signal cutoff mismatch: status={:?}; go_ran={}; checker_ran={}; stdout={:?}; stderr={:?}",
+                    allocation_output.status.code(),
+                    go_log.exists(),
+                    checker_log.exists(),
+                    String::from_utf8_lossy(&allocation_output.stdout),
+                    String::from_utf8_lossy(&allocation_output.stderr),
+                ));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "pre-allocation exit")?;
+
+            if adapter.matches(private_cleanup_anchor).count() != 1 {
+                return Err(
+                    "errcheck post-rmtree signal probe lost its exact cleanup anchor".to_owned(),
+                );
+            }
+            let cleanup_cutoff_adapter = adapter.replacen(
+                private_cleanup_anchor,
+                concat!(
+                    "                shutil.rmtree(private_root)\n",
+                    "                cleanup_ready = os.environ.get(\"ERRCHECK_CLEANUP_READY\")\n",
+                    "                cleanup_release = os.environ.get(\"ERRCHECK_CLEANUP_RELEASE\")\n",
+                    "                if cleanup_ready is not None and cleanup_release is not None:\n",
+                    "                    ready_descriptor = os.open(cleanup_ready, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n",
+                    "                    os.close(ready_descriptor)\n",
+                    "                    release_descriptor = os.open(cleanup_release, os.O_RDONLY)\n",
+                    "                    os.close(release_descriptor)\n",
+                ),
+                1,
+            );
+            let cleanup_ready = root.join("post-rmtree.ready");
+            let cleanup_release = root.join("post-rmtree.release");
+            let cleanup_fifo = Command::new("/usr/bin/mkfifo")
+                .arg(&cleanup_release)
+                .status()
+                .map_err(|error| format!("create errcheck post-rmtree FIFO: {error}"))?;
+            if !cleanup_fifo.success() {
+                return Err(format!(
+                    "create errcheck post-rmtree FIFO exited {cleanup_fifo:?}"
+                ));
+            }
+            reset_logs()?;
+            let mut cleanup_command =
+                adapter_command_with_script(&cleanup_cutoff_adapter, &workspace, "clean");
+            cleanup_command
+                .env("ERRCHECK_CLEANUP_READY", &cleanup_ready)
+                .env("ERRCHECK_CLEANUP_RELEASE", &cleanup_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut cleanup_outer = cleanup_command
+                .spawn()
+                .map_err(|error| format!("spawn errcheck post-rmtree adapter: {error}"))?;
+            let cleanup_outer_pid = cleanup_outer.id();
+            let cleanup_deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+            while !cleanup_ready.is_file() {
+                if let Some(status) = cleanup_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll errcheck post-rmtree adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "errcheck post-rmtree adapter exited {status:?} before its hook"
+                    ));
+                }
+                if std::time::Instant::now() >= cleanup_deadline {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    let _ = cleanup_outer.wait();
+                    return Err("errcheck post-rmtree adapter did not reach its hook".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "post-rmtree cutoff")?;
+            if !signal_process(cleanup_outer_pid, "TERM")?.success() {
+                let _ = signal_process(cleanup_outer_pid, "KILL");
+                let _ = cleanup_outer.wait();
+                return Err("send post-rmtree SIGTERM to errcheck adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&cleanup_release)
+                .map_err(|error| format!("release errcheck post-rmtree hook: {error}"))?;
+            let (cleanup_sender, cleanup_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = cleanup_sender.send(cleanup_outer.wait_with_output());
+            });
+            let cleanup_output = cleanup_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(5)))
+                .map_err(|error| {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    format!("wait for errcheck post-rmtree adapter: {error}")
+                })?
+                .map_err(|error| format!("collect errcheck post-rmtree output: {error}"))?;
+            if cleanup_output.status.code() != Some(2)
+                || !cleanup_output.stdout.is_empty()
+                || cleanup_output.stderr != b"velvet-glove-errcheck: received signal 15\n"
+            {
+                return Err(format!(
+                    "errcheck post-rmtree signal cutoff mismatch: status={:?}; stdout={:?}; stderr={:?}",
+                    cleanup_output.status.code(),
+                    String::from_utf8_lossy(&cleanup_output.stdout),
+                    String::from_utf8_lossy(&cleanup_output.stderr),
+                ));
+            }
+            assert_errcheck_private_roots_removed(&adapter_tmp, "post-rmtree exit")?;
 
             for (signal_name, signal_number) in [("HUP", 1), ("INT", 2), ("TERM", 15)] {
                 for path in [

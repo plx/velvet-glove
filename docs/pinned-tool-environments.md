@@ -533,6 +533,12 @@ Status two is operational failure; every other status, malformed output,
 scope omission, mutation, or preflight inconsistency is normalized to two.
 Combined child output is bounded, signals are forwarded to owned process
 groups, and normal and exceptional exits perform bounded descendant cleanup.
+The adapter retains the exact process-group ID through leader reaping, bounds
+post-leader pipe draining, kills and confirms same-group descendant exit, and
+composes child and private-root cleanup failures. Signal handlers cover private
+allocation through removal; a blocked post-removal cutoff drains pending
+HUP/INT/TERM before exit. Random private paths are normalized in every emitted
+child or cleanup diagnostic.
 
 The four-case matrix covers a silent clean workspace, one unchecked-error
 diagnostic, a multi-package/multi-file workspace that proves complete module
@@ -541,7 +547,9 @@ compatibility-translated deferred lifecycle execute the same read-only command.
 The evaluated adversarial lifecycle additionally covers false clean/no-op
 preflights, malformed and unstable diagnostics, source and control mutation,
 symlink and hard-link aliases, hostile environments, bounded output, signals,
-and orphan descendants. Filesystem replacement races and descendants that
+inherited-pipe and closed-stdio normal-exit descendants, pre-allocation and
+post-removal signal cutoffs, sanitized initialization failures, and composed
+child/private cleanup failures. Filesystem replacement races and descendants that
 deliberately escape their process group remain explicit operating-system
 boundaries; the adapter fails closed on every demonstrated instance but cannot
 make external concurrent actors transactional.
