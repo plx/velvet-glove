@@ -1011,6 +1011,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "errcheck",
             "go-fmt",
             "go-vet",
+            "gofumpt",
             "jq",
             "prettier",
             "rubocop",
@@ -1156,6 +1157,61 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             .contains("c19862e5f8415b4f24b189d065ed739517c548ba")
     );
 
+    let gofumpt = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "gofumpt")
+        .expect("gofumpt pinned recipe");
+    assert_eq!(gofumpt.id, "gofumpt-macos-arm64");
+    assert_eq!(gofumpt.environment_id, "macos-arm64-gofumpt");
+    assert_eq!(gofumpt.version, "0.11.0");
+    assert_eq!(gofumpt.case_executables, ["gofumpt", "go", "python"]);
+    assert_eq!(
+        gofumpt.cases,
+        [
+            "clean",
+            "multi-file",
+            "operational-failure",
+            "standalone",
+            "unformatted"
+        ]
+    );
+    assert_eq!(gofumpt.representative_case, "multi-file");
+    assert_eq!(gofumpt.probe.argv, ["gofumpt", "-version"]);
+    assert_eq!(gofumpt.probe.match_kind, "exact");
+    assert_eq!(gofumpt.probe.expected, "v0.11.0 (go1.26.5)");
+    assert_eq!(gofumpt.integrity.kind, "mise-lock");
+    assert_eq!(
+        gofumpt.integrity.sha256.as_deref(),
+        Some("18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b")
+    );
+    for binding in [
+        "2eb2409f833722c24213089299ba9d6778a441fa",
+        "5dca7d819315c5c6338d290ad2e7847f07438693",
+        "18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b",
+        "no retrievable artifact attestation",
+    ] {
+        assert!(
+            gofumpt.installation_source.contains(binding),
+            "gofumpt provenance omits {binding}"
+        );
+    }
+    let gofumpt_environment = environments
+        .get(gofumpt.environment_id.as_str())
+        .expect("gofumpt controlled environment");
+    assert_eq!(
+        gofumpt_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<Vec<_>>(),
+        ["gofumpt", "gofumpt-go"]
+    );
+    assert!(
+        gofumpt_environment.bootstrap.is_empty(),
+        "official gofumpt asset requires no mutable module bootstrap"
+    );
+
     let cargo_fmt_environment = environments
         .get(cargo_fmt.environment_id.as_str())
         .expect("cargo-fmt controlled environment");
@@ -1245,6 +1301,7 @@ fn pinned_runner_registry_selection_is_exact_and_parser_stable() {
             "macos-arm64-eslint",
             "macos-arm64-github-actions",
             "macos-arm64-go",
+            "macos-arm64-gofumpt",
             "macos-arm64-node",
             "macos-arm64-prettier",
             "macos-arm64-python",
@@ -1285,6 +1342,7 @@ fn pinned_runner_registry_selection_is_exact_and_parser_stable() {
         [
             "buf@1.72.0",
             "go@1.26.5",
+            "gofumpt@0.11.0",
             "jq@1.8.2",
             "node@24.18.0",
             "pkl@0.31.1",
@@ -1901,6 +1959,39 @@ fn go_vet_runner_binds_the_unchanged_managed_go_environment() {
     assert!(mise_lock.contains(
         "checksum = \"sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a\""
     ));
+}
+
+#[test]
+fn gofumpt_runner_binds_the_official_binary_and_exact_go_build_metadata() {
+    let root = repository_root();
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+
+    for required in [
+        "gofumpt_selected=false",
+        "index(\"gofumpt\") != null",
+        "gofumpt_bin=$(type -P gofumpt || true)",
+        "gofumpt_go_bin=$(type -P go || true)",
+        "denied-network gofumpt closure resolves outside the managed mise root",
+        "18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b",
+        "gofumpt_size != 3115666",
+        "v0.11.0 (go1.26.5)",
+        "go version go1.26.5 darwin/arm64",
+        "version -m \"$gofumpt_bin\"",
+        "gofumpt_dep_count != 3",
+        "golang.org/x/mod\\tv0.38.0\\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=",
+        "golang.org/x/sync\\tv0.22.0\\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=",
+        "golang.org/x/tools\\tv0.48.0\\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=",
+        "vcs.revision=5dca7d819315c5c6338d290ad2e7847f07438693",
+        "vcs.time=2026-07-27T08:46:00Z",
+        "vcs.modified=false",
+        "denied-network gofumpt build metadata differs from the reviewed official asset",
+    ] {
+        assert!(
+            inner.contains(required),
+            "gofumpt runner omits {required:?}"
+        );
+    }
 }
 
 fn validate_components<'a>(

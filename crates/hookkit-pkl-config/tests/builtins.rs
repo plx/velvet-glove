@@ -1506,6 +1506,96 @@ fn go_vet_builtin_validates_zero_status_json_findings_and_action_scope() {
 }
 
 #[test]
+fn gofumpt_builtin_stages_validated_output_and_commits_transactionally() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let gofumpt = spec(&specs, "goFumpt");
+
+    assert_eq!(gofumpt.id, "gofumpt");
+    assert_eq!(gofumpt.executable, "gofumpt");
+    assert_eq!(gofumpt.workflow_order, ["format"]);
+    let workflow = gofumpt.workflows.get("format").expect("format workflow");
+    let check = workflow.check.as_ref().expect("format check");
+    let remedy = workflow.remedy.as_ref().expect("format remedy");
+    for (command, mode) in [(check, "verify"), (remedy, "write")] {
+        assert_eq!(command.program.as_deref(), Some("python"));
+        assert_workflow_argv(
+            command,
+            vec![
+                literal("-I"),
+                literal("-c"),
+                command.argv[2].clone(),
+                token(ArgToken::ToolExecutable),
+                literal("go"),
+                literal(mode),
+                token(ArgToken::ExtraArgs),
+                literal("__VELVET_GLOVE_GOFUMPT_FILES__"),
+                token(ArgToken::Files),
+            ],
+        );
+        assert_exit_codes(&command.exit_codes, &[0], &[], &[2]);
+        assert_eq!(command.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    }
+    assert!(check.issues_on_stdout);
+    assert_eq!(check.writes, WriteBehavior::None);
+    assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
+    assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+
+    let ArgvElement::Literal(adapter) = &check.argv[2] else {
+        panic!("gofumpt adapter must be a literal Python program")
+    };
+    for required in [
+        "EXPECTED_VERSION = b\"v0.11.0 (go1.26.5)\\n\"",
+        "EXPECTED_GO_VERSION = b\"go version go1.26.5 darwin/arm64\\n\"",
+        "gofumpt formatting canary returned unexpected evidence",
+        "const mode = 0o22",
+        "extra arguments are unsupported because they change formatting semantics",
+        "selected path is repeated or aliased",
+        "getattr(os, \"O_NONBLOCK\", 0)",
+        "module_semantics = {None: (\"go1\", \"\")}",
+        "len(go_version) > 64",
+        "safe_text(go_version, \"Go version\")",
+        "CONTROL_COUNT_LIMIT = 256",
+        "CONTROL_LIMIT = 16 * 1024 * 1024",
+        "[\"mod\", \"edit\", \"-json\", private_mod]",
+        "fixed = [private_tool, \"-lang=\" + lang, \"-modpath=\" + modpath]",
+        "run_child(fixed, environment, record[\"snapshot\"][\"content\"])",
+        "write_exact(record, candidate, False)",
+        "write_private_file(os.path.join(private_root, \"go.mod\"), b\"\")",
+        "rollback_targets(completed, candidates, completed_metadata)",
+        "cannot safely roll back",
+        "metadata changed after commit",
+        "gofumpt candidate is not a validated fixed point",
+        "authoritative post-commit formatting failed",
+        "acquire_write_descriptors(dirty_indices)",
+        "assert_record(record)\n            touched.append(index)",
+        "nearest module control changed for selected source",
+        "formatted candidate batch exceeds",
+        "TMPDIR must be outside the selected project root",
+        "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "native child left same-group descendants after exit",
+        "combined native output exceeded",
+        "shutil.rmtree(private_root)",
+        "<gofumpt-private>",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "gofumpt adapter omits {required:?}"
+        );
+    }
+    assert!(!adapter.contains("[private_tool, \"-w\""));
+
+    let immediate = gofumpt
+        .phases
+        .get("format")
+        .expect("immediate format phase");
+    assert_eq!(immediate.program.as_deref(), Some("python"));
+    assert_eq!(immediate.argv, remedy.argv);
+}
+
+#[test]
 fn catalog_validator_rejects_unchecked_remedies_unless_fallback_is_explicit() {
     let mut legacy = ToolSpec {
         id: "legacy".into(),
@@ -1614,11 +1704,7 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     assert_eq!(gofmt_phase.program.as_deref(), Some("python"));
     assert_eq!(gofmt_phase.argv, gofmt_remedy.argv);
 
-    for (key, check_prefix) in [
-        ("goFumpt", "-l"),
-        ("goImports", "-l"),
-        ("goLines", "--dry-run"),
-    ] {
+    for (key, check_prefix) in [("goImports", "-l"), ("goLines", "--dry-run")] {
         let tool = spec(&specs, key);
         let workflow = tool.workflows.get("format").expect("format workflow");
         let check = workflow.check.as_ref().expect("format check");
