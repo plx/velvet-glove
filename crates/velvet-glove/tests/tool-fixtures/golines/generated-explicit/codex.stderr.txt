@@ -1,2 +1,2 @@
-golines: changed example.go
+golines: changed generated_example.go
 hookkit: redirected user notices and diagnostics to protocol stderr

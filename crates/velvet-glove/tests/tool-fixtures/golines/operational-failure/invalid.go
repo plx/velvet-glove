@@ -1,0 +1,3 @@
+package operational
+
+func invalid( {

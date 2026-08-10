@@ -1,0 +1,5 @@
+package operational
+
+func First(firstArgument string, secondArgument string, thirdArgument string, fourthArgument string, fifthArgument string, sixthArgument string) string {
+	return firstArgument + secondArgument + thirdArgument + fourthArgument + fifthArgument + sixthArgument
+}
