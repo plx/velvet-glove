@@ -3705,6 +3705,40 @@ fn mutating_contract_registry_preserves_biome_target_file_writes() {
 }
 
 #[test]
+fn goimports_fixture_harness_binds_workspace_check_and_target_file_writes() {
+    let specs = builtin_index().expect("builtin specs");
+    let (_, goimports) = specs.get("goimports").expect("goimports spec");
+    let workflow = goimports
+        .workflows
+        .get("format")
+        .expect("goimports format workflow");
+    assert!(explicit_workflow_shape_matches(
+        "goimports",
+        workflow.check_scope,
+        workflow.invocation,
+    ));
+    assert_eq!(workflow.check_scope, CheckScope::Workspace);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+    assert_eq!(
+        workflow.remedy.as_ref().expect("goimports remedy").writes,
+        WriteBehavior::TargetFiles
+    );
+    assert_eq!(
+        goimports
+            .phases
+            .get("format")
+            .expect("goimports immediate format phase")
+            .writes,
+        WriteBehavior::TargetFiles
+    );
+    assert!(!explicit_workflow_shape_matches(
+        "goimports",
+        CheckScope::TargetFiles,
+        InvocationGranularity::Batch,
+    ));
+}
+
+#[test]
 fn explicit_workflow_trace_membership_keeps_gofmt_and_dclint_distinct() {
     let specs = builtin_index().expect("builtin specs");
 
@@ -7190,6 +7224,22 @@ enum GoimportsTraceInitialState {
     Final,
 }
 
+fn explicit_workflow_shape_matches(
+    tool: &str,
+    check_scope: CheckScope,
+    invocation: InvocationGranularity,
+) -> bool {
+    match tool {
+        "ghalint-workflow" => {
+            check_scope == CheckScope::Workspace && invocation == InvocationGranularity::Workspace
+        }
+        "goimports" => {
+            check_scope == CheckScope::Workspace && invocation == InvocationGranularity::Batch
+        }
+        _ => check_scope == CheckScope::TargetFiles && invocation == InvocationGranularity::Batch,
+    }
+}
+
 #[derive(Debug)]
 struct ResolvedMutatingContract {
     immediate: ResolvedContract,
@@ -7234,13 +7284,8 @@ fn resolve_real_tool_contract(
                 case.tool, contract.phase_id
             )
         })?;
-        let expected_shape = if case.tool == "ghalint-workflow" {
-            workflow.check_scope == CheckScope::Workspace
-                && workflow.invocation == InvocationGranularity::Workspace
-        } else {
-            workflow.check_scope == CheckScope::TargetFiles
-                && workflow.invocation == InvocationGranularity::Batch
-        };
+        let expected_shape =
+            explicit_workflow_shape_matches(&case.tool, workflow.check_scope, workflow.invocation);
         if !workflow.enabled || !expected_shape {
             return Err(format!(
                 "{} explicit workflow {:?} has the wrong enabled/scope/invocation contract; got enabled={} scope={:?} invocation={:?}",
@@ -7503,12 +7548,19 @@ fn resolve_mutating_tool_contract(
             )
         })?;
         if !workflow.enabled
-            || workflow.check_scope != CheckScope::TargetFiles
-            || workflow.invocation != InvocationGranularity::Batch
+            || !explicit_workflow_shape_matches(
+                &case.tool,
+                workflow.check_scope,
+                workflow.invocation,
+            )
         {
             return Err(format!(
-                "{} mutating explicit workflow {:?} must be enabled, target-files scoped, and batch invoked",
-                case.tool, contract.phase_id
+                "{} mutating explicit workflow {:?} has the wrong enabled/scope/invocation contract; got enabled={} scope={:?} invocation={:?}",
+                case.tool,
+                contract.phase_id,
+                workflow.enabled,
+                workflow.check_scope,
+                workflow.invocation
             ));
         }
         let remedy_command = workflow.remedy.as_ref().ok_or_else(|| {
