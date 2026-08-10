@@ -1,0 +1,30 @@
+warning: go vet: issues remain; diagnostics: <workspace>/.velvet-glove/go-vet-agent-hook/test-session_go-vet-tool_go-vet-tool-issues.txt
+go vet diagnostics:
+[verify] command: python -I -c <inline-script> go __VELVET_GLOVE_GO_VET_WORKSPACE__ <workspace>/go.mod
+status: Some(1)
+classification: Some(Issues)
+stdout:
+{
+	"example.com/govettests": {
+		"printf": [
+			{
+				"posn": "<workspace>/example_test.go:10:14",
+				"end": "<workspace>/example_test.go:10:16",
+				"message": "fmt.Printf format %d has arg \"internal-test\" of wrong type string"
+			}
+		]
+	}
+}
+{
+	"example.com/govettests_test": {
+		"printf": [
+			{
+				"posn": "<workspace>/external_test.go:10:14",
+				"end": "<workspace>/external_test.go:10:16",
+				"message": "fmt.Printf format %d has arg \"external-test\" of wrong type string"
+			}
+		]
+	}
+}
+artifact: <workspace>/.velvet-glove/go-vet-agent-hook/test-session_go-vet-tool_go-vet-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

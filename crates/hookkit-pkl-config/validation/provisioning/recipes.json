@@ -1722,6 +1722,31 @@
       "representativeCase": "multi-file"
     },
     {
+      "id": "go-vet-macos-arm64",
+      "toolId": "go-vet",
+      "environmentId": "macos-arm64-go",
+      "version": "go1.26.5",
+      "installationSource": "official go1.26.5 Darwin arm64 archive at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a, tag commit c19862e5f8415b4f24b189d065ed739517c548ba, and the exact mise archive lock in validation/provisioning/mise.lock",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock"
+      },
+      "probe": {
+        "argv": ["go", "version"],
+        "match": "exact",
+        "expected": "go version go1.26.5 darwin/arm64"
+      },
+      "caseExecutables": ["go", "python"],
+      "cases": [
+        "clean",
+        "multi-package",
+        "operational-failure",
+        "printf-mismatch",
+        "test-findings"
+      ],
+      "representativeCase": "test-findings"
+    },
+    {
       "id": "errcheck-macos-arm64",
       "toolId": "errcheck",
       "environmentId": "macos-arm64-errcheck",

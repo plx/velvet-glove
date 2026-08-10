@@ -1429,6 +1429,83 @@ fn errcheck_builtin_uses_isolated_workspace_adapter() {
 }
 
 #[test]
+fn go_vet_builtin_validates_zero_status_json_findings_and_action_scope() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let go_vet = spec(&specs, "goVet");
+
+    assert_eq!(go_vet.id, "go-vet");
+    assert_eq!(go_vet.display_name, "go vet");
+    assert_eq!(go_vet.executable, "go");
+    assert_eq!(go_vet.workspace_indicator.as_deref(), Some("go.mod"));
+    assert_eq!(go_vet.phase_invocation, InvocationGranularity::Batch);
+    assert!(
+        go_vet.workflows.is_empty(),
+        "go vet retains compatibility-translated deferred verification"
+    );
+    assert_eq!(go_vet.phase_order, ["verify"]);
+
+    let verify = go_vet.phases.get("verify").expect("verify");
+    assert_eq!(verify.program.as_deref(), Some("python"));
+    assert_argv(
+        verify,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            verify.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_GO_VET_WORKSPACE__"),
+            token(ArgToken::WorkspaceIndicator),
+        ],
+    );
+    let ArgvElement::Literal(adapter) = &verify.argv[2] else {
+        panic!("go vet adapter must be a literal Python program")
+    };
+    for required in [
+        "EXPECTED_GO_VERSION = \"go1.26.5\"",
+        "ambient Go overrides are unsupported",
+        "class AdapterSignal(BaseException)",
+        "class EvidenceError(Exception)",
+        "start_new_session=True",
+        "leader_exit_deadline = time.monotonic() + 0.25",
+        "native go left same-group descendants after child exit",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "adapter_error = drain_blocked_signals(adapter_error)",
+        "shutil.rmtree(private_root)",
+        "<go-vet-private>",
+        "combined output exceeded",
+        "JSON object repeats field",
+        "record, cursor = json_decoder.raw_decode(text, cursor)",
+        "go vet emitted {len(records)} action objects",
+        "go vet embedded an analyzer error",
+        "has an invalid diagnostic field set",
+        "has an invalid suggested-fix field set",
+        "is outside its analyzed package action",
+        "go list omitted physical Go sources",
+        "workspace Go source set changed while go vet was running",
+        "[tool, \"mod\", \"verify\"]",
+        "[tool, \"list\", \"-mod=readonly\", \"-json\", \"./...\"]",
+        "[tool, \"vet\", \"-json\", \"-mod=readonly\", \"./...\"]",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "go vet adapter omits {required:?}"
+        );
+    }
+    assert_eq!(
+        adapter
+            .matches("record, cursor = json_decoder.raw_decode(text, cursor)")
+            .count(),
+        1,
+        "the stream decoder must advance exactly once per object"
+    );
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
+    assert_eq!(verify.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(verify.writes, WriteBehavior::None);
+}
+
+#[test]
 fn catalog_validator_rejects_unchecked_remedies_unless_fallback_is_explicit() {
     let mut legacy = ToolSpec {
         id: "legacy".into(),
