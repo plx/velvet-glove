@@ -890,6 +890,9 @@
           "id": "golines-apply-closure",
           "argv": [
             "/usr/bin/patch",
+            "-f",
+            "-d",
+            "{state}/golines-build-0.13.0-vg1/source",
             "-p1",
             "-i",
             "{repository}/crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch"

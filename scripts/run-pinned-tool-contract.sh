@@ -2119,12 +2119,9 @@ if [[ $golines_selected == true ]]; then
       echo "error: golines source archive does not contain the reviewed unpatched inputs" >&2
       exit 1
     fi
-    (
-      cd "$golines_source"
-      env -i "${provisioning_env[@]}" \
-        "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
-        /usr/bin/patch -p1 -i "$golines_patch"
-    )
+    env -i "${provisioning_env[@]}" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      /usr/bin/patch -f -d "$golines_source" -p1 -i "$golines_patch"
     if ! /usr/bin/cmp -s "$golines_source/go.mod" "$golines_manifest" || \
       ! /usr/bin/cmp -s "$golines_source/go.sum" "$golines_lock" || \
       [[ $(/usr/bin/shasum -a 256 "$golines_source/main.go" | /usr/bin/awk '{print $1}') != \

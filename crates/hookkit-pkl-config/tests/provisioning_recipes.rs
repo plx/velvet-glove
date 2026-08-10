@@ -2254,6 +2254,15 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
         golines_block.contains("\"$golines_go_bin\" -C \"$golines_source\" mod download\n"),
         "golines runner must execute exact no-argument go mod download"
     );
+    assert!(
+        golines_block
+            .contains("/usr/bin/patch -f -d \"$golines_source\" -p1 -i \"$golines_patch\""),
+        "golines runner must explicitly bind patch's source directory after mise changes cwd"
+    );
+    assert!(
+        !golines_block.contains("cd \"$golines_source\""),
+        "golines runner must not rely on a subshell cwd that mise -C replaces"
+    );
     for forbidden in [
         "$golines_build_dir/go-mod-cache",
         "$golines_build_dir/bootstrap-go-build-cache",
@@ -2276,6 +2285,11 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
         .iter()
         .find(|component| component.id == "golines")
         .expect("golines component");
+    let apply_closure = environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "golines-apply-closure")
+        .expect("golines closure patch");
     let download = environment
         .bootstrap
         .iter()
@@ -2335,6 +2349,22 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
     let source_build: serde_json::Value =
         serde_json::from_str(GOLINES_SOURCE_BUILD_JSON).expect("golines source-build provenance");
     assert_eq!(
+        apply_closure.argv,
+        [
+            "/usr/bin/patch",
+            "-f",
+            "-d",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "-p1",
+            "-i",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch",
+        ]
+    );
+    assert_eq!(
+        apply_closure.working_directory.as_deref(),
+        Some("{state}/golines-build-0.13.0-vg1/source")
+    );
+    assert_eq!(
         source_build["build"]["environment"]["GOMODCACHE"],
         runner_mod_cache
     );
@@ -2352,6 +2382,17 @@ fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact()
             runner_bootstrap_cache
         );
     }
+    assert_eq!(
+        source_build["build"]["bootstrap"][0]["argv"],
+        serde_json::to_value(&apply_closure.argv).expect("golines registry patch argv JSON")
+    );
+    assert_eq!(
+        source_build["build"]["bootstrap"][0]["workingDirectory"],
+        apply_closure
+            .working_directory
+            .as_deref()
+            .expect("golines registry patch working directory")
+    );
     assert_eq!(
         source_build["build"]["bootstrap"][1]["argv"],
         serde_json::to_value(&download.argv).expect("golines registry download argv JSON")
