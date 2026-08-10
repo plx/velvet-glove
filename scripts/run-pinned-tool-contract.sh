@@ -79,6 +79,7 @@ ruby_extract_dir=
 betterleaks_build_dir=
 ghalint_build_dir=
 errcheck_build_dir=
+goimports_build_dir=
 cleanup() {
   case $run_home in
     /private/tmp/velvet-glove-pinned.*) rm -rf -- "$run_home" ;;
@@ -115,6 +116,9 @@ cleanup() {
   esac
   case $errcheck_build_dir in
     "$state_dir"/errcheck-build-1.20.0) rm -rf -- "$errcheck_build_dir" ;;
+  esac
+  case $goimports_build_dir in
+    "$state_dir"/goimports-build-0.48.0) rm -rf -- "$goimports_build_dir" ;;
   esac
 }
 trap cleanup EXIT INT TERM
@@ -325,6 +329,12 @@ if "$jq_bin" -en --arg selection "$selection" \
   >/dev/null; then
   errcheck_selected=true
 fi
+goimports_selected=false
+if "$jq_bin" -en --arg selection "$selection" \
+  '$selection | split(",") | map(split("/")[0]) | index("goimports") != null' \
+  >/dev/null; then
+  goimports_selected=true
+fi
 
 tool_specs=()
 while IFS= read -r tool_spec; do
@@ -400,6 +410,42 @@ validate_errcheck_binary() {
   expected_metadata_body=$'\tpath\tgithub.com/kisielk/errcheck\n\tmod\tgithub.com/kisielk/errcheck\tv1.20.0\th1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=\n\tdep\tgolang.org/x/mod\tv0.35.0\th1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=\n\tdep\tgolang.org/x/sync\tv0.20.0\th1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=\n\tdep\tgolang.org/x/tools\tv0.44.0\th1:UP4ajHPIcuMjT1GqzDWRlalUEoY+uzoZKnhOjbIPD2c=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
   if [[ $metadata_body != "$expected_metadata_body" ]]; then
     echo "error: errcheck artifact module or build metadata differs from the exact closure" >&2
+    return 1
+  fi
+}
+
+validate_goimports_binary() {
+  local binary=$1
+  local go_binary=$2
+  local expected_sha256=$3
+  local observed_sha256
+  local observed_size
+  local metadata
+  local metadata_body
+  local expected_metadata_body
+
+  if [[ ! -f $binary || -L $binary || ! -x $binary ]]; then
+    echo "error: controlled goimports artifact is not an executable regular file: $binary" >&2
+    return 1
+  fi
+  read -r observed_sha256 _ < <(/usr/bin/shasum -a 256 "$binary")
+  observed_size=$(/usr/bin/stat -f '%z' "$binary")
+  if [[ $observed_sha256 != "$expected_sha256" || $observed_size != 5814322 ]]; then
+    echo "error: controlled goimports artifact checksum or size mismatch" >&2
+    return 1
+  fi
+  metadata=$(env -i "${provisioning_env[@]}" \
+    "PATH=${go_binary%/bin/go}/bin:/usr/bin:/bin" \
+    "GOTOOLCHAIN=local" \
+    "$go_binary" version -m "$binary")
+  if [[ ${metadata%%$'\n'*} != "$binary: go1.26.5" ]]; then
+    echo "error: goimports artifact was not linked by locked Go 1.26.5" >&2
+    return 1
+  fi
+  metadata_body=${metadata#*$'\n'}
+  expected_metadata_body=$'\tpath\tgolang.org/x/tools/cmd/goimports\n\tmod\tgolang.org/x/tools\tv0.48.0\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=\n\tdep\tgolang.org/x/mod\tv0.38.0\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=\n\tdep\tgolang.org/x/sync\tv0.22.0\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=\n\tdep\tgolang.org/x/telemetry\tv0.0.0-20260708182218-49f421fb7959\th1:RJhm5l6Fo4rmEIcndxDllNhhf/fAx8qIm4t6A7vpm2A=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
+  if [[ $metadata_body != "$expected_metadata_body" ]]; then
+    echo "error: goimports artifact module or build metadata differs from the exact closure" >&2
     return 1
   fi
 }
@@ -1666,6 +1712,192 @@ if [[ $errcheck_selected == true ]]; then
   validate_errcheck_binary \
     "$errcheck_binary" "$errcheck_go_bin" "$errcheck_expected_sha256"
   verify_macho_closure "$errcheck_root" errcheck-macos-arm64
+fi
+
+if [[ $goimports_selected == true ]]; then
+  goimports_identity=$(recipe_integrity_json goimports-macos-arm64)
+  goimports_root=$(pinned_component_cache_root \
+    "$state_dir" goimports-0.48.0 "$goimports_identity")
+  goimports_binary="$goimports_root/bin/goimports"
+  goimports_expected_sha256=$(printf '%s\n' "$goimports_identity" | \
+    "$jq_bin" -r '.integrity.builtArtifactSha256')
+  goimports_manifest_path=$(printf '%s\n' "$goimports_identity" | \
+    "$jq_bin" -r '.integrity.moduleManifestPath')
+  goimports_lock_path=$(printf '%s\n' "$goimports_identity" | \
+    "$jq_bin" -r '.integrity.moduleLockPath')
+  goimports_manifest_sha256=$(printf '%s\n' "$goimports_identity" | \
+    "$jq_bin" -r '.integrity.moduleManifestSha256')
+  goimports_lock_sha256=$(printf '%s\n' "$goimports_identity" | \
+    "$jq_bin" -r '.integrity.moduleLockSha256')
+  goimports_proxy_sha256=$(printf '%s\n' "$goimports_identity" | \
+    "$jq_bin" -r '.integrity.sha256')
+  if [[ $goimports_expected_sha256 != \
+      2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27 || \
+    $goimports_proxy_sha256 != \
+      8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755 || \
+    $(printf '%s\n' "$goimports_identity" | \
+      "$jq_bin" -r '.integrity.buildToolchainComponentId') != goimports-go ]]; then
+    echo "error: goimports recipe does not cross-link the reviewed proxy, artifact, and Go identity" >&2
+    exit 1
+  fi
+  goimports_manifest="$repository_root/$goimports_manifest_path"
+  goimports_lock="$repository_root/$goimports_lock_path"
+  if [[ ! -f $goimports_manifest || -L $goimports_manifest || \
+    ! -f $goimports_lock || -L $goimports_lock ]]; then
+    echo "error: goimports exact module closure is missing or linked" >&2
+    exit 1
+  fi
+  read -r observed_goimports_manifest_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$goimports_manifest"
+  )
+  read -r observed_goimports_lock_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$goimports_lock"
+  )
+  if [[ $observed_goimports_manifest_sha256 != "$goimports_manifest_sha256" || \
+    $observed_goimports_lock_sha256 != "$goimports_lock_sha256" ]]; then
+    echo "error: goimports module manifest or sum checksum mismatch" >&2
+    exit 1
+  fi
+
+  goimports_go_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where go@1.26.5)
+  goimports_go_bin="$goimports_go_root/bin/go"
+  case $goimports_go_bin in
+    "$state_dir"/*) ;;
+    *)
+      echo "error: pinned goimports Go resolved outside the controlled state: $goimports_go_bin" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! -f $goimports_go_bin || -L $goimports_go_bin || ! -x $goimports_go_bin ]]; then
+    echo "error: pinned goimports Go executable is unavailable: $goimports_go_bin" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" \
+    "PATH=$goimports_go_root/bin:/usr/bin:/bin" \
+    "GOTOOLCHAIN=local" \
+    "$goimports_go_bin" version) != "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: pinned goimports build toolchain is not exact Go 1.26.5 Darwin arm64" >&2
+    exit 1
+  fi
+
+  if [[ -e $goimports_root && ( ! -d $goimports_root || -L $goimports_root ) ]]; then
+    echo "error: controlled goimports root is not a directory: $goimports_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $goimports_root ]]; then
+    echo "==> Building exact goimports v0.48.0 with locked Go 1.26.5"
+    goimports_build_dir="$state_dir/goimports-build-0.48.0"
+    if [[ -e $goimports_build_dir ]]; then
+      echo "warning: removing stale transactional goimports build directory" >&2
+      rm -rf -- "$goimports_build_dir"
+    fi
+    goimports_staging_root="$goimports_build_dir/install"
+    goimports_staging_binary="$goimports_staging_root/bin/goimports"
+    goimports_mod_cache="$state_dir/goimports-go1.26.5-mod-cache"
+    goimports_bootstrap_cache="$state_dir/goimports-bootstrap-go1.26.5-build-cache"
+    mkdir -p \
+      "$goimports_staging_root/bin" \
+      "$goimports_build_dir/go-build-cache" \
+      "$goimports_mod_cache" \
+      "$goimports_bootstrap_cache"
+    goimports_go_env=(
+      "${provisioning_env[@]}"
+      "PATH=$goimports_go_root/bin:/usr/bin:/bin"
+      "GOENV=off"
+      "GOTOOLCHAIN=local"
+      "CGO_ENABLED=0"
+      "GOOS=darwin"
+      "GOARCH=arm64"
+      "GOARM64=v8.0"
+      "GOMODCACHE=$goimports_mod_cache"
+    )
+    env -i "${goimports_go_env[@]}" \
+      "GOCACHE=$goimports_bootstrap_cache" \
+      "GOPROXY=https://proxy.golang.org" \
+      "GOSUMDB=sum.golang.org" \
+      "$goimports_go_bin" -C "${goimports_manifest%/go.mod}" mod download \
+        golang.org/x/tools@v0.48.0 \
+        golang.org/x/mod@v0.38.0 \
+        golang.org/x/sync@v0.22.0 \
+        golang.org/x/telemetry@v0.0.0-20260708182218-49f421fb7959
+    read -r observed_goimports_manifest_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$goimports_manifest"
+    )
+    read -r observed_goimports_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$goimports_lock"
+    )
+    if [[ $observed_goimports_manifest_sha256 != "$goimports_manifest_sha256" || \
+      $observed_goimports_lock_sha256 != "$goimports_lock_sha256" ]]; then
+      echo "error: goimports network bootstrap changed the exact module inputs" >&2
+      exit 1
+    fi
+    goimports_archives=(
+      "golang.org/x/tools/@v/v0.48.0.zip:8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755"
+      "golang.org/x/tools/@v/v0.48.0.mod:e6b55566a172ecfd21e5f4a8750f2d25665287288b24ff8d4e6cea5d5078c608"
+      "golang.org/x/mod/@v/v0.38.0.zip:b19d1a19527f75bf148198b44be37784f7d7d22597b46e260bf22d1b320fe12c"
+      "golang.org/x/mod/@v/v0.38.0.mod:c584b29967a2cf46a7b8eacd85cb34d5bb0ab2d61a7a46ebc0a1ee362516e410"
+      "golang.org/x/sync/@v/v0.22.0.zip:4bc67d258ce7867cfc1a43765c43d98b4c49b90c46dd0b86f896a5a4909fade0"
+      "golang.org/x/sync/@v/v0.22.0.mod:a3e29e76060bd561060454b1fa2bdcd66674f60c9ca93833b8106355e34c603c"
+      "golang.org/x/telemetry/@v/v0.0.0-20260708182218-49f421fb7959.zip:5487d5d99925cc2ad6884e66d70906ac13aa0180d88387bc66f0c706276c2f22"
+      "golang.org/x/telemetry/@v/v0.0.0-20260708182218-49f421fb7959.mod:f2675940de8f52f9d92c692ba4c2c793bb0d485ef582a0a6d99dd8ec3b97547f"
+    )
+    for archive_binding in "${goimports_archives[@]}"; do
+      archive_relative=${archive_binding%%:*}
+      archive_expected=${archive_binding#*:}
+      archive_path="$goimports_mod_cache/cache/download/$archive_relative"
+      if [[ ! -f $archive_path || -L $archive_path ]]; then
+        echo "error: goimports proxy bootstrap omitted $archive_relative" >&2
+        exit 1
+      fi
+      read -r archive_observed _ < <(/usr/bin/shasum -a 256 "$archive_path")
+      if [[ $archive_observed != "$archive_expected" ]]; then
+        echo "error: goimports proxy object checksum mismatch for $archive_relative" >&2
+        exit 1
+      fi
+    done
+    env -i "${goimports_go_env[@]}" \
+      "GOCACHE=$goimports_bootstrap_cache" \
+      "GOPROXY=off" \
+      "GOSUMDB=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$goimports_go_bin" -C "${goimports_manifest%/go.mod}" mod verify
+    (
+      cd /
+      env -i "${goimports_go_env[@]}" \
+        "GOCACHE=$goimports_build_dir/go-build-cache" \
+        "GOPROXY=file://$goimports_mod_cache/cache/download" \
+        "GOSUMDB=off" \
+        "GOBIN=$goimports_staging_root/bin" \
+        "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+        "$goimports_go_bin" install \
+          -trimpath \
+          -ldflags '-s -w -buildid=' \
+          golang.org/x/tools/cmd/goimports@v0.48.0
+    )
+    validate_goimports_binary \
+      "$goimports_staging_binary" "$goimports_go_bin" "$goimports_expected_sha256"
+    printf '%s\n' "$goimports_identity" \
+      >"$goimports_staging_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$goimports_staging_root" goimports-macos-arm64
+    mv "$goimports_staging_root" "$goimports_root"
+    rm -rf -- "$goimports_build_dir"
+    goimports_build_dir=
+  fi
+  if ! pinned_component_cache_valid \
+    "$goimports_root" "$goimports_identity" bin/goimports; then
+    echo "error: controlled goimports installation does not match its exact recipe identity" >&2
+    exit 1
+  fi
+  if [[ -n $(/usr/bin/find "$goimports_root" -type l -print -quit) || \
+    $(/usr/bin/find "$goimports_root" -type f | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 2 || \
+    $(/usr/bin/find "$goimports_root" -type d | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 2 || \
+    -n $(/usr/bin/find "$goimports_root" -mindepth 1 ! -type d ! -type f -print -quit) ]]; then
+    echo "error: controlled goimports installation has an unexpected or linked closure" >&2
+    exit 1
+  fi
+  validate_goimports_binary \
+    "$goimports_binary" "$goimports_go_bin" "$goimports_expected_sha256"
+  verify_macho_closure "$goimports_root" goimports-macos-arm64
 fi
 
 if needs_group ruby; then

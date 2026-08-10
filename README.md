@@ -158,12 +158,13 @@ just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
 just tool-case go-vet test-findings
 just tool-case errcheck multi-file
+just tool-case goimports multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Twenty-two behavior-rich contracts across seventeen environments: jq, Buf, and
+# Twenty-three behavior-rich contracts across eighteen environments: jq, Buf, and
 # Vacuum data formats; shared Node; dedicated Prettier, Contextlint, dclint,
-# ESLint, and GitHub Actions; Python, gofmt/go vet, errcheck, Rust, Cargo Clippy/Fmt,
+# ESLint, and GitHub Actions; Python, gofmt/go vet, errcheck, goimports, Rust, Cargo Clippy/Fmt,
 # Ruby, security, and native macOS.
 just tool-representatives
 
@@ -322,6 +323,18 @@ proves false-clean, mutation, malformed-output, alias, signal, and orphan
 failure behavior. Exact provenance and remaining filesystem/process boundaries
 are in the
 [errcheck contract](docs/pinned-tool-environments.md#errcheck-validation-contract).
+
+The dedicated goimports lane pins x/tools v0.48.0 and its exact four-module
+build closure, then reproducibly builds the formatter with locked Go 1.26.5.
+Its isolated adapter reconstructs the complete physical single-module Go tree,
+seals resolver inputs behind a minimal private GOROOT and empty module/GOPATH
+caches, validates per-file and whole-batch fixed points, and never runs native
+`-w` against the project. The representative adds both a physical main-module
+import and a same-directory sibling import while removing an unused import,
+then proves exact transactional diff, final verification, and idempotence.
+Exact source/build provenance, closed-module scope, rollback rules, and
+remaining resolver and process limitations are in the
+[goimports contract](docs/pinned-tool-environments.md#goimports-validation-contract).
 
 The dedicated Cargo Clippy lane pins the official Rust and Cargo 1.97.1
 distribution with Clippy 0.1.97. Its isolated adapter runs frozen read-only

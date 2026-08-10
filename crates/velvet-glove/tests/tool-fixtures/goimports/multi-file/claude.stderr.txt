@@ -1,0 +1,2 @@
+goimports: changed main.go, unused.go
+hookkit: redirected user notices and diagnostics to protocol stderr

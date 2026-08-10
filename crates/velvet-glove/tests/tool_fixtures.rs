@@ -17,6 +17,7 @@ use hookkit_pkl_config::{
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -609,6 +610,7 @@ enum TracePlan {
         commands: &'static [&'static [&'static str]],
     },
     GofumptPrivateInputsAdapter,
+    GoimportsPrivateModuleAdapter,
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
         validation: &'static [&'static str],
@@ -741,6 +743,51 @@ const GOFUMPT_FILES_MARKER: &str = "__VELVET_GLOVE_GOFUMPT_FILES__";
 const GOFUMPT_PRIVATE_ROOT_PLACEHOLDER: &str = "<gofumpt-private>";
 const GOFUMPT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-gofumpt-";
 const GOFUMPT_TRACE_PLAN: TracePlan = TracePlan::GofumptPrivateInputsAdapter;
+
+const GOIMPORTS_FILES_MARKER: &str = "__VELVET_GLOVE_GOIMPORTS_FILES__";
+const GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER: &str = "<goimports-private>";
+const GOIMPORTS_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-goimports-";
+const GOIMPORTS_TRACE_PLAN: TracePlan = TracePlan::GoimportsPrivateModuleAdapter;
+const GOIMPORTS_POISON_ENV_VALUE: &str = "velvet-glove-goimports-adapter-must-clear-this";
+const GOIMPORTS_CONTROLLED_ENV: &[(&str, &str)] = &[
+    ("TERM", "dumb"),
+    ("CGO_ENABLED", "0"),
+    ("GO111MODULE", "on"),
+    ("GOAUTH", "off"),
+    ("GOARCH", "arm64"),
+    ("GOARM64", "v8.0"),
+    ("GODEBUG", ""),
+    ("GOENV", "off"),
+    ("GOFLAGS", "-mod=readonly"),
+    ("GOINSECURE", ""),
+    ("GOMAXPROCS", "1"),
+    ("GONOPROXY", "none"),
+    ("GONOSUMDB", "*"),
+    ("GOOS", "darwin"),
+    ("GOPRIVATE", ""),
+    ("GOPROXY", "off"),
+    ("GOSUMDB", "off"),
+    ("GOTELEMETRY", "off"),
+    ("GOTOOLCHAIN", "local"),
+    ("GOVCS", "*:off"),
+    ("GOWORK", "off"),
+];
+const GOIMPORTS_SCRUBBED_ENV: &[&str] = &[
+    "CC",
+    "CXX",
+    "CGO_CFLAGS",
+    "CGO_CPPFLAGS",
+    "CGO_CXXFLAGS",
+    "CGO_LDFLAGS",
+    "PKG_CONFIG",
+    "GOEXPERIMENT",
+    "GO_VELVET_GLOVE_POISON",
+    "GOIMPORTS_VELVET_GLOVE_POISON",
+    "DYLD_VELVET_GLOVE_POISON",
+    "LD_VELVET_GLOVE_POISON",
+    "CI",
+    "DEBUG",
+];
 
 const PRETTIER_FILES_MARKER: &str = "__VELVET_GLOVE_PRETTIER_FILES__";
 const PRETTIER_MODE_ARGUMENTS: &[(&str, &[&str])] = &[
@@ -2020,6 +2067,66 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["classification: Some(Issues)", "<gofumpt-private>"],
             trace_plan: GOFUMPT_TRACE_PLAN,
         },
+        ("goimports", "clean") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &["<goimports-private>"],
+            trace_plan: GOIMPORTS_TRACE_PLAN,
+        },
+        ("goimports", "missing-import") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go"],
+            diagnostic_excludes: &["<goimports-private>"],
+            trace_plan: GOIMPORTS_TRACE_PLAN,
+        },
+        ("goimports", "multi-file") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["main.go", "selected-clean.go", "unused.go"],
+                exit_code: 0,
+                trace_exit_codes: &[
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["main.go", "unused.go"],
+            diagnostic_excludes: &[
+                "selected-clean.go",
+                "sibling-external.go",
+                "unselected-sentinel.go",
+                "widget/widget.go",
+                "<goimports-private>",
+            ],
+            trace_plan: GOIMPORTS_TRACE_PLAN,
+        },
+        ("goimports", "operational-failure") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "invalid.go"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &["invalid.go:3:", "goimports syntax preflight exited 2"],
+            diagnostic_excludes: &["classification: Some(Issues)", "<goimports-private>"],
+            trace_plan: GOIMPORTS_TRACE_PLAN,
+        },
         ("go-vet", "clean") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -2171,7 +2278,8 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
         },
         (
             "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
-            | "cargo-clippy" | "dclint" | "errcheck" | "go-fmt" | "go-vet" | "prettier" | "vacuum",
+            | "cargo-clippy" | "dclint" | "errcheck" | "go-fmt" | "go-vet" | "gofumpt"
+            | "goimports" | "prettier" | "vacuum",
             other,
         ) => {
             return Err(format!(
@@ -2942,9 +3050,93 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
+        ("goimports", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("goimports", "missing-import") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.go"],
+        },
+        ("goimports", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["main.go", "selected-clean.go", "unused.go"],
+                exit_code: 0,
+                trace_exit_codes: &[
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0,
+                ],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["main.go", "selected-clean.go", "unused.go"],
+                exit_code: 0,
+                trace_exit_codes: &[
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0,
+                ],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["main.go", "selected-clean.go", "unused.go"],
+                exit_code: 0,
+                trace_exit_codes: &[
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["main.go", "unused.go"],
+        },
+        ("goimports", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "invalid.go"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
         (
             "biome" | "prettier" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "dclint"
-            | "go-fmt" | "gofumpt",
+            | "go-fmt" | "gofumpt" | "goimports",
             other,
         ) => {
             return Err(format!(
@@ -3510,6 +3702,40 @@ fn mutating_contract_registry_preserves_biome_target_file_writes() {
         assert_eq!(contract.remedy_mode, PhaseMode::Fix);
         assert_eq!(contract.remedy_writes, WriteBehavior::TargetFiles);
     }
+}
+
+#[test]
+fn goimports_fixture_harness_binds_workspace_check_and_target_file_writes() {
+    let specs = builtin_index().expect("builtin specs");
+    let (_, goimports) = specs.get("goimports").expect("goimports spec");
+    let workflow = goimports
+        .workflows
+        .get("format")
+        .expect("goimports format workflow");
+    assert!(explicit_workflow_shape_matches(
+        "goimports",
+        workflow.check_scope,
+        workflow.invocation,
+    ));
+    assert_eq!(workflow.check_scope, CheckScope::Workspace);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+    assert_eq!(
+        workflow.remedy.as_ref().expect("goimports remedy").writes,
+        WriteBehavior::TargetFiles
+    );
+    assert_eq!(
+        goimports
+            .phases
+            .get("format")
+            .expect("goimports immediate format phase")
+            .writes,
+        WriteBehavior::TargetFiles
+    );
+    assert!(!explicit_workflow_shape_matches(
+        "goimports",
+        CheckScope::TargetFiles,
+        InvocationGranularity::Batch,
+    ));
 }
 
 #[test]
@@ -4938,6 +5164,8 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
         dclint_toolchain: None,
         eslint: false,
         gofumpt: false,
+        goimports: false,
+        goimports_fixture_root: None,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -5005,6 +5233,8 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
         dclint_toolchain: None,
         eslint: false,
         gofumpt: false,
+        goimports: false,
+        goimports_fixture_root: None,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -5091,6 +5321,8 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         dclint_toolchain: None,
         eslint: false,
         gofumpt: false,
+        goimports: false,
+        goimports_fixture_root: None,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -5162,6 +5394,8 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         dclint_toolchain: None,
         eslint: false,
         gofumpt: false,
+        goimports: false,
+        goimports_fixture_root: None,
     };
 
     let environment = verify_gofmt_trace_environment(&record, &harness)
@@ -5276,6 +5510,8 @@ fn errcheck_trace_environment_is_private_offline_and_bound_to_managed_go() {
         dclint_toolchain: None,
         eslint: false,
         gofumpt: false,
+        goimports: false,
+        goimports_fixture_root: None,
     };
     let mut observed_private_root = None;
 
@@ -5578,6 +5814,19 @@ fn gofumpt_evaluated_adapter_adversarial_lifecycle() {
 }
 
 #[test]
+#[ignore = "evaluated goimports adapter adversarial lifecycle; requires controlled Python"]
+fn goimports_evaluated_adapter_adversarial_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("goimports")
+        .unwrap_or_else(|| panic!("builtin catalog has no goimports spec"));
+    verify_goimports_adapter_adversarial_lifecycle(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated Cargo Fmt adapter lifecycle; requires controlled Python"]
 fn cargo_fmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -5745,6 +5994,11 @@ fn run_all_tool_fixtures() {
         verify_gofumpt_adapter_adversarial_lifecycle(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("gofumpt adapter adversarial lifecycle probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "goimports") {
+        verify_goimports_adapter_adversarial_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("goimports adapter adversarial lifecycle probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "cargo-fmt") {
         verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -6683,12 +6937,17 @@ fn run_mutating_fixture_case_inner(
     } else {
         verify_idempotent_immediate_output(case, surface, &repeated, &workspace.project)?;
     }
-    verify_tool_trace_invocations(
+    verify_tool_trace_invocations_with_state(
         trace,
         "immediate-2",
         &repeat_trace,
         &workspace.project,
         &workspace.evidence.join("immediate-2-trace.json"),
+        if mutation.changed_targets.is_empty() {
+            GoimportsTraceInitialState::Original
+        } else {
+            GoimportsTraceInitialState::Final
+        },
     )?;
     let after_second = TreeSnapshot::read(&workspace.project)?;
     let repeat_diff = after_first.diff(&after_second);
@@ -6773,6 +7032,7 @@ fn run_mutating_fixture_case_inner(
         1,
         &restored,
         &first_expectation,
+        GoimportsTraceInitialState::Original,
     )?;
     let after_deferred_first = TreeSnapshot::read(&workspace.project)?;
 
@@ -6853,6 +7113,11 @@ fn run_mutating_fixture_case_inner(
         2,
         &after_deferred_first,
         &second_expectation,
+        if first_expectation.changed_targets.is_empty() {
+            GoimportsTraceInitialState::Original
+        } else {
+            GoimportsTraceInitialState::Final
+        },
     )?;
     let expect_equal_semantics = mutation.changed_targets.is_empty();
     if expect_equal_semantics && first_semantic != second_semantic {
@@ -6953,6 +7218,28 @@ struct ResolvedTraceInvocation {
     exit_code: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoimportsTraceInitialState {
+    Original,
+    Final,
+}
+
+fn explicit_workflow_shape_matches(
+    tool: &str,
+    check_scope: CheckScope,
+    invocation: InvocationGranularity,
+) -> bool {
+    match tool {
+        "ghalint-workflow" => {
+            check_scope == CheckScope::Workspace && invocation == InvocationGranularity::Workspace
+        }
+        "goimports" => {
+            check_scope == CheckScope::Workspace && invocation == InvocationGranularity::Batch
+        }
+        _ => check_scope == CheckScope::TargetFiles && invocation == InvocationGranularity::Batch,
+    }
+}
+
 #[derive(Debug)]
 struct ResolvedMutatingContract {
     immediate: ResolvedContract,
@@ -6997,13 +7284,8 @@ fn resolve_real_tool_contract(
                 case.tool, contract.phase_id
             )
         })?;
-        let expected_shape = if case.tool == "ghalint-workflow" {
-            workflow.check_scope == CheckScope::Workspace
-                && workflow.invocation == InvocationGranularity::Workspace
-        } else {
-            workflow.check_scope == CheckScope::TargetFiles
-                && workflow.invocation == InvocationGranularity::Batch
-        };
+        let expected_shape =
+            explicit_workflow_shape_matches(&case.tool, workflow.check_scope, workflow.invocation);
         if !workflow.enabled || !expected_shape {
             return Err(format!(
                 "{} explicit workflow {:?} has the wrong enabled/scope/invocation contract; got enabled={} scope={:?} invocation={:?}",
@@ -7266,12 +7548,19 @@ fn resolve_mutating_tool_contract(
             )
         })?;
         if !workflow.enabled
-            || workflow.check_scope != CheckScope::TargetFiles
-            || workflow.invocation != InvocationGranularity::Batch
+            || !explicit_workflow_shape_matches(
+                &case.tool,
+                workflow.check_scope,
+                workflow.invocation,
+            )
         {
             return Err(format!(
-                "{} mutating explicit workflow {:?} must be enabled, target-files scoped, and batch invoked",
-                case.tool, contract.phase_id
+                "{} mutating explicit workflow {:?} has the wrong enabled/scope/invocation contract; got enabled={} scope={:?} invocation={:?}",
+                case.tool,
+                contract.phase_id,
+                workflow.enabled,
+                workflow.check_scope,
+                workflow.invocation
             ));
         }
         let remedy_command = workflow.remedy.as_ref().ok_or_else(|| {
@@ -9218,6 +9507,162 @@ fn resolve_trace_invocations(
                 .collect();
             Ok((formatter.clone(), traces))
         }
+        TracePlan::GoimportsPrivateModuleAdapter => {
+            let [
+                isolated,
+                command,
+                adapter,
+                formatter,
+                go_program,
+                mode,
+                marker,
+                indicator,
+                rendered_files @ ..,
+            ] = outer_arguments
+            else {
+                return Err(format!(
+                    "goimports adapter trace has an incomplete outer command: {outer_arguments:?}"
+                ));
+            };
+            if isolated != "-I"
+                || command != "-c"
+                || adapter.is_empty()
+                || formatter != "goimports"
+                || go_program != "go"
+                || !matches!(mode.as_str(), "verify" | "write")
+                || marker != GOIMPORTS_FILES_MARKER
+            {
+                return Err(format!(
+                    "goimports adapter trace expected exact isolated adapter arguments, got {outer_arguments:?}"
+                ));
+            }
+            let indicator_path = Path::new(indicator);
+            if !indicator_path.is_absolute()
+                || indicator_path.file_name() != Some(OsStr::new("go.mod"))
+                || !indicator_path.is_file()
+            {
+                return Err(format!(
+                    "goimports adapter trace rendered an invalid go.mod indicator {indicator:?}"
+                ));
+            }
+            let workspace = indicator_path.parent().ok_or_else(|| {
+                format!("goimports adapter trace indicator has no parent: {indicator:?}")
+            })?;
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "goimports adapter trace selected-file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let relatives = targets
+                .iter()
+                .map(|target| {
+                    target.strip_prefix(workspace).map_err(|_| {
+                        format!(
+                            "goimports adapter trace target escapes indicator workspace {workspace:?}: {target:?}"
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let private = |suffix: &str| {
+                format!(
+                    "{GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER}/{}",
+                    suffix.trim_start_matches('/')
+                )
+            };
+            let mut planned = vec![
+                (go_program.clone(), vec!["version".to_owned()]),
+                (
+                    go_program.clone(),
+                    vec![
+                        "env".to_owned(),
+                        "-json".to_owned(),
+                        "GOARCH".to_owned(),
+                        "GOARM64".to_owned(),
+                        "GOCACHE".to_owned(),
+                        "GOMODCACHE".to_owned(),
+                        "GOOS".to_owned(),
+                        "GOPATH".to_owned(),
+                        "GOROOT".to_owned(),
+                        "GOTELEMETRY".to_owned(),
+                        "GOVERSION".to_owned(),
+                    ],
+                ),
+                (
+                    go_program.clone(),
+                    vec![
+                        "version".to_owned(),
+                        "-m".to_owned(),
+                        private("goroot/bin/goimports.real-native"),
+                    ],
+                ),
+                (
+                    go_program.clone(),
+                    vec![
+                        "mod".to_owned(),
+                        "edit".to_owned(),
+                        "-json".to_owned(),
+                        private("baseline/go.mod"),
+                    ],
+                ),
+                (
+                    go_program.clone(),
+                    vec!["list".to_owned(), "-m".to_owned(), "-json".to_owned()],
+                ),
+                (
+                    formatter.clone(),
+                    vec!["-l".to_owned(), private("canary/app/main.go")],
+                ),
+                (
+                    formatter.clone(),
+                    vec![format!("-srcdir={}", private("canary/app/main.go"))],
+                ),
+                (
+                    formatter.clone(),
+                    vec![format!("-srcdir={}", private("canary/app/main.go"))],
+                ),
+            ];
+            for relative in &relatives {
+                let path = private(&format!("baseline/{}", relative.to_string_lossy()));
+                planned.push((formatter.clone(), vec!["-l".to_owned(), path.clone()]));
+                planned.push((formatter.clone(), vec![format!("-srcdir={path}")]));
+                planned.push((formatter.clone(), vec![format!("-srcdir={path}")]));
+            }
+            for relative in &relatives {
+                let path = private(&format!("final/{}", relative.to_string_lossy()));
+                planned.push((formatter.clone(), vec!["-l".to_owned(), path.clone()]));
+                planned.push((formatter.clone(), vec![format!("-srcdir={path}")]));
+            }
+            if mode == "write" {
+                for relative in &relatives {
+                    let path = private(&format!("final/{}", relative.to_string_lossy()));
+                    planned.push((formatter.clone(), vec!["-l".to_owned(), path.clone()]));
+                    planned.push((formatter.clone(), vec![format!("-srcdir={path}")]));
+                }
+            }
+            if expected_exit_codes.is_empty() || expected_exit_codes.len() > planned.len() {
+                return Err(format!(
+                    "goimports adapter trace must declare one through {} child exit codes, got {expected_exit_codes:?}",
+                    planned.len()
+                ));
+            }
+            let traces = planned
+                .into_iter()
+                .zip(expected_exit_codes)
+                .map(
+                    |((program, arguments), exit_code)| ResolvedTraceInvocation {
+                        program,
+                        targets: targets.to_vec(),
+                        arguments,
+                        exit_code: *exit_code,
+                    },
+                )
+                .collect();
+            Ok((formatter.clone(), traces))
+        }
         TracePlan::CargoFmtWorkspaceIndicatorMarker {
             adapter_prefix,
             marker,
@@ -10683,6 +11128,8 @@ struct ToolTraceHarness {
     dclint_toolchain: Option<DclintToolchain>,
     eslint: bool,
     gofumpt: bool,
+    goimports: bool,
+    goimports_fixture_root: Option<PathBuf>,
 }
 
 impl ToolTraceHarness {
@@ -10916,6 +11363,8 @@ impl ToolTraceHarness {
             dclint_toolchain,
             eslint,
             gofumpt: case.tool == "gofumpt",
+            goimports: case.tool == "goimports",
+            goimports_fixture_root: (case.tool == "goimports").then(|| case.directory.clone()),
         })
     }
 
@@ -11095,6 +11544,38 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
+        if self.goimports {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "goimports trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            let controlled_tmp = root.join("tmp");
+            std::fs::create_dir_all(&controlled_tmp).map_err(|error| {
+                format!("create controlled goimports TMPDIR {controlled_tmp:?}: {error}")
+            })?;
+            let controlled_tmp = controlled_tmp
+                .canonicalize()
+                .map_err(|error| format!("canonicalize controlled goimports TMPDIR: {error}"))?;
+            command
+                .env(TMPDIR_ENV, controlled_tmp)
+                .env(HOME_ENV, GOIMPORTS_POISON_ENV_VALUE)
+                .env(XDG_CACHE_HOME_ENV, GOIMPORTS_POISON_ENV_VALUE)
+                .env("GOIMPORTS_VELVET_GLOVE_POISON", GOIMPORTS_POISON_ENV_VALUE);
+            for (name, _) in GOIMPORTS_CONTROLLED_ENV {
+                command.env(name, GOIMPORTS_POISON_ENV_VALUE);
+            }
+            for name in GOIMPORTS_SCRUBBED_ENV {
+                command.env(name, GOIMPORTS_POISON_ENV_VALUE);
+            }
+            for name in ERRCHECK_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+            for name in ["GOCACHE", "GOMODCACHE", "GOPATH", "GOROOT", "GOTMPDIR"] {
+                command.env(name, GOIMPORTS_POISON_ENV_VALUE);
+            }
+        }
         if self.programs.contains_key("dclint") {
             let root = self.trace_root.parent().ok_or_else(|| {
                 format!(
@@ -11152,6 +11633,7 @@ impl ToolTraceHarness {
         if self.programs.contains_key("go")
             && !self.programs.contains_key("errcheck")
             && !self.gofumpt
+            && !self.goimports
         {
             let root = self.trace_root.parent().ok_or_else(|| {
                 format!(
@@ -11244,12 +11726,13 @@ fn verify_tool_trace(
     project: &Path,
     evidence_path: &Path,
 ) -> Result<(), String> {
-    verify_tool_trace_invocations(
+    verify_tool_trace_invocations_with_state(
         harness,
         label,
         &contract.trace_invocations,
         project,
         evidence_path,
+        GoimportsTraceInitialState::Original,
     )
 }
 
@@ -11259,6 +11742,24 @@ fn verify_tool_trace_invocations(
     expected_invocations: &[ResolvedTraceInvocation],
     project: &Path,
     evidence_path: &Path,
+) -> Result<(), String> {
+    verify_tool_trace_invocations_with_state(
+        harness,
+        label,
+        expected_invocations,
+        project,
+        evidence_path,
+        GoimportsTraceInitialState::Original,
+    )
+}
+
+fn verify_tool_trace_invocations_with_state(
+    harness: &ToolTraceHarness,
+    label: &str,
+    expected_invocations: &[ResolvedTraceInvocation],
+    project: &Path,
+    evidence_path: &Path,
+    initial_state: GoimportsTraceInitialState,
 ) -> Result<(), String> {
     let trace_dir = harness.trace_root.join(label).join("invocations");
     let invocations = if trace_dir.is_dir() {
@@ -11285,7 +11786,39 @@ fn verify_tool_trace_invocations(
     let mut errcheck_private_root = None;
     let mut go_vet_private_root = None;
     let mut gofumpt_private_root = None;
-    for (invocation, expected) in invocations.iter().zip(expected_invocations) {
+    let mut goimports_private_root = None;
+    let mut goimports_private_inputs = BTreeMap::new();
+    let goimports_boundaries = expected_invocations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expected)| {
+            (harness.goimports
+                && expected.program == "go"
+                && expected.arguments.as_slice() == ["version"])
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut goimports_successful_writes = BTreeSet::new();
+    for (position, start) in goimports_boundaries.iter().copied().enumerate() {
+        let end = goimports_boundaries
+            .get(position + 1)
+            .copied()
+            .unwrap_or(expected_invocations.len());
+        let target_count = expected_invocations[start].targets.len();
+        if end - start == 8 + 7 * target_count
+            && expected_invocations[start..end]
+                .iter()
+                .all(|expected| expected.exit_code == 0)
+        {
+            goimports_successful_writes.insert(start);
+        }
+    }
+    let mut goimports_project_is_final = initial_state == GoimportsTraceInitialState::Final;
+    let mut prior_goimports_write_succeeded = false;
+    let mut goimports_baseline_is_final = false;
+    for (trace_index, (invocation, expected)) in
+        invocations.iter().zip(expected_invocations).enumerate()
+    {
         let trace_program = expected.program.as_str();
         if harness.gofumpt
             && trace_program == "gofumpt"
@@ -11295,6 +11828,21 @@ fn verify_tool_trace_invocations(
             // check traces. Each isolated adapter allocates its own private
             // root, beginning with the pinned version probe.
             gofumpt_private_root = None;
+        }
+        if harness.goimports
+            && trace_program == "go"
+            && expected.arguments.as_slice() == ["version"]
+        {
+            // Remedy, repeat-remedy, and final-check traces can be
+            // concatenated. The exact first Go version probe delimits each
+            // isolated adapter invocation and therefore each private root.
+            goimports_private_root = None;
+            goimports_private_inputs.clear();
+            if prior_goimports_write_succeeded {
+                goimports_project_is_final = true;
+            }
+            goimports_baseline_is_final = goimports_project_is_final;
+            prior_goimports_write_succeeded = goimports_successful_writes.contains(&trace_index);
         }
         let record = invocation.path();
         assert_record(&record, "logical-program", trace_program)?;
@@ -11309,14 +11857,6 @@ fn verify_tool_trace_invocations(
         ] {
             assert_record(&record, &format!("env-{name}"), expected)?;
         }
-        let real_program = harness.programs.get(trace_program).ok_or_else(|| {
-            format!("{label} has no real executable binding for {trace_program:?}")
-        })?;
-        assert_record(
-            &record,
-            "real-program",
-            real_program.to_string_lossy().as_ref(),
-        )?;
         let recorded_cwd = read_record(&record, "cwd")?;
         let gofumpt_root = if harness.gofumpt {
             Some(resolve_gofumpt_private_trace_root(
@@ -11326,6 +11866,25 @@ fn verify_tool_trace_invocations(
         } else {
             None
         };
+        let goimports_root = if harness.goimports {
+            Some(resolve_goimports_private_trace_root(
+                &record,
+                &recorded_cwd,
+                &mut goimports_private_root,
+            )?)
+        } else {
+            None
+        };
+        let real_program = harness.programs.get(trace_program).ok_or_else(|| {
+            format!("{label} has no real executable binding for {trace_program:?}")
+        })?;
+        if !harness.goimports {
+            assert_record(
+                &record,
+                "real-program",
+                real_program.to_string_lossy().as_ref(),
+            )?;
+        }
         let contextlint_private_root = if trace_program == "node" && harness.contextlint {
             resolve_contextlint_private_trace_root(&record, &expected.arguments, &recorded_cwd)?
         } else {
@@ -11346,7 +11905,9 @@ fn verify_tool_trace_invocations(
         } else {
             None
         };
-        let expected_cwd = if let Some(private_root) = gofumpt_root.as_deref() {
+        let expected_cwd = if let Some(private_root) = goimports_root.as_deref() {
+            goimports_expected_trace_cwd(expected, private_root)?
+        } else if let Some(private_root) = gofumpt_root.as_deref() {
             Path::new(private_root)
                 .join("work")
                 .to_string_lossy()
@@ -11375,6 +11936,7 @@ fn verify_tool_trace_invocations(
                 eslint_private_root.as_deref(),
                 ghalint_private_root.as_deref(),
                 gofumpt_root.as_deref(),
+                goimports_root.as_deref(),
             )?
         } else {
             cwd.to_string_lossy().into_owned()
@@ -11400,6 +11962,7 @@ fn verify_tool_trace_invocations(
                 eslint_private_root.as_deref(),
                 ghalint_private_root.as_deref(),
                 gofumpt_root.as_deref(),
+                goimports_root.as_deref(),
             )?;
             if trace_program == "dclint" && argument == DCLINT_PRIVATE_CONFIG_ARGUMENT {
                 let actual = read_record(&record, &format!("argv-{index}"))?;
@@ -11505,6 +12068,26 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if harness.goimports && matches!(trace_program, "goimports" | "go") {
+            let private_root = goimports_root
+                .as_deref()
+                .ok_or_else(|| format!("goimports {label} trace has no validated private root"))?;
+            let controlled = verify_goimports_trace_environment(
+                &record,
+                harness,
+                project,
+                private_root,
+                &expected.arguments,
+                &mut goimports_private_inputs,
+                goimports_baseline_is_final,
+            )?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         if trace_program == "dclint" {
             let controlled = verify_dclint_trace_environment(&record, harness)?;
             let environment = environment
@@ -11538,7 +12121,11 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        if trace_program == "go" && !harness.programs.contains_key("errcheck") && !harness.gofumpt {
+        if trace_program == "go"
+            && !harness.programs.contains_key("errcheck")
+            && !harness.gofumpt
+            && !harness.goimports
+        {
             let controlled =
                 verify_go_vet_trace_environment(&record, harness, &mut go_vet_private_root)?;
             let environment = environment
@@ -11596,7 +12183,20 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        let prerequisites = if harness.gofumpt {
+        let prerequisites = if harness.goimports {
+            serde_json::json!({
+                "formatter": harness.programs.get("goimports"),
+                "go": harness.programs.get("go"),
+                "privateModule": "owned-0400-complete-shadow",
+                "minimalGOROOT": "owned-0500-empty-src",
+                "moduleCache": "owned-0500-empty",
+                "gopath": "owned-0500-empty",
+                "moduleIndex": "disabled-by-owned-0400-file",
+                "telemetry": "owned-0400-off",
+                "network": "fixed-deny-environment",
+                "privateRootRemoved": true,
+            })
+        } else if harness.gofumpt {
             serde_json::json!({
                 "formatter": harness.programs.get("gofumpt"),
                 "go": harness.programs.get("go"),
@@ -11642,7 +12242,9 @@ fn verify_tool_trace_invocations(
         } else {
             serde_json::json!({})
         };
-        let evidence_cwd = if harness.gofumpt {
+        let evidence_cwd = if let Some(private_root) = goimports_root.as_deref() {
+            recorded_cwd.replacen(private_root, GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER, 1)
+        } else if harness.gofumpt {
             format!("{GOFUMPT_PRIVATE_ROOT_PLACEHOLDER}/work")
         } else if trace_program == "node"
             && harness.contextlint
@@ -11656,16 +12258,39 @@ fn verify_tool_trace_invocations(
             recorded_cwd.clone()
         };
         let evidence_arguments = if harness.gofumpt
+            || harness.goimports
             || trace_program == "node" && (harness.contextlint || harness.eslint)
         {
             expected.arguments.clone()
         } else {
             recorded_arguments
         };
+        let evidence_real_program = if harness.goimports {
+            read_record(&record, "real-program")?.replacen(
+                goimports_root
+                    .as_deref()
+                    .ok_or_else(|| format!("goimports {label} trace has no private root"))?,
+                GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER,
+                1,
+            )
+        } else {
+            real_program.to_string_lossy().into_owned()
+        };
+        let evidence_shim_program = if harness.goimports {
+            program.replacen(
+                goimports_root
+                    .as_deref()
+                    .ok_or_else(|| format!("goimports {label} trace has no private root"))?,
+                GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER,
+                1,
+            )
+        } else {
+            program.clone()
+        };
         let mut trace_record = serde_json::json!({
             "logicalProgram": trace_program,
-            "shimProgram": program,
-            "realProgram": real_program,
+            "shimProgram": evidence_shim_program,
+            "realProgram": evidence_real_program,
             "cwd": evidence_cwd,
             "argv": evidence_arguments,
             "candidateFiles": expected.targets,
@@ -11928,6 +12553,104 @@ fn resolve_gofumpt_private_trace_root(
     Ok(root)
 }
 
+fn resolve_goimports_private_trace_root(
+    record: &Path,
+    recorded_cwd: &str,
+    retained_root: &mut Option<String>,
+) -> Result<String, String> {
+    let goroot = PathBuf::from(read_record(record, "env-GOROOT")?);
+    if goroot.file_name() != Some(OsStr::new("goroot")) {
+        return Err(format!(
+            "goimports trace child did not bind its owned minimal GOROOT: {goroot:?}"
+        ));
+    }
+    let root = goroot
+        .parent()
+        .ok_or_else(|| format!("goimports trace GOROOT has no private parent: {goroot:?}"))?;
+    if !root.is_absolute()
+        || !root
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with(GOIMPORTS_PRIVATE_ROOT_PREFIX))
+    {
+        return Err(format!(
+            "goimports trace bound an invalid private root: {root:?}"
+        ));
+    }
+    let cwd = Path::new(recorded_cwd);
+    let relative_cwd = cwd
+        .strip_prefix(root)
+        .map_err(|_| format!("goimports trace child cwd escaped its private root: {cwd:?}"))?;
+    if !matches!(
+        relative_cwd.to_str(),
+        Some("work" | "baseline" | "canary" | "final")
+    ) {
+        return Err(format!(
+            "goimports trace child used an unexpected private cwd: {cwd:?}"
+        ));
+    }
+    let root = root.to_string_lossy().into_owned();
+    if let Some(retained) = retained_root {
+        if retained != &root {
+            return Err(format!(
+                "goimports trace changed private root between children: {retained:?} then {root:?}"
+            ));
+        }
+    } else {
+        *retained_root = Some(root.clone());
+    }
+    Ok(root)
+}
+
+fn goimports_expected_trace_cwd(
+    expected: &ResolvedTraceInvocation,
+    private_root: &str,
+) -> Result<String, String> {
+    let suffix = if expected.program == "go" {
+        match expected.arguments.first().map(String::as_str) {
+            Some("mod" | "list") => "baseline",
+            Some("version" | "env") => "work",
+            other => {
+                return Err(format!(
+                    "goimports trace has an unexpected Go preflight {other:?}: {:?}",
+                    expected.arguments
+                ));
+            }
+        }
+    } else if expected.program == "goimports" {
+        let private_argument = expected
+            .arguments
+            .iter()
+            .find(|argument| argument.contains(GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER))
+            .ok_or_else(|| {
+                format!(
+                    "goimports trace child has no private source argument: {:?}",
+                    expected.arguments
+                )
+            })?;
+        if private_argument.contains("/canary/") {
+            "canary"
+        } else if private_argument.contains("/baseline/") {
+            "baseline"
+        } else if private_argument.contains("/final/") {
+            "final"
+        } else {
+            return Err(format!(
+                "goimports trace child has an unknown private source scope: {private_argument:?}"
+            ));
+        }
+    } else {
+        return Err(format!(
+            "goimports trace observed unexpected logical program {:?}",
+            expected.program
+        ));
+    };
+    Ok(Path::new(private_root)
+        .join(suffix)
+        .to_string_lossy()
+        .into_owned())
+}
+
 fn resolve_dynamic_trace_argument(
     argument: &str,
     recorded_cwd: &str,
@@ -11935,6 +12658,7 @@ fn resolve_dynamic_trace_argument(
     eslint_private_root: Option<&str>,
     ghalint_private_root: Option<&str>,
     gofumpt_private_root: Option<&str>,
+    goimports_private_root: Option<&str>,
 ) -> Result<String, String> {
     let cwd = Path::new(recorded_cwd);
     if argument.contains(GHALINT_PRIVATE_ROOT_PLACEHOLDER) {
@@ -11988,6 +12712,21 @@ fn resolve_dynamic_trace_argument(
             ));
         }
         return Ok(argument.replacen(GOFUMPT_PRIVATE_ROOT_PLACEHOLDER, gofumpt_private_root, 1));
+    }
+    if argument.contains(GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER) {
+        let goimports_private_root = goimports_private_root.ok_or_else(|| {
+            format!("goimports dynamic trace path has no validated private root: {argument:?}")
+        })?;
+        if argument.matches(GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER).count() != 1 {
+            return Err(format!(
+                "goimports dynamic trace argument contains its private-root placeholder more than once: {argument:?}"
+            ));
+        }
+        return Ok(argument.replacen(
+            GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER,
+            goimports_private_root,
+            1,
+        ));
     }
     let Some(suffix) = argument.strip_prefix(CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER) else {
         return Ok(argument.to_owned());
@@ -12863,6 +13602,350 @@ fn verify_gofumpt_trace_environment(
     Ok(environment)
 }
 
+fn verify_goimports_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    project: &Path,
+    private_root: &str,
+    expected_arguments: &[String],
+    retained_inputs: &mut BTreeMap<String, (String, String)>,
+    baseline_is_final: bool,
+) -> Result<BTreeMap<String, String>, String> {
+    let root = Path::new(private_root);
+    let mut environment = BTreeMap::new();
+    for (name, suffix) in [
+        (PATH_ENV, "goroot/bin"),
+        (HOME_ENV, "home"),
+        (TMPDIR_ENV, "tmp"),
+        (XDG_CACHE_HOME_ENV, "xdg-cache"),
+        ("GOCACHE", "go-build"),
+        ("GOMODCACHE", "go-mod"),
+        ("GOPATH", "gopath"),
+        ("GOROOT", "goroot"),
+        ("GOTMPDIR", "go-tmp"),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        let expected = root.join(suffix).to_string_lossy().into_owned();
+        if value != expected {
+            return Err(format!(
+                "goimports trace expected private {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(
+            name.to_owned(),
+            format!(
+                "{GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER}/{}",
+                suffix.trim_start_matches('/')
+            ),
+        );
+    }
+    for (name, expected) in GOIMPORTS_CONTROLLED_ENV {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != *expected {
+            return Err(format!(
+                "goimports trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    for name in GOIMPORTS_SCRUBBED_ENV
+        .iter()
+        .chain(ERRCHECK_LOADER_SCRUBBED_ENV)
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "goimports trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+
+    assert_record(record, "goimports-private-root", private_root)?;
+    for (name, mode) in [
+        ("root", "700"),
+        ("goroot", "500"),
+        ("goroot-bin", "500"),
+        ("goroot-src", "500"),
+        ("trace-bin", "500"),
+        ("gomodcache", "500"),
+        ("gopath", "500"),
+        ("home-cache", "500"),
+    ] {
+        assert_record(record, &format!("goimports-{name}-kind"), "directory")?;
+        assert_record(record, &format!("goimports-{name}-mode"), mode)?;
+    }
+    assert_record(record, "goimports-cwd-kind", "directory")?;
+    let cwd = PathBuf::from(read_record(record, "cwd")?);
+    let cwd_name = cwd
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| format!("goimports trace cwd has no UTF-8 private scope name: {cwd:?}"))?;
+    assert_record(
+        record,
+        "goimports-cwd-mode",
+        if cwd_name == "work" { "700" } else { "500" },
+    )?;
+    if cwd_name == "work" {
+        assert_record(record, "goimports-cwd-go-mod-kind", "absent")?;
+    } else {
+        let expected_mod = if cwd_name == "canary" {
+            b"module velvet.invalid/canary\n\ngo 1.26.5\n".to_vec()
+        } else {
+            std::fs::read(project.join("go.mod")).map_err(|error| {
+                format!("read goimports fixture module for trace binding: {error}")
+            })?
+        };
+        assert_record(record, "goimports-cwd-go-mod-kind", "file")?;
+        assert_record(record, "goimports-cwd-go-mod-mode", "400")?;
+        assert_record(record, "goimports-cwd-go-mod-links", "1")?;
+        assert_record(
+            record,
+            "goimports-cwd-go-mod-size",
+            &expected_mod.len().to_string(),
+        )?;
+        assert_record(
+            record,
+            "goimports-cwd-go-mod-sha256",
+            &sha256_with_system_tool(&expected_mod)?,
+        )?;
+    }
+    for (index, expected) in expected_arguments.iter().enumerate() {
+        if !expected.contains(GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER) {
+            continue;
+        }
+        let expected = expected.replacen(GOIMPORTS_PRIVATE_ROOT_PLACEHOLDER, private_root, 1);
+        let path = expected.strip_prefix("-srcdir=").unwrap_or(&expected);
+        assert_record(record, &format!("goimports-argv-{index}-path"), path)?;
+        assert_record(record, &format!("goimports-argv-{index}-kind"), "file")?;
+        assert_record(
+            record,
+            &format!("goimports-argv-{index}-mode"),
+            if path.ends_with(".real-native") {
+                "500"
+            } else {
+                "400"
+            },
+        )?;
+        assert_record(record, &format!("goimports-argv-{index}-links"), "1")?;
+        let size = read_record(record, &format!("goimports-argv-{index}-size"))?;
+        let parsed_size = size.parse::<u64>().map_err(|error| {
+            format!("goimports trace source argument has malformed size {size:?}: {error}")
+        })?;
+        if parsed_size > 128 * 1024 * 1024 {
+            return Err(format!(
+                "goimports trace private argument exceeded its bounded size: {path:?}"
+            ));
+        }
+        let sha256 = read_record(record, &format!("goimports-argv-{index}-sha256"))?;
+        if sha256.len() != 64
+            || !sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(format!(
+                "goimports trace private argument has malformed SHA-256: {sha256:?}"
+            ));
+        }
+        let relative = Path::new(path)
+            .strip_prefix(root)
+            .map_err(|_| format!("goimports trace argument escaped private root: {path:?}"))?
+            .to_string_lossy()
+            .into_owned();
+        let observed = (size, sha256);
+        let expected_bytes = if relative == "canary/app/main.go" {
+            b"package main\n\nfunc main() {\n\tfmt.Println(helper.Value)\n}\n".to_vec()
+        } else if relative == "goroot/bin/goimports.real-native" {
+            Vec::new()
+        } else {
+            let (scope, source_relative) = relative.split_once('/').ok_or_else(|| {
+                format!("goimports trace private argument has no semantic scope: {relative:?}")
+            })?;
+            if !matches!(scope, "baseline" | "final") {
+                return Err(format!(
+                    "goimports trace private argument has unsupported scope: {relative:?}"
+                ));
+            }
+            let fixture_root = harness.goimports_fixture_root.as_ref().ok_or_else(|| {
+                "goimports trace has no fixture source root for byte binding".to_owned()
+            })?;
+            let use_final = scope == "final" || baseline_is_final;
+            let final_path = fixture_root.join("expected").join(source_relative);
+            let source_path = if use_final && final_path.is_file() {
+                final_path
+            } else {
+                fixture_root.join(source_relative)
+            };
+            std::fs::read(&source_path).map_err(|error| {
+                format!("read exact goimports trace source bytes {source_path:?}: {error}")
+            })?
+        };
+        let exact_expected = if relative == "goroot/bin/goimports.real-native" {
+            (
+                "5814322".to_owned(),
+                "2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27".to_owned(),
+            )
+        } else {
+            (
+                expected_bytes.len().to_string(),
+                sha256_with_system_tool(&expected_bytes)?,
+            )
+        };
+        if observed != exact_expected {
+            return Err(format!(
+                "goimports trace private argument bytes drifted for {relative:?}: expected {exact_expected:?}, got {observed:?}"
+            ));
+        }
+        if let Some(retained) = retained_inputs.get(&relative) {
+            if retained != &observed {
+                return Err(format!(
+                    "goimports trace private input changed between children: {relative:?}"
+                ));
+            }
+        } else {
+            retained_inputs.insert(relative, observed);
+        }
+    }
+    for (field, expected) in [
+        ("goimports-boundary-go-mod-kind", "file"),
+        ("goimports-boundary-go-mod-mode", "400"),
+        ("goimports-boundary-go-mod-links", "1"),
+        ("goimports-boundary-go-mod-size", "42"),
+        (
+            "goimports-boundary-go-mod-sha256",
+            "375160f8d96caa5c43a67820f9d911c13a96239adb285255db0eb2e6960ce1b7",
+        ),
+    ] {
+        assert_record(record, field, expected)?;
+    }
+    assert_record(
+        record,
+        "goimports-goroot-bin-entries",
+        "go\ngoimports\ngoimports.real-native\ngoimports.real-program",
+    )?;
+    assert_record(record, "goimports-trace-bin-entries", "go\ngo.real-program")?;
+    for name in [
+        "goimports-goroot-src-entries",
+        "goimports-gomodcache-entries",
+        "goimports-gopath-entries",
+    ] {
+        assert_record(record, name, "")?;
+    }
+    for (prefix, size, sha256) in [
+        (
+            "goimports-module-index",
+            "0",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "goimports-telemetry-mode",
+            "3",
+            "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
+        ),
+    ] {
+        assert_record(record, &format!("{prefix}-kind"), "file")?;
+        assert_record(record, &format!("{prefix}-mode"), "400")?;
+        assert_record(record, &format!("{prefix}-links"), "1")?;
+        assert_record(record, &format!("{prefix}-size"), size)?;
+        assert_record(record, &format!("{prefix}-sha256"), sha256)?;
+    }
+    for (binary, size, sha256) in [
+        (
+            "go",
+            "14500160",
+            "3925fc3221ac440ebf7c35361ff663bed0c7bdb2e0a157b75fe993607ffe0a19",
+        ),
+        (
+            "goimports",
+            "5814322",
+            "2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27",
+        ),
+    ] {
+        let prefix = format!("goimports-{binary}-native");
+        assert_record(record, &format!("{prefix}-kind"), "file")?;
+        assert_record(record, &format!("{prefix}-mode"), "500")?;
+        assert_record(record, &format!("{prefix}-links"), "1")?;
+        assert_record(record, &format!("{prefix}-size"), size)?;
+        assert_record(record, &format!("{prefix}-sha256"), sha256)?;
+    }
+
+    for (binding, expected_target) in [
+        ("go", root.join("goroot/bin/go")),
+        ("goimports", root.join("goroot/bin/goimports.real-native")),
+    ] {
+        let prefix = format!("goimports-{binding}-sidecar");
+        let content = format!("{}\n", expected_target.display());
+        assert_record(record, &format!("{prefix}-kind"), "file")?;
+        assert_record(record, &format!("{prefix}-mode"), "400")?;
+        assert_record(record, &format!("{prefix}-links"), "1")?;
+        assert_record(
+            record,
+            &format!("{prefix}-size"),
+            &content.len().to_string(),
+        )?;
+        assert_record(record, &format!("{prefix}-content"), content.trim_end())?;
+        assert_record(
+            record,
+            &format!("{prefix}-sha256"),
+            &sha256_with_system_tool(content.as_bytes())?,
+        )?;
+    }
+
+    let logical = read_record(record, "logical-program")?;
+    let (expected_program, expected_real) = match logical.as_str() {
+        "go" => (root.join("trace-bin/go"), root.join("goroot/bin/go")),
+        "goimports" => (
+            root.join("goroot/bin/goimports"),
+            root.join("goroot/bin/goimports.real-native"),
+        ),
+        _ => {
+            return Err(format!(
+                "goimports trace observed unexpected logical program {logical:?}"
+            ));
+        }
+    };
+    assert_record(
+        record,
+        "program",
+        expected_program.to_string_lossy().as_ref(),
+    )?;
+    assert_record(
+        record,
+        "real-program",
+        expected_real.to_string_lossy().as_ref(),
+    )?;
+    let controlled_tmp = harness
+        .trace_root
+        .parent()
+        .ok_or_else(|| {
+            format!(
+                "goimports trace root has no controlled environment parent: {:?}",
+                harness.trace_root
+            )
+        })?
+        .join("tmp")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize controlled goimports TMPDIR: {error}"))?;
+    if root.parent() != Some(controlled_tmp.as_path()) {
+        return Err(format!(
+            "goimports trace private root escaped controlled TMPDIR {controlled_tmp:?}: {root:?}"
+        ));
+    }
+    if root.exists() {
+        return Err(format!(
+            "goimports trace private root survived adapter cleanup: {root:?}"
+        ));
+    }
+    for logical in ["go", "goimports"] {
+        if !harness.programs.contains_key(logical) {
+            return Err(format!(
+                "goimports trace lacks the managed {logical:?} prerequisite"
+            ));
+        }
+    }
+    Ok(environment)
+}
+
 fn verify_dclint_private_config_argument(
     record: &Path,
     argument: &str,
@@ -13696,6 +14779,45 @@ fn read_record(record: &Path, name: &str) -> Result<String, String> {
         .map_err(|error| format!("read tool trace record {path:?}: {error}"))
 }
 
+fn sha256_with_system_tool(bytes: &[u8]) -> Result<String, String> {
+    let mut child = Command::new("/usr/bin/shasum")
+        .args(["-a", "256"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("spawn /usr/bin/shasum for trace binding: {error}"))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "trace binding shasum has no stdin".to_owned())?
+        .write_all(bytes)
+        .map_err(|error| format!("write trace binding bytes to shasum: {error}"))?;
+    drop(child.stdin.take());
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("wait for trace binding shasum: {error}"))?;
+    if !output.status.success() || !output.stderr.is_empty() {
+        return Err(format!(
+            "trace binding shasum failed with {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("trace binding shasum returned non-UTF-8 output: {error}"))?;
+    let hash = stdout
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "trace binding shasum returned empty output".to_owned())?;
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "trace binding shasum returned malformed output: {stdout:?}"
+        ));
+    }
+    Ok(hash.to_owned())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TreeSnapshot {
     files: BTreeMap<PathBuf, Vec<u8>>,
@@ -13993,8 +15115,8 @@ fn verify_mutating_immediate_artifact(
     };
     let contents = std::fs::read_to_string(path)
         .map_err(|error| format!("read {} immediate artifact {path:?}: {error}", case.tool))?;
-    let diagnostic_contents = if case.tool == "gofumpt" {
-        gofumpt_artifact_diagnostics(&contents)?
+    let diagnostic_contents = if matches!(case.tool.as_str(), "gofumpt" | "goimports") {
+        formatter_adapter_artifact_diagnostics(&contents)?
     } else {
         contents.as_str()
     };
@@ -14017,12 +15139,14 @@ fn verify_mutating_immediate_artifact(
     )
 }
 
-fn gofumpt_artifact_diagnostics(contents: &str) -> Result<&str, String> {
+fn formatter_adapter_artifact_diagnostics(contents: &str) -> Result<&str, String> {
     let start = ["\nstdout:\n", "\nstderr:\n"]
         .into_iter()
         .filter_map(|marker| contents.find(marker).map(|index| index + marker.len()))
         .min()
-        .ok_or_else(|| "gofumpt artifact lacks a native stdout/stderr section".to_owned())?;
+        .ok_or_else(|| {
+            "formatter adapter artifact lacks a native stdout/stderr section".to_owned()
+        })?;
     Ok(&contents[start..])
 }
 
@@ -14308,6 +15432,7 @@ fn run_mutating_deferred_attempt(
     attempt: usize,
     project_baseline: &TreeSnapshot,
     expectation: &DeferredAttemptExpectation<'_>,
+    initial_trace_state: GoimportsTraceInitialState,
 ) -> Result<JsonValue, String> {
     let state_dir = workspace.root.join(format!("deferred-state-{attempt}"));
     seed_pending_targets(case, &state_dir, surface, &workspace.project, contract)?;
@@ -14363,7 +15488,7 @@ fn run_mutating_deferred_attempt(
         .flat_map(|phase| phase.resolved.trace_invocations.iter())
         .cloned()
         .collect::<Vec<_>>();
-    verify_tool_trace_invocations(
+    verify_tool_trace_invocations_with_state(
         trace,
         &trace_label,
         &expected_trace,
@@ -14371,6 +15496,7 @@ fn run_mutating_deferred_attempt(
         &workspace
             .evidence
             .join(format!("deferred-{attempt}-trace.json")),
+        initial_trace_state,
     )?;
 
     let summaries = files_named(&state_dir, "summary.json");
@@ -14741,8 +15867,8 @@ fn verify_mutating_deferred_summary(
                 contents,
             )?;
             if phase.assert_diagnostics {
-                let diagnostic_contents = if case.tool == "gofumpt" {
-                    gofumpt_artifact_diagnostics(contents)?
+                let diagnostic_contents = if matches!(case.tool.as_str(), "gofumpt" | "goimports") {
+                    formatter_adapter_artifact_diagnostics(contents)?
                 } else {
                     contents
                 };
@@ -14977,8 +16103,8 @@ fn verify_deferred_summary(
                 )
             })?;
         verify_tool_output_is_canonical(&case.tool, "deferred diagnostic artifact", contents)?;
-        let diagnostic_contents = if case.tool == "gofumpt" {
-            gofumpt_artifact_diagnostics(contents)?
+        let diagnostic_contents = if matches!(case.tool.as_str(), "gofumpt" | "goimports") {
+            formatter_adapter_artifact_diagnostics(contents)?
         } else {
             contents
         };
@@ -23537,6 +24663,1320 @@ esac
     }
 }
 
+fn verify_goimports_adapter_adversarial_lifecycle(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let workflow = spec
+            .workflows
+            .get("format")
+            .ok_or_else(|| "goimports adversarial probe lacks a format workflow".to_owned())?;
+        let check = workflow
+            .check
+            .as_ref()
+            .ok_or_else(|| "goimports adversarial probe lacks a check command".to_owned())?;
+        let remedy = workflow
+            .remedy
+            .as_ref()
+            .ok_or_else(|| "goimports adversarial probe lacks a remedy command".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command_flag),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(go_name),
+            ArgvElement::Literal(check_mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+            ArgvElement::Token(ArgToken::Files),
+        ] = check.argv.as_slice()
+        else {
+            return Err(
+                "goimports adversarial probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        let [
+            ArgvElement::Literal(remedy_isolated),
+            ArgvElement::Literal(remedy_command_flag),
+            ArgvElement::Literal(remedy_adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(remedy_go_name),
+            ArgvElement::Literal(write_mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(remedy_marker),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+            ArgvElement::Token(ArgToken::Files),
+        ] = remedy.argv.as_slice()
+        else {
+            return Err("goimports adversarial probe found a malformed remedy command".to_owned());
+        };
+        if isolated != "-I"
+            || command_flag != "-c"
+            || go_name != "go"
+            || check_mode != "verify"
+            || marker != GOIMPORTS_FILES_MARKER
+            || remedy_isolated != isolated
+            || remedy_command_flag != command_flag
+            || remedy_adapter != adapter
+            || remedy_go_name != go_name
+            || write_mode != "write"
+            || remedy_marker != marker
+        {
+            return Err(format!(
+                "goimports adversarial probe expected exact isolated check/remedy shapes, got check={:?} remedy={:?}",
+                check.argv, remedy.argv
+            ));
+        }
+        let python_program = check
+            .program
+            .as_deref()
+            .ok_or_else(|| "goimports adversarial probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| {
+                format!("goimports adversarial probe cannot resolve {python_program:?}")
+            })?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize goimports adversarial Python: {error}"))?;
+
+        let requested_root = unique_temp_dir("velvet-glove-goimports-adversarial");
+        let project = requested_root.join("project");
+        let temporary = requested_root.join("private-temp");
+        let fake_root = requested_root.join("fake-goroot");
+        let fake_bin = fake_root.join("bin");
+        let hostile_stdlib = fake_root.join("src/hostile");
+        for directory in [&project, &temporary, &fake_bin, &hostile_stdlib] {
+            std::fs::create_dir_all(directory).map_err(|error| {
+                format!("create goimports adversarial directory {directory:?}: {error}")
+            })?;
+        }
+        let project = project
+            .canonicalize()
+            .map_err(|error| format!("canonicalize goimports project: {error}"))?;
+        let temporary = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize goimports temporary root: {error}"))?;
+        let fake_bin = fake_bin
+            .canonicalize()
+            .map_err(|error| format!("canonicalize goimports fake bin: {error}"))?;
+        std::fs::write(
+            hostile_stdlib.join("hostile.go"),
+            "package hostile\n\nconst Ambient = 1\n",
+        )
+        .map_err(|error| format!("write hostile ambient GOROOT package: {error}"))?;
+
+        let result = (|| {
+            let formatter = fake_bin.join("goimports");
+            let go = fake_bin.join("go");
+            let formatter_log = requested_root.join("formatter.jsonl");
+            let go_log = requested_root.join("go.jsonl");
+            let environment_log = requested_root.join("environment.jsonl");
+            let child_pid = requested_root.join("child.pid");
+            let descendant_pid = requested_root.join("descendant.pid");
+            let signal_ready = requested_root.join("signal.ready");
+            let manifest = project.join("go.mod");
+            let selected = project.join("selected.go");
+            let second = project.join("second.go");
+            let sibling = project.join("sibling.go");
+            let alias = project.join("alias.go");
+
+            let clean_source = b"package probe\n\n// CLEAN\nfunc main() {}\n";
+            let dirty_source = b"package probe\n\n// DIRTY\nfunc main( ) {}\n";
+            let formatted_source = b"package probe\n\n// FORMATTED\nfunc main() {}\n";
+            let second_dirty = b"package probe\n\n// DIRTY_SECOND\nfunc second( ) {}\n";
+            let invalid_source = b"package probe\n\n// INVALID\nfunc broken( {\n";
+            let sibling_reuse_source =
+                b"package probe\n\n// SIBLING_REUSE\nfunc use() { externalwidget.Value }\n";
+            let sibling_reuse_output = b"package probe\n\nimport externalwidget \"example.net/external/widget\"\n\n// SIBLING_REUSE_FORMATTED\nfunc use() { externalwidget.Value }\n";
+            let sibling_source = b"package probe\n\nimport externalwidget \"example.net/external/widget\"\n\nvar sibling = externalwidget.Value\n";
+
+            let reset_project = |first: &[u8], second_bytes: &[u8]| -> Result<(), String> {
+                for path in [
+                    project.join("nested"),
+                    project.join("vendor"),
+                    project.join("go.work"),
+                    alias.clone(),
+                ] {
+                    if path.is_dir() {
+                        std::fs::remove_dir_all(&path).map_err(|error| {
+                            format!("reset goimports adversarial directory {path:?}: {error}")
+                        })?;
+                    } else if path.exists() || path.is_symlink() {
+                        std::fs::remove_file(&path).map_err(|error| {
+                            format!("reset goimports adversarial path {path:?}: {error}")
+                        })?;
+                    }
+                }
+                for path in [&selected, &second, &sibling] {
+                    match std::fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!(
+                                "reset goimports adversarial source {path:?}: {error}"
+                            ));
+                        }
+                    }
+                }
+                std::fs::write(&manifest, "module example.test/probe\n\ngo 1.26.5\n")
+                    .map_err(|error| format!("write goimports adversarial module: {error}"))?;
+                std::fs::write(&selected, first)
+                    .map_err(|error| format!("write goimports selected source: {error}"))?;
+                std::fs::write(&second, second_bytes)
+                    .map_err(|error| format!("write goimports second source: {error}"))?;
+                std::fs::write(&sibling, sibling_source)
+                    .map_err(|error| format!("write goimports sibling source: {error}"))?;
+                Ok(())
+            };
+
+            let formatter_template = r##"#!__PYTHON__
+import json
+import os
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+MODE = __MODE__
+FORMATTER_LOG = __FORMATTER_LOG__
+ENVIRONMENT_LOG = __ENVIRONMENT_LOG__
+ORIGINAL_SELECTED = __ORIGINAL_SELECTED__
+ORIGINAL_FORMATTER = __ORIGINAL_FORMATTER__
+CHILD_PID = __CHILD_PID__
+DESCENDANT_PID = __DESCENDANT_PID__
+SIGNAL_READY = __SIGNAL_READY__
+arguments = sys.argv[1:]
+with open(FORMATTER_LOG, "a", encoding="utf-8") as log:
+    log.write(json.dumps(arguments, separators=(",", ":")) + "\n")
+
+root = os.environ.get("GOROOT", "")
+expected_path = os.path.join(root, "bin")
+cache_blocker = os.path.join(
+    os.environ.get("HOME", ""), "Library", "Caches", "goimports"
+)
+environment = {
+    key: os.environ.get(key)
+    for key in (
+        "PATH", "HOME", "TMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH", "GOROOT",
+        "GOENV", "GOWORK", "GOTOOLCHAIN", "GOPROXY", "GOSUMDB", "GOVCS",
+        "GOFLAGS", "GOOS", "GOARCH", "GOARM64", "CGO_ENABLED", "GOTELEMETRY",
+        "GO111MODULE", "GOAUTH", "GONOPROXY", "GONOSUMDB", "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    )
+}
+with open(ENVIRONMENT_LOG, "a", encoding="utf-8") as log:
+    log.write(json.dumps(environment, sort_keys=True, separators=(",", ":")) + "\n")
+try:
+    blocker = os.lstat(cache_blocker)
+    controlled = (
+        environment["PATH"] == expected_path
+        and root.endswith("/goroot")
+        and os.listdir(os.path.join(root, "src")) == []
+        and os.listdir(os.environ["GOMODCACHE"]) == []
+        and os.listdir(os.environ["GOPATH"]) == []
+        and stat.S_ISREG(blocker.st_mode)
+        and stat.S_IMODE(blocker.st_mode) == 0o400
+        and blocker.st_size == 0
+        and environment["GOENV"] == "off"
+        and environment["GOWORK"] == "off"
+        and environment["GOTOOLCHAIN"] == "local"
+        and environment["GOPROXY"] == "off"
+        and environment["GOSUMDB"] == "off"
+        and environment["GOVCS"] == "*:off"
+        and environment["GOFLAGS"] == "-mod=readonly"
+        and environment["GOOS"] == "darwin"
+        and environment["GOARCH"] == "arm64"
+        and environment["GOARM64"] == "v8.0"
+        and environment["CGO_ENABLED"] == "0"
+        and environment["GOTELEMETRY"] == "off"
+        and environment["GO111MODULE"] == "on"
+        and environment["GOAUTH"] == "off"
+        and environment["GONOPROXY"] == "none"
+        and environment["GONOSUMDB"] == "*"
+        and environment["LD_PRELOAD"] is None
+        and environment["DYLD_INSERT_LIBRARIES"] is None
+    )
+except OSError:
+    controlled = False
+if not controlled:
+    print("uncontrolled goimports child environment", file=sys.stderr)
+    raise SystemExit(93)
+
+listing = "-l" in arguments
+path = arguments[-1] if listing else ""
+if MODE == "hang":
+    with open(SIGNAL_READY, "x", encoding="ascii"):
+        pass
+    while True:
+        time.sleep(1)
+if MODE == "output-cap":
+    sys.stdout.write("x" * 8192)
+    raise SystemExit(0)
+if MODE in ("inherited-descendant", "closed-descendant", "signal"):
+    stream = subprocess.DEVNULL if MODE == "closed-descendant" else None
+    descendant = subprocess.Popen(
+        ["/bin/sh", "-c", "trap '' HUP INT TERM; while :; do sleep 1; done"],
+        stdin=subprocess.DEVNULL,
+        stdout=stream,
+        stderr=stream,
+    )
+    with open(CHILD_PID, "w", encoding="ascii") as target:
+        target.write(str(os.getpid()) + "\n")
+    with open(DESCENDANT_PID, "w", encoding="ascii") as target:
+        target.write(str(descendant.pid) + "\n")
+    if MODE == "signal":
+        with open(SIGNAL_READY, "x", encoding="ascii"):
+            pass
+        while True:
+            time.sleep(1)
+    raise SystemExit(0)
+
+if MODE.startswith("inject-") and listing and "/canary/" in path:
+    if MODE == "inject-goroot":
+        parent = os.path.join(root, "src")
+        target = os.path.join(parent, "poison")
+    elif MODE == "inject-modcache":
+        parent = os.environ["GOMODCACHE"]
+        target = os.path.join(parent, "poison")
+    elif MODE == "inject-gopath":
+        parent = os.environ["GOPATH"]
+        target = os.path.join(parent, "src")
+    elif MODE == "inject-shadow":
+        parent = os.path.dirname(path)
+        target = os.path.join(parent, "poison")
+    else:
+        parent = os.path.dirname(cache_blocker)
+        os.chmod(parent, 0o700)
+        os.unlink(cache_blocker)
+        os.mkdir(cache_blocker)
+        with open(os.path.join(cache_blocker, "index"), "w", encoding="utf-8") as target_file:
+            target_file.write("poison")
+        target = None
+    if target is not None:
+        os.chmod(parent, 0o700)
+        os.mkdir(target)
+        with open(os.path.join(target, "poison.go"), "w", encoding="utf-8") as source:
+            source.write("package poison\n")
+
+if MODE == "mutate-project" and listing and "/canary/" in path:
+    with open(ORIGINAL_SELECTED, "ab") as target:
+        target.write(b"// concurrent mutation\n")
+if MODE == "replace-tool" and listing and "/canary/" in path:
+    with open(ORIGINAL_FORMATTER, "ab") as target:
+        target.write(b"# replaced\n")
+
+if listing:
+    with open(path, "rb") as source:
+        data = source.read()
+    if b"INVALID" in data:
+        print(path + ":4:14: expected ')'", file=sys.stderr)
+        raise SystemExit(2)
+    dirty = (
+        data == b"package main\n\nfunc main() {\n\tfmt.Println(helper.Value)\n}\n"
+        or b"// DIRTY" in data
+        or b"// SIBLING_REUSE\n" in data
+    )
+    if MODE == "whole-batch-drift" and "/final/" in path and path.endswith("second.go"):
+        dirty = True
+    if dirty:
+        if MODE == "malformed-list" and "/canary/" not in path:
+            sys.stdout.write(path + "\n" + path + "\n")
+        elif MODE != "noop":
+            sys.stdout.write(path + "\n")
+    raise SystemExit(0)
+
+data = sys.stdin.buffer.read()
+canary_input = b"package main\n\nfunc main() {\n\tfmt.Println(helper.Value)\n}\n"
+canary_output = b"package main\n\nimport (\n\t\"fmt\"\n\n\t\"velvet.invalid/canary/helper\"\n)\n\nfunc main() {\n\tfmt.Println(helper.Value)\n}\n"
+if data == canary_input:
+    output = data if MODE in ("noop", "echo") else canary_output
+elif b"INVALID" in data:
+    sys.stdout.buffer.write(b"partial formatter output")
+    print("<standard input>:4:14: expected ')'", file=sys.stderr)
+    raise SystemExit(2)
+elif b"// SIBLING_REUSE\n" in data:
+    sibling_path = os.path.join(os.path.dirname(arguments[0].split("=", 1)[1]), "sibling.go")
+    if not os.path.isfile(sibling_path):
+        print("missing inventoried sibling", file=sys.stderr)
+        raise SystemExit(94)
+    output = b"package probe\n\nimport externalwidget \"example.net/external/widget\"\n\n// SIBLING_REUSE_FORMATTED\nfunc use() { externalwidget.Value }\n"
+elif b"// DIRTY_SECOND" in data:
+    output = b"package probe\n\n// FORMATTED_SECOND\nfunc second() {}\n"
+elif b"// DIRTY" in data:
+    if MODE == "partial":
+        sys.stdout.buffer.write(b"partial formatter output")
+        print("synthetic formatter failure", file=sys.stderr)
+        raise SystemExit(2)
+    if MODE == "nonfixed":
+        output = b"package probe\n\n// STEP1\nfunc main() {}\n"
+    elif MODE in ("noop", "echo"):
+        output = data
+    else:
+        output = b"package probe\n\n// FORMATTED\nfunc main() {}\n"
+elif b"// STEP1" in data:
+    output = b"package probe\n\n// STEP2\nfunc main() {}\n"
+else:
+    output = data
+if MODE == "stderr-zero" and b"// DIRTY" in data:
+    print("synthetic status-zero stderr", file=sys.stderr)
+sys.stdout.buffer.write(output)
+"##;
+
+            let go_template = r##"#!__PYTHON__
+import json
+import os
+import re
+import sys
+
+MODE = __MODE__
+GO_LOG = __GO_LOG__
+arguments = sys.argv[1:]
+with open(GO_LOG, "a", encoding="utf-8") as log:
+    log.write(json.dumps(arguments, separators=(",", ":")) + "\n")
+
+root = os.environ.get("GOROOT", "")
+if os.environ.get("PATH") != os.path.join(root, "bin") or not root.endswith("/goroot"):
+    print("uncontrolled Go child environment", file=sys.stderr)
+    raise SystemExit(93)
+if arguments == ["version"]:
+    sys.stdout.write("go version go1.26.5 darwin/arm64\n")
+    raise SystemExit(0)
+if arguments[:2] == ["env", "-json"]:
+    value = {
+        "GOARCH": "arm64",
+        "GOARM64": "v8.0",
+        "GOCACHE": os.environ["GOCACHE"],
+        "GOMODCACHE": os.environ["GOMODCACHE"],
+        "GOOS": "darwin",
+        "GOPATH": os.environ["GOPATH"],
+        "GOROOT": root,
+        "GOTELEMETRY": "off",
+        "GOVERSION": "go1.26.5",
+    }
+    sys.stdout.write(json.dumps(value, separators=(",", ":")) + "\n")
+    raise SystemExit(0)
+if arguments[:2] == ["version", "-m"] and len(arguments) == 3:
+    metadata = """go1.26.5
+\tpath\tgolang.org/x/tools/cmd/goimports
+\tmod\tgolang.org/x/tools\tv0.48.0\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=
+\tdep\tgolang.org/x/mod\tv0.38.0\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=
+\tdep\tgolang.org/x/sync\tv0.22.0\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
+\tdep\tgolang.org/x/telemetry\tv0.0.0-20260708182218-49f421fb7959\th1:RJhm5l6Fo4rmEIcndxDllNhhf/fAx8qIm4t6A7vpm2A=
+\tbuild\t-buildmode=exe
+\tbuild\t-compiler=gc
+\tbuild\t-trimpath=true
+\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0
+\tbuild\tCGO_ENABLED=0
+\tbuild\tGOARCH=arm64
+\tbuild\tGOOS=darwin
+\tbuild\tGOARM64=v8.0
+"""
+    sys.stdout.write(arguments[2] + ": " + metadata)
+    raise SystemExit(0)
+if arguments[:3] == ["mod", "edit", "-json"] and len(arguments) == 4:
+    if MODE == "malformed-go-json":
+        sys.stdout.write("{malformed")
+        raise SystemExit(0)
+    with open(arguments[3], encoding="utf-8") as source:
+        control = source.read()
+    module_match = re.search(r"(?m)^module[ \t]+([^ \t\r\n]+)", control)
+    go_match = re.search(r"(?m)^go[ \t]+([^ \t\r\n]+)", control)
+    value = {
+        "Module": {"Path": module_match.group(1)} if module_match else None,
+        "Go": go_match.group(1) if go_match else "",
+        "Require": [{"Path": "example.net/external", "Version": "v1.0.0"}]
+            if re.search(r"(?m)^require[ \t]", control) else None,
+        "Exclude": None,
+        "Replace": None,
+        "Retract": None,
+        "Tool": None,
+        "Ignore": None,
+    }
+    sys.stdout.write(json.dumps(value, separators=(",", ":")) + "\n")
+    raise SystemExit(0)
+if arguments == ["list", "-m", "-json"]:
+    control = os.path.join(os.getcwd(), "go.mod")
+    with open(control, encoding="utf-8") as source:
+        contents = source.read()
+    module_path = re.search(r"(?m)^module[ \t]+([^ \t\r\n]+)", contents).group(1)
+    go_version = re.search(r"(?m)^go[ \t]+([^ \t\r\n]+)", contents).group(1)
+    value = {
+        "Path": module_path,
+        "Main": True,
+        "Dir": os.getcwd(),
+        "GoMod": control,
+        "GoVersion": go_version,
+    }
+    if MODE == "wrong-go-list":
+        value["Path"] = "example.invalid/wrong"
+    sys.stdout.write(json.dumps(value, separators=(",", ":")) + "\n")
+    raise SystemExit(0)
+print("unexpected fake Go arguments: " + repr(arguments), file=sys.stderr)
+raise SystemExit(97)
+"##;
+
+            let reset_logs = || -> Result<(), String> {
+                for path in [
+                    &formatter_log,
+                    &go_log,
+                    &environment_log,
+                    &child_pid,
+                    &descendant_pid,
+                    &signal_ready,
+                ] {
+                    match std::fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!(
+                                "reset goimports adversarial path {path:?}: {error}"
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            };
+
+            let hash_file = |path: &Path| -> Result<String, String> {
+                let output = Command::new(&python)
+                    .args([
+                        "-I",
+                        "-c",
+                        "import hashlib,sys; h=hashlib.sha256(); f=open(sys.argv[1],'rb'); [h.update(c) for c in iter(lambda:f.read(65536),b'')]; print(h.hexdigest())",
+                    ])
+                    .arg(path)
+                    .output()
+                    .map_err(|error| format!("hash goimports adversarial fixture {path:?}: {error}"))?;
+                if !output.status.success() {
+                    return Err(format!(
+                        "hash goimports adversarial fixture {path:?} exited {:?}: {}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            };
+
+            let write_probes = |mode: &str| -> Result<String, String> {
+                let py = python.to_string_lossy();
+                let formatter_source = formatter_template
+                    .replacen("__PYTHON__", py.as_ref(), 1)
+                    .replace("__MODE__", &serde_json::to_string(mode).unwrap())
+                    .replace(
+                        "__FORMATTER_LOG__",
+                        &serde_json::to_string(&formatter_log.to_string_lossy()).unwrap(),
+                    )
+                    .replace(
+                        "__ENVIRONMENT_LOG__",
+                        &serde_json::to_string(&environment_log.to_string_lossy()).unwrap(),
+                    )
+                    .replace(
+                        "__ORIGINAL_SELECTED__",
+                        &serde_json::to_string(&selected.to_string_lossy()).unwrap(),
+                    )
+                    .replace(
+                        "__ORIGINAL_FORMATTER__",
+                        &serde_json::to_string(&formatter.to_string_lossy()).unwrap(),
+                    )
+                    .replace(
+                        "__CHILD_PID__",
+                        &serde_json::to_string(&child_pid.to_string_lossy()).unwrap(),
+                    )
+                    .replace(
+                        "__DESCENDANT_PID__",
+                        &serde_json::to_string(&descendant_pid.to_string_lossy()).unwrap(),
+                    )
+                    .replace(
+                        "__SIGNAL_READY__",
+                        &serde_json::to_string(&signal_ready.to_string_lossy()).unwrap(),
+                    );
+                let go_source = go_template
+                    .replacen("__PYTHON__", py.as_ref(), 1)
+                    .replace("__MODE__", &serde_json::to_string(mode).unwrap())
+                    .replace(
+                        "__GO_LOG__",
+                        &serde_json::to_string(&go_log.to_string_lossy()).unwrap(),
+                    );
+                write_executable_fixture(
+                    &formatter,
+                    &formatter_source,
+                    "goimports adversarial formatter",
+                )?;
+                write_executable_fixture(&go, &go_source, "goimports adversarial Go")?;
+                let formatter_sha = hash_file(&formatter)?;
+                let go_sha = hash_file(&go)?;
+                let formatter_size = std::fs::metadata(&formatter)
+                    .map_err(|error| format!("stat goimports adversarial formatter: {error}"))?
+                    .len();
+                let go_size = std::fs::metadata(&go)
+                    .map_err(|error| format!("stat goimports adversarial Go: {error}"))?
+                    .len();
+                let mut patched = adapter.to_owned();
+                for (old, new) in [
+                    (
+                        "EXPECTED_TOOL_SHA256 = \"2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27\"".to_owned(),
+                        format!("EXPECTED_TOOL_SHA256 = \"{formatter_sha}\""),
+                    ),
+                    (
+                        "EXPECTED_GO_SHA256 = \"3925fc3221ac440ebf7c35361ff663bed0c7bdb2e0a157b75fe993607ffe0a19\"".to_owned(),
+                        format!("EXPECTED_GO_SHA256 = \"{go_sha}\""),
+                    ),
+                    (
+                        "EXPECTED_TOOL_SIZE = 5814322".to_owned(),
+                        format!("EXPECTED_TOOL_SIZE = {formatter_size}"),
+                    ),
+                    (
+                        "EXPECTED_GO_SIZE = 14500160".to_owned(),
+                        format!("EXPECTED_GO_SIZE = {go_size}"),
+                    ),
+                ] {
+                    if patched.matches(&old).count() != 1 {
+                        return Err(format!(
+                            "goimports adversarial probe lost adapter pin anchor {old:?}"
+                        ));
+                    }
+                    patched = patched.replacen(&old, &new, 1);
+                }
+                Ok(patched)
+            };
+
+            let adapter_command =
+                |script: &str, adapter_mode: &str, scope: &[&Path], extras: &[&str]| -> Command {
+                    let mut command = Command::new(&python);
+                    command
+                        .args(["-I", "-c", script, "goimports", "go", adapter_mode])
+                        .args(extras)
+                        .arg(GOIMPORTS_FILES_MARKER)
+                        .arg(&manifest)
+                        .args(scope)
+                        .current_dir(&project)
+                        .env_clear()
+                        .env(PATH_ENV, &fake_bin)
+                        .env(TMPDIR_ENV, &temporary)
+                        .env("GOENV", requested_root.join("poison-goenv"))
+                        .env("GOWORK", requested_root.join("poison.work"))
+                        .env("GOMODCACHE", requested_root.join("poison-modcache"))
+                        .env("GOPATH", requested_root.join("poison-gopath"))
+                        .env("GOPROXY", "https://poison.invalid")
+                        .env("GOFLAGS", "-tags=poison -mod=mod")
+                        .env("GOTOOLCHAIN", "auto")
+                        .env("GOROOT", requested_root.join("poison-goroot"))
+                        .env("CGO_ENABLED", "1")
+                        .env("GOOS", "linux")
+                        .env("GOARCH", "amd64")
+                        .env("GOARM64", "poison");
+                    command
+                };
+
+            let run_probe = |probe_mode: &str,
+                             adapter_mode: &str,
+                             scope: &[&Path],
+                             extras: &[&str],
+                             adapter_edit: Option<&dyn Fn(String) -> Result<String, String>>|
+             -> Result<BoundedOutput, String> {
+                reset_logs()?;
+                let mut script = write_probes(probe_mode)?;
+                if let Some(edit) = adapter_edit {
+                    script = edit(script)?;
+                }
+                let mut command = adapter_command(&script, adapter_mode, scope, extras);
+                run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(10)),
+                    &requested_root.join(format!("evidence-{probe_mode}-{adapter_mode}")),
+                )
+                .map_err(|error| {
+                    format!("run goimports {probe_mode}/{adapter_mode} adversarial probe: {error}")
+                })
+            };
+
+            let expect = |label: &str,
+                          output: &BoundedOutput,
+                          expected_status: i32,
+                          stderr_contains: Option<&str>|
+             -> Result<(), String> {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(expected_status)
+                    || stderr_contains.is_some_and(|needle| !stderr.contains(needle))
+                {
+                    return Err(format!(
+                        "goimports {label} mismatch: status={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+                assert_goimports_private_roots_removed(&temporary, label)
+            };
+
+            reset_project(clean_source, clean_source)?;
+            let clean = run_probe("normal", "verify", &[&selected, &second], &[], None)?;
+            expect("clean", &clean, 0, None)?;
+            if !clean.stdout.is_empty() || !clean.stderr.is_empty() {
+                return Err(format!(
+                    "goimports clean output was not empty: stdout={:?}; stderr={:?}",
+                    String::from_utf8_lossy(&clean.stdout),
+                    String::from_utf8_lossy(&clean.stderr)
+                ));
+            }
+            let environment_records = std::fs::read_to_string(&environment_log)
+                .map_err(|error| format!("read goimports environment evidence: {error}"))?;
+            if environment_records.contains("poison") || environment_records.lines().count() < 4 {
+                return Err(format!(
+                    "goimports child environment was not isolated exactly: {environment_records:?}"
+                ));
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let finding = run_probe("normal", "verify", &[&selected, &second], &[], None)?;
+            expect("dirty verify", &finding, 0, None)?;
+            if finding.stdout != format!("{}\n", selected.display()).as_bytes()
+                || !finding.stderr.is_empty()
+            {
+                return Err(format!(
+                    "goimports dirty verify evidence drifted: stdout={:?}; stderr={:?}",
+                    String::from_utf8_lossy(&finding.stdout),
+                    String::from_utf8_lossy(&finding.stderr)
+                ));
+            }
+            let repeated = run_probe("normal", "verify", &[&selected, &second], &[], None)?;
+            expect("repeated dirty verify", &repeated, 0, None)?;
+            if repeated.stdout != finding.stdout
+                || std::fs::read(&selected).unwrap() != dirty_source
+            {
+                return Err("goimports verify was not read-only and repeatable".to_owned());
+            }
+            let remedy_output = run_probe("normal", "write", &[&selected, &second], &[], None)?;
+            expect("dirty remedy", &remedy_output, 0, None)?;
+            if !remedy_output.stdout.is_empty()
+                || !remedy_output.stderr.is_empty()
+                || std::fs::read(&selected).unwrap() != formatted_source
+                || std::fs::read(&second).unwrap() != clean_source
+            {
+                return Err(
+                    "goimports remedy did not commit exactly the dirty candidate".to_owned(),
+                );
+            }
+            let final_check = run_probe("normal", "verify", &[&selected, &second], &[], None)?;
+            expect("final verify", &final_check, 0, None)?;
+            if !final_check.stdout.is_empty() || !final_check.stderr.is_empty() {
+                return Err("goimports final verify was not clean".to_owned());
+            }
+
+            reset_project(sibling_reuse_source, clean_source)?;
+            let sibling_reuse = run_probe("normal", "write", &[&selected], &[], None)?;
+            expect(
+                "same-directory sibling import reuse",
+                &sibling_reuse,
+                0,
+                None,
+            )?;
+            if std::fs::read(&selected).unwrap() != sibling_reuse_output {
+                return Err(
+                    "goimports did not preserve deterministic same-directory external import reuse"
+                        .to_owned(),
+                );
+            }
+
+            for (probe_mode, diagnostic) in [
+                ("noop", "listing canary"),
+                ("echo", "resolver canary"),
+                ("malformed-go-json", "malformed JSON"),
+                ("wrong-go-list", "did not bind the controlled shadow module"),
+                ("malformed-list", "malformed evidence"),
+                ("nonfixed", "not a validated fixed point"),
+                ("stderr-zero", "formatting exited 0"),
+                ("partial", "formatting exited 2"),
+                ("whole-batch-drift", "whole-batch goimports listing failed"),
+            ] {
+                reset_project(dirty_source, second_dirty)?;
+                let output = run_probe(probe_mode, "verify", &[&selected, &second], &[], None)?;
+                expect(probe_mode, &output, 2, Some(diagnostic))?;
+                if !output.stdout.is_empty()
+                    || std::fs::read(&selected).unwrap() != dirty_source
+                    || std::fs::read(&second).unwrap() != second_dirty
+                {
+                    return Err(format!(
+                        "goimports {probe_mode} failure leaked issue output or mutation"
+                    ));
+                }
+            }
+
+            for (probe_mode, diagnostic) in [
+                ("inject-goroot", "minimal GOROOT semantic inventory changed"),
+                (
+                    "inject-modcache",
+                    "empty module cache semantic inventory changed",
+                ),
+                ("inject-gopath", "empty GOPATH semantic inventory changed"),
+                (
+                    "inject-shadow",
+                    "resolver canary semantic inventory changed",
+                ),
+                ("inject-modindex", "validated path identity or mode changed"),
+                ("mutate-project", "validated path size or mtime changed"),
+                ("replace-tool", "validated path size or mtime changed"),
+            ] {
+                reset_project(dirty_source, clean_source)?;
+                let output = run_probe(probe_mode, "verify", &[&selected], &[], None)?;
+                expect(probe_mode, &output, 2, Some(diagnostic))?;
+            }
+
+            reset_project(dirty_source, invalid_source)?;
+            let before = std::fs::read(&selected).unwrap();
+            let operational = run_probe("normal", "write", &[&selected, &second], &[], None)?;
+            expect(
+                "syntax operational failure",
+                &operational,
+                2,
+                Some("syntax preflight exited 2"),
+            )?;
+            if !operational.stdout.is_empty() || std::fs::read(&selected).unwrap() != before {
+                return Err("goimports syntax failure partially committed the batch".to_owned());
+            }
+
+            reset_project(dirty_source, second_dirty)?;
+            let write_failure_edit = |script: String| -> Result<String, String> {
+                let anchor = "            touched.append(index)\n";
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports write-failure probe lost its commit anchor".to_owned());
+                }
+                Ok(script.replacen(
+                    anchor,
+                    concat!(
+                        "            touched.append(index)\n",
+                        "            if completed:\n",
+                        "                raise OSError(\"synthetic second-write failure\")\n",
+                    ),
+                    1,
+                ))
+            };
+            let write_failure = run_probe(
+                "normal",
+                "write",
+                &[&selected, &second],
+                &[],
+                Some(&write_failure_edit),
+            )?;
+            expect(
+                "transaction rollback",
+                &write_failure,
+                2,
+                Some("synthetic second-write failure"),
+            )?;
+            if std::fs::read(&selected).unwrap() != dirty_source
+                || std::fs::read(&second).unwrap() != second_dirty
+            {
+                return Err("goimports failed to roll back a completed batch write".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let guarded_edit = |script: String| -> Result<String, String> {
+                let anchor = concat!(
+                    "        commit_targets(candidates, dirty_indices)\n",
+                    "        verify_shadow_fixed_point(\n",
+                );
+                if script.matches(anchor).count() != 1 {
+                    return Err(
+                        "goimports guarded rollback probe lost its post-commit anchor".to_owned(),
+                    );
+                }
+                Ok(script.replacen(
+                    anchor,
+                    concat!(
+                        "        commit_targets(candidates, dirty_indices)\n",
+                        "        concurrent = targets[dirty_indices[0]][\"fd\"]\n",
+                        "        os.ftruncate(concurrent, 0)\n",
+                        "        os.pwrite(concurrent, b\"package concurrent\\n\", 0)\n",
+                        "        os.fsync(concurrent)\n",
+                        "        verify_shadow_fixed_point(\n",
+                    ),
+                    1,
+                ))
+            };
+            let guarded = run_probe("normal", "write", &[&selected], &[], Some(&guarded_edit))?;
+            expect(
+                "post-commit concurrent writer",
+                &guarded,
+                2,
+                Some("cannot safely roll back"),
+            )?;
+            if std::fs::read(&selected).unwrap() != b"package concurrent\n" {
+                return Err("goimports guarded rollback overwrote a concurrent writer".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let partial_write_edit = |script: String| -> Result<String, String> {
+                let anchor = concat!("    os.ftruncate(descriptor, 0)\n", "    offset = 0\n",);
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports partial-write probe lost its write anchor".to_owned());
+                }
+                Ok(script.replacen(
+                    anchor,
+                    concat!(
+                        "    os.ftruncate(descriptor, 0)\n",
+                        "    if not restore_metadata:\n",
+                        "        os.write(descriptor, b\"partial adapter write\")\n",
+                        "        raise OSError(\"synthetic partial-write failure\")\n",
+                        "    offset = 0\n",
+                    ),
+                    1,
+                ))
+            };
+            let partial_write = run_probe(
+                "normal",
+                "write",
+                &[&selected],
+                &[],
+                Some(&partial_write_edit),
+            )?;
+            expect(
+                "partial-write rollback",
+                &partial_write,
+                2,
+                Some("synthetic partial-write failure"),
+            )?;
+            if std::fs::read(&selected).unwrap() != dirty_source {
+                return Err("goimports did not restore its own partial write".to_owned());
+            }
+
+            reset_project(dirty_source, second_dirty)?;
+            let between_write_edit = |script: String| -> Result<String, String> {
+                let anchor = concat!(
+                    "            record = targets[index]\n",
+                    "            candidate = candidates[index]\n",
+                );
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports between-write probe lost its loop anchor".to_owned());
+                }
+                Ok(script.replacen(
+                    anchor,
+                    concat!(
+                        "            record = targets[index]\n",
+                        "            candidate = candidates[index]\n",
+                        "            if completed:\n",
+                        "                os.ftruncate(record[\"fd\"], 0)\n",
+                        "                os.pwrite(record[\"fd\"], b\"package concurrent_second\\n\", 0)\n",
+                        "                os.fsync(record[\"fd\"])\n",
+                    ),
+                    1,
+                ))
+            };
+            let between_write = run_probe(
+                "normal",
+                "write",
+                &[&selected, &second],
+                &[],
+                Some(&between_write_edit),
+            )?;
+            expect(
+                "between-write mutation",
+                &between_write,
+                2,
+                Some("validated path size or mtime changed"),
+            )?;
+            if std::fs::read(&selected).unwrap() != dirty_source
+                || std::fs::read(&second).unwrap() != b"package concurrent_second\n"
+            {
+                return Err(
+                    "goimports between-write failure clobbered the raced target or lost rollback"
+                        .to_owned(),
+                );
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let output_cap_edit = |script: String| -> Result<String, String> {
+                let anchor = "OUTPUT_LIMIT = 64 * 1024 * 1024";
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports output-cap probe lost its limit anchor".to_owned());
+                }
+                Ok(script.replacen(anchor, "OUTPUT_LIMIT = 1024", 1))
+            };
+            let output_cap = run_probe(
+                "output-cap",
+                "verify",
+                &[&selected],
+                &[],
+                Some(&output_cap_edit),
+            )?;
+            expect(
+                "output cap",
+                &output_cap,
+                2,
+                Some("combined native output exceeded 1024 bytes"),
+            )?;
+
+            reset_project(dirty_source, clean_source)?;
+            let timeout_edit = |script: String| -> Result<String, String> {
+                let anchor = "CHILD_TIMEOUT = 30.0";
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports timeout probe lost its deadline anchor".to_owned());
+                }
+                Ok(script.replacen(anchor, "CHILD_TIMEOUT = 0.2", 1))
+            };
+            let hung = run_probe("hang", "verify", &[&selected], &[], Some(&timeout_edit))?;
+            expect(
+                "native deadline",
+                &hung,
+                2,
+                Some("native child exceeded the 0.2-second deadline"),
+            )?;
+
+            reset_project(clean_source, clean_source)?;
+            let cleanup_inventory_edit = |script: String| -> Result<String, String> {
+                let anchor = concat!(
+                    "        if private_root is not None:\n",
+                    "            try:\n",
+                    "                unseal_semantic_roots()\n",
+                );
+                if script.matches(anchor).count() != 1 {
+                    return Err(
+                        "goimports cleanup-inventory probe lost its unseal anchor".to_owned()
+                    );
+                }
+                Ok(script.replacen(
+                    anchor,
+                    concat!(
+                        "        if private_root is not None:\n",
+                        "            os.chmod(private_go_src, 0o700)\n",
+                        "            with open(os.path.join(private_go_src, \"late.go\"), \"wb\") as late:\n",
+                        "                late.write(b\"package late\\n\")\n",
+                        "            try:\n",
+                        "                unseal_semantic_roots()\n",
+                    ),
+                    1,
+                ))
+            };
+            let cleanup_inventory = run_probe(
+                "normal",
+                "verify",
+                &[&selected],
+                &[],
+                Some(&cleanup_inventory_edit),
+            )?;
+            expect(
+                "cleanup-window semantic mutation",
+                &cleanup_inventory,
+                2,
+                Some("minimal GOROOT semantic inventory changed"),
+            )?;
+
+            reset_project(dirty_source, clean_source)?;
+            let extra = run_probe("normal", "verify", &[&selected], &["-local=poison"], None)?;
+            expect(
+                "extra argument",
+                &extra,
+                2,
+                Some("extra arguments are unsupported"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports extra argument reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let duplicate = run_probe("normal", "verify", &[&selected, &selected], &[], None)?;
+            expect(
+                "duplicate source",
+                &duplicate,
+                2,
+                Some("selected path is repeated or aliased"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports duplicate source reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let empty = run_probe("normal", "verify", &[], &[], None)?;
+            expect(
+                "empty selection",
+                &empty,
+                2,
+                Some("invalid mode or empty file selection"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports empty selection reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let relative_path = Path::new("selected.go");
+            let relative = run_probe("normal", "verify", &[relative_path], &[], None)?;
+            expect(
+                "relative selection",
+                &relative,
+                2,
+                Some("selected path is not one normalized absolute .go file"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports relative selection reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            std::fs::remove_file(&selected)
+                .map_err(|error| format!("remove source for goimports symlink probe: {error}"))?;
+            std::os::unix::fs::symlink(&sibling, &selected)
+                .map_err(|error| format!("create goimports source symlink: {error}"))?;
+            let symlink = run_probe("normal", "verify", &[&selected], &[], None)?;
+            expect(
+                "source symlink",
+                &symlink,
+                2,
+                Some("project contains a linked source"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports source symlink reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            std::fs::hard_link(&selected, &alias)
+                .map_err(|error| format!("create goimports source hardlink: {error}"))?;
+            let hardlink = run_probe("normal", "verify", &[&selected], &[], None)?;
+            expect(
+                "source hardlink",
+                &hardlink,
+                2,
+                Some("project Go source is not a unique regular file"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports source hardlink reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let nested = project.join("nested");
+            std::fs::create_dir(&nested)
+                .map_err(|error| format!("create nested module directory: {error}"))?;
+            std::fs::write(
+                nested.join("go.mod"),
+                "module example.test/nested\n\ngo 1.26.5\n",
+            )
+            .map_err(|error| format!("write nested module control: {error}"))?;
+            let nested_module = run_probe("normal", "verify", &[&selected], &[], None)?;
+            expect(
+                "nested module",
+                &nested_module,
+                2,
+                Some("nested Go modules are unsupported"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports nested module reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            std::fs::create_dir(project.join("vendor"))
+                .map_err(|error| format!("create goimports vendor directory: {error}"))?;
+            let vendor = run_probe("normal", "verify", &[&selected], &[], None)?;
+            expect(
+                "vendor directory",
+                &vendor,
+                2,
+                Some("vendor directories are unsupported"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports vendor directory reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let source_count_edit = |script: String| -> Result<String, String> {
+                let anchor = "SOURCE_COUNT_LIMIT = 4096";
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports source-count probe lost its bound anchor".to_owned());
+                }
+                Ok(script.replacen(anchor, "SOURCE_COUNT_LIMIT = 2", 1))
+            };
+            let source_count = run_probe(
+                "normal",
+                "verify",
+                &[&selected],
+                &[],
+                Some(&source_count_edit),
+            )?;
+            expect(
+                "source count bound",
+                &source_count,
+                2,
+                Some("more than 2 Go source files"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports source count overflow reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            let source_bytes_edit = |script: String| -> Result<String, String> {
+                let anchor = "SOURCE_LIMIT = 64 * 1024 * 1024";
+                if script.matches(anchor).count() != 1 {
+                    return Err("goimports source-byte probe lost its bound anchor".to_owned());
+                }
+                Ok(script.replacen(anchor, "SOURCE_LIMIT = 150", 1))
+            };
+            let source_bytes = run_probe(
+                "normal",
+                "verify",
+                &[&selected],
+                &[],
+                Some(&source_bytes_edit),
+            )?;
+            expect(
+                "source byte bound",
+                &source_bytes,
+                2,
+                Some("project Go sources exceed the 150-byte validation limit"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports source byte overflow reached a native child".to_owned());
+            }
+
+            reset_project(dirty_source, clean_source)?;
+            std::fs::write(
+                &manifest,
+                "module example.test/probe\n\ngo 1.26.5\n\nrequire example.net/external v1.0.0\n",
+            )
+            .map_err(|error| format!("write unsupported goimports requirement: {error}"))?;
+            let requirement = run_probe("normal", "verify", &[&selected], &[], None)?;
+            expect(
+                "external requirement",
+                &requirement,
+                2,
+                Some("module control field Require must be null"),
+            )?;
+
+            reset_project(dirty_source, clean_source)?;
+            std::fs::write(project.join("go.work"), "go 1.26.5\n")
+                .map_err(|error| format!("write unsupported go.work: {error}"))?;
+            let workspace = run_probe("normal", "verify", &[&selected], &[], None)?;
+            expect(
+                "workspace control",
+                &workspace,
+                2,
+                Some("Go workspaces are unsupported"),
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("goimports go.work reached a native child".to_owned());
+            }
+
+            for probe_mode in ["inherited-descendant", "closed-descendant"] {
+                reset_project(dirty_source, clean_source)?;
+                let output = run_probe(probe_mode, "verify", &[&selected], &[], None)?;
+                expect(probe_mode, &output, 2, Some("native child"))?;
+                let descendant = read_pid_file(
+                    &descendant_pid,
+                    &format!("goimports {probe_mode} descendant"),
+                )?;
+                if process_survives(descendant, Duration::from_secs(1))? {
+                    let _ = signal_process(descendant, "KILL");
+                    return Err(format!(
+                        "goimports {probe_mode} retained descendant {descendant}"
+                    ));
+                }
+            }
+
+            for (signal_name, signal_number) in [("HUP", 1), ("INT", 2), ("TERM", 15)] {
+                reset_project(dirty_source, clean_source)?;
+                reset_logs()?;
+                let script = write_probes("signal")?;
+                let mut command = adapter_command(&script, "verify", &[&selected], &[]);
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+                let mut outer = command.spawn().map_err(|error| {
+                    format!("spawn goimports SIG{signal_name} adversarial adapter: {error}")
+                })?;
+                let outer_pid = outer.id();
+                let deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+                while !signal_ready.is_file() {
+                    if let Some(status) = outer
+                        .try_wait()
+                        .map_err(|error| format!("poll goimports SIG{signal_name}: {error}"))?
+                    {
+                        return Err(format!(
+                            "goimports SIG{signal_name} adapter exited {status:?} before readiness"
+                        ));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!("goimports SIG{signal_name} readiness timed out"));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let native =
+                    read_pid_file(&child_pid, &format!("goimports SIG{signal_name} child"))?;
+                let descendant = read_pid_file(
+                    &descendant_pid,
+                    &format!("goimports SIG{signal_name} descendant"),
+                )?;
+                if !signal_process(outer_pid, signal_name)?.success() {
+                    let _ = signal_process_group(native, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!("send SIG{signal_name} to goimports adapter"));
+                }
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send(outer.wait_with_output());
+                });
+                let output = receiver
+                    .recv_timeout(timeout.min(Duration::from_secs(5)))
+                    .map_err(|error| {
+                        let _ = signal_process_group(native, "KILL");
+                        format!("wait for goimports SIG{signal_name}: {error}")
+                    })?
+                    .map_err(|error| format!("collect goimports SIG{signal_name}: {error}"))?;
+                let native_alive = process_survives(native, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant, Duration::from_secs(1))?;
+                if native_alive || descendant_alive {
+                    let _ = signal_process_group(native, "KILL");
+                }
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || String::from_utf8_lossy(&output.stderr)
+                        != format!("velvet-glove-goimports: received signal {signal_number}\n")
+                    || native_alive
+                    || descendant_alive
+                {
+                    return Err(format!(
+                        "goimports SIG{signal_name} lifecycle mismatch: status={:?}; native={native_alive}; descendant={descendant_alive}; stdout={:?}; stderr={:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                assert_goimports_private_roots_removed(&temporary, signal_name)?;
+            }
+
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&requested_root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn assert_goimports_private_roots_removed(temporary: &Path, label: &str) -> Result<(), String> {
+    let survivors = std::fs::read_dir(temporary)
+        .map_err(|error| format!("read goimports {label} temporary root: {error}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(GOIMPORTS_PRIVATE_ROOT_PREFIX)
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    if survivors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "goimports {label} left private roots behind: {survivors:?}"
+        ))
+    }
+}
+
 #[cfg(unix)]
 fn assert_gofumpt_private_roots_removed(temporary: &Path, label: &str) -> Result<(), String> {
     let survivors = std::fs::read_dir(temporary)
@@ -28474,6 +30914,7 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
     let inline_marker = match case.tool.as_str() {
         "go-fmt" => Some(GOFMT_FILES_MARKER),
         "gofumpt" => Some(GOFUMPT_FILES_MARKER),
+        "goimports" => Some(GOIMPORTS_FILES_MARKER),
         "dclint" => Some(DCLINT_FILES_MARKER),
         "errcheck" => Some(ERRCHECK_WORKSPACE_MARKER),
         "go-vet" => Some(GO_VET_WORKSPACE_MARKER),

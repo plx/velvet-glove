@@ -68,6 +68,27 @@ errcheck_path_prefix=
 if [[ ,$selection, == *,errcheck/* ]]; then
   errcheck_path_prefix="$errcheck_root/bin:"
 fi
+goimports_identity=$(jq -ce '
+  first(.recipes[] | select(.id == "goimports-macos-arm64"))
+  | {id, toolId, version, installationSource, integrity}' "$registry")
+goimports_root=$(pinned_component_cache_root \
+  "$state_dir" goimports-0.48.0 "$goimports_identity")
+goimports_bin="$goimports_root/bin/goimports"
+goimports_expected_sha256=$(printf '%s\n' "$goimports_identity" | \
+  jq -r '.integrity.builtArtifactSha256')
+if [[ $goimports_expected_sha256 != \
+    2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27 || \
+  $(printf '%s\n' "$goimports_identity" | jq -r '.integrity.sha256') != \
+    8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755 || \
+  $(printf '%s\n' "$goimports_identity" | \
+    jq -r '.integrity.buildToolchainComponentId') != goimports-go ]]; then
+  echo "error: goimports recipe does not cross-link the reviewed proxy, artifact, and Go identity" >&2
+  exit 1
+fi
+goimports_path_prefix=
+if [[ ,$selection, == *,goimports/* ]]; then
+  goimports_path_prefix="$goimports_root/bin:"
+fi
 vacuum_provenance_path="$provisioning_dir/vacuum/provenance.json"
 vacuum_identity=$(pinned_component_provenance_identity \
   jq \
@@ -97,7 +118,7 @@ export BUNDLE_FROZEN=1
 export BUNDLE_GEMFILE="$provisioning_dir/ruby/Gemfile"
 export BUNDLE_PATH__SYSTEM=true
 export BUNDLE_USER_HOME="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
-export PATH="${ghalint_path_prefix}${vacuum_path_prefix}${errcheck_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
+export PATH="${ghalint_path_prefix}${vacuum_path_prefix}${errcheck_path_prefix}${goimports_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
 
 errcheck_expected_metadata_body=$'\tpath\tgithub.com/kisielk/errcheck\n\tmod\tgithub.com/kisielk/errcheck\tv1.20.0\th1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=\n\tdep\tgolang.org/x/mod\tv0.35.0\th1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=\n\tdep\tgolang.org/x/sync\tv0.20.0\th1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=\n\tdep\tgolang.org/x/tools\tv0.44.0\th1:UP4ajHPIcuMjT1GqzDWRlalUEoY+uzoZKnhOjbIPD2c=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
 
@@ -127,6 +148,39 @@ validate_errcheck_binary() {
   fi
   metadata=$("$go_binary" version -m "$binary")
   validate_errcheck_metadata "$metadata" "$binary"
+}
+
+goimports_expected_metadata_body=$'\tpath\tgolang.org/x/tools/cmd/goimports\n\tmod\tgolang.org/x/tools\tv0.48.0\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=\n\tdep\tgolang.org/x/mod\tv0.38.0\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=\n\tdep\tgolang.org/x/sync\tv0.22.0\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=\n\tdep\tgolang.org/x/telemetry\tv0.0.0-20260708182218-49f421fb7959\th1:RJhm5l6Fo4rmEIcndxDllNhhf/fAx8qIm4t6A7vpm2A=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
+
+validate_goimports_metadata() {
+  local metadata=$1
+  local binary=$2
+  if [[ ${metadata%%$'\n'*} != "$binary: go1.26.5" || \
+    ${metadata#*$'\n'} != "$goimports_expected_metadata_body" ]]; then
+    echo "error: goimports artifact module, dependency, or Go 1.26.5 build identity drifted" >&2
+    return 1
+  fi
+}
+
+validate_goimports_binary() {
+  local binary=$1
+  local go_binary=$2
+  local observed_sha256
+  local observed_size
+  local metadata
+  if [[ ! -f $binary || -L $binary || ! -x $binary ]]; then
+    echo "error: controlled goimports artifact is not an executable regular file: $binary" >&2
+    return 1
+  fi
+  read -r observed_sha256 _ < <(/usr/bin/shasum -a 256 "$binary")
+  observed_size=$(/usr/bin/stat -f '%z' "$binary")
+  if [[ $observed_sha256 != "$goimports_expected_sha256" || \
+    $observed_size != 5814322 ]]; then
+    echo "error: controlled goimports artifact checksum or size mismatch" >&2
+    return 1
+  fi
+  metadata=$("$go_binary" version -m "$binary")
+  validate_goimports_metadata "$metadata" "$binary"
 }
 
 mkdir -p "$artifact_dir" "$artifact_dir/fixtures" "$CARGO_TARGET_DIR" "$TMPDIR"
@@ -212,6 +266,39 @@ if [[ $errcheck_selected == true ]]; then
     exit 1
   fi
   validate_errcheck_binary "$errcheck_bin" "$errcheck_go_bin"
+fi
+goimports_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("goimports") != null' >/dev/null; then
+  goimports_selected=true
+fi
+goimports_go_bin=
+if [[ $goimports_selected == true ]]; then
+  if ! pinned_component_cache_valid \
+    "$goimports_root" "$goimports_identity" bin/goimports; then
+    echo "error: denied-network goimports root does not match its exact recipe identity" >&2
+    exit 1
+  fi
+  goimports_go_bin=$(type -P go || true)
+  if [[ -z $goimports_go_bin || ! -f $goimports_go_bin || \
+    -L $goimports_go_bin || ! -x $goimports_go_bin ]]; then
+    echo "error: denied-network goimports lane cannot resolve its managed Go toolchain" >&2
+    exit 1
+  fi
+  goimports_go_real=$(python -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' \
+    "$goimports_go_bin")
+  case $goimports_go_real in
+    "${MISE_DATA_DIR:?}"/*) ;;
+    *)
+      echo "error: denied-network goimports Go resolves outside the managed mise root" >&2
+      exit 1
+      ;;
+  esac
+  if [[ $(env GOTOOLCHAIN=local "$goimports_go_bin" version) != \
+    "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: denied-network goimports lane is not using exact Go 1.26.5 Darwin arm64" >&2
+    exit 1
+  fi
+  validate_goimports_binary "$goimports_bin" "$goimports_go_bin"
 fi
 go_vet_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("go-vet") != null' >/dev/null; then
@@ -403,6 +490,9 @@ while IFS= read -r program; do
   if [[ -z $resolved && $errcheck_selected == true && $program == errcheck ]]; then
     resolved="$errcheck_bin"
   fi
+  if [[ -z $resolved && $goimports_selected == true && $program == goimports ]]; then
+    resolved="$goimports_bin"
+  fi
   if [[ -z $resolved ]]; then
     resolved=$(type -P "$program" || true)
   fi
@@ -470,6 +560,7 @@ while IFS= read -r probe; do
   dclint_probe=false
   eslint_probe=false
   errcheck_probe=false
+  goimports_probe=false
   go_vet_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
@@ -574,6 +665,10 @@ while IFS= read -r probe; do
     probe_argv=("$errcheck_go_bin" version -m "$errcheck_bin")
     errcheck_probe=true
   fi
+  if [[ $goimports_selected == true && $owner == goimports ]]; then
+    probe_argv=("$goimports_go_bin" version -m "$goimports_bin")
+    goimports_probe=true
+  fi
   if [[ $go_vet_selected == true && $owner == go-vet ]]; then
     probe_argv=("$go_vet_go_bin" version)
     go_vet_probe=true
@@ -609,6 +704,10 @@ while IFS= read -r probe; do
   fi
   if [[ $errcheck_probe == true ]]; then
     validate_errcheck_metadata "$observed" "$errcheck_bin"
+    observed="$expected"
+  fi
+  if [[ $goimports_probe == true ]]; then
+    validate_goimports_metadata "$observed" "$goimports_bin"
     observed="$expected"
   fi
   case $match_kind in

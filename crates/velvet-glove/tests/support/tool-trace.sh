@@ -225,7 +225,7 @@ if [ "$logical_program" = vacuum ]; then
   done
   printf '%s\n' "$private_input_index" >"$record/vacuum-input-count"
 fi
-if [ "$logical_program" = errcheck ] || [ "$logical_program" = go ]; then
+if [ "$logical_program" = errcheck ] || [ "$logical_program" = go ] || [ "$logical_program" = goimports ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${HOME-}" >"$record/env-HOME"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
@@ -264,6 +264,7 @@ if [ "$logical_program" = errcheck ] || [ "$logical_program" = go ]; then
   printf '%s\n' "${GOVCS-}" >"$record/env-GOVCS"
   printf '%s\n' "${GOWORK-}" >"$record/env-GOWORK"
   printf '%s\n' "${GO_VELVET_GLOVE_POISON-}" >"$record/env-GO_VELVET_GLOVE_POISON"
+  printf '%s\n' "${GOIMPORTS_VELVET_GLOVE_POISON-}" >"$record/env-GOIMPORTS_VELVET_GLOVE_POISON"
   printf '%s\n' "${CI-}" >"$record/env-CI"
   printf '%s\n' "${DEBUG-}" >"$record/env-DEBUG"
   printf '%s\n' "${DYLD_FALLBACK_LIBRARY_PATH-}" >"$record/env-DYLD_FALLBACK_LIBRARY_PATH"
@@ -276,6 +277,132 @@ if [ "$logical_program" = errcheck ] || [ "$logical_program" = go ]; then
   printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
   printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
   printf '%s\n' "${LD_VELVET_GLOVE_POISON-}" >"$record/env-LD_VELVET_GLOVE_POISON"
+fi
+case ${GOROOT-} in
+  */velvet-glove-goimports-*/goroot) goimports_private_trace=1 ;;
+  *) goimports_private_trace=0 ;;
+esac
+if [ "$logical_program" = goimports ] || [ "$goimports_private_trace" -eq 1 ]; then
+  goimports_private_root=${GOROOT%/goroot}
+  printf '%s\n' "$goimports_private_root" >"$record/goimports-private-root"
+  for item in \
+    "root:$goimports_private_root" \
+    "goroot:$GOROOT" \
+    "goroot-bin:$GOROOT/bin" \
+    "goroot-src:$GOROOT/src" \
+    "trace-bin:$goimports_private_root/trace-bin" \
+    "gomodcache:${GOMODCACHE-}" \
+    "gopath:${GOPATH-}" \
+    "home-cache:${HOME-}/Library/Caches"
+  do
+    name=${item%%:*}
+    path=${item#*:}
+    if [ -L "$path" ]; then
+      printf '%s\n' symlink >"$record/goimports-$name-kind"
+    elif [ -d "$path" ]; then
+      printf '%s\n' directory >"$record/goimports-$name-kind"
+    else
+      printf '%s\n' missing >"$record/goimports-$name-kind"
+    fi
+    if item_mode=$(/usr/bin/stat -f '%Lp' "$path" 2>/dev/null); then
+      :
+    else
+      item_mode=$(/usr/bin/stat -c '%a' "$path")
+    fi
+    printf '%s\n' "$item_mode" >"$record/goimports-$name-mode"
+  done
+  /bin/ls -A "$GOROOT/bin" | /usr/bin/sort >"$record/goimports-goroot-bin-entries"
+  /bin/ls -A "$GOROOT/src" | /usr/bin/sort >"$record/goimports-goroot-src-entries"
+  /bin/ls -A "$goimports_private_root/trace-bin" | /usr/bin/sort >"$record/goimports-trace-bin-entries"
+  /bin/ls -A "${GOMODCACHE-}" | /usr/bin/sort >"$record/goimports-gomodcache-entries"
+  /bin/ls -A "${GOPATH-}" | /usr/bin/sort >"$record/goimports-gopath-entries"
+
+  if [ -L "$PWD" ]; then
+    printf '%s\n' symlink >"$record/goimports-cwd-kind"
+  elif [ -d "$PWD" ]; then
+    printf '%s\n' directory >"$record/goimports-cwd-kind"
+  else
+    printf '%s\n' missing >"$record/goimports-cwd-kind"
+  fi
+  /usr/bin/stat -f '%Lp' "$PWD" >"$record/goimports-cwd-mode"
+  if [ -f "$PWD/go.mod" ] && [ ! -L "$PWD/go.mod" ]; then
+    printf '%s\n' file >"$record/goimports-cwd-go-mod-kind"
+    /usr/bin/stat -f '%Lp' "$PWD/go.mod" >"$record/goimports-cwd-go-mod-mode"
+    /usr/bin/stat -f '%l' "$PWD/go.mod" >"$record/goimports-cwd-go-mod-links"
+    /usr/bin/wc -c <"$PWD/go.mod" | /usr/bin/tr -d ' ' >"$record/goimports-cwd-go-mod-size"
+    /usr/bin/shasum -a 256 "$PWD/go.mod" | /usr/bin/awk '{print $1}' >"$record/goimports-cwd-go-mod-sha256"
+  else
+    printf '%s\n' absent >"$record/goimports-cwd-go-mod-kind"
+  fi
+
+  boundary_mod=$goimports_private_root/go.mod
+  if [ -f "$boundary_mod" ] && [ ! -L "$boundary_mod" ]; then
+    printf '%s\n' file >"$record/goimports-boundary-go-mod-kind"
+  else
+    printf '%s\n' unsafe >"$record/goimports-boundary-go-mod-kind"
+  fi
+  /usr/bin/stat -f '%Lp' "$boundary_mod" >"$record/goimports-boundary-go-mod-mode"
+  /usr/bin/stat -f '%l' "$boundary_mod" >"$record/goimports-boundary-go-mod-links"
+  /usr/bin/wc -c <"$boundary_mod" | /usr/bin/tr -d ' ' >"$record/goimports-boundary-go-mod-size"
+  /usr/bin/shasum -a 256 "$boundary_mod" | /usr/bin/awk '{print $1}' >"$record/goimports-boundary-go-mod-sha256"
+
+  goimports_cache=${HOME-}/Library/Caches/goimports
+  if [ -f "$goimports_cache" ] && [ ! -L "$goimports_cache" ]; then
+    printf '%s\n' file >"$record/goimports-module-index-kind"
+  else
+    printf '%s\n' unsafe >"$record/goimports-module-index-kind"
+  fi
+  /usr/bin/stat -f '%Lp' "$goimports_cache" >"$record/goimports-module-index-mode"
+  /usr/bin/stat -f '%l' "$goimports_cache" >"$record/goimports-module-index-links"
+  /usr/bin/wc -c <"$goimports_cache" | /usr/bin/tr -d ' ' >"$record/goimports-module-index-size"
+  /usr/bin/shasum -a 256 "$goimports_cache" | /usr/bin/awk '{print $1}' >"$record/goimports-module-index-sha256"
+
+  telemetry_mode=${HOME-}/Library/Application\ Support/go/telemetry/mode
+  if [ -f "$telemetry_mode" ] && [ ! -L "$telemetry_mode" ]; then
+    printf '%s\n' file >"$record/goimports-telemetry-mode-kind"
+  else
+    printf '%s\n' unsafe >"$record/goimports-telemetry-mode-kind"
+  fi
+  /usr/bin/stat -f '%Lp' "$telemetry_mode" >"$record/goimports-telemetry-mode-mode"
+  /usr/bin/stat -f '%l' "$telemetry_mode" >"$record/goimports-telemetry-mode-links"
+  /usr/bin/wc -c <"$telemetry_mode" | /usr/bin/tr -d ' ' >"$record/goimports-telemetry-mode-size"
+  /usr/bin/shasum -a 256 "$telemetry_mode" | /usr/bin/awk '{print $1}' >"$record/goimports-telemetry-mode-sha256"
+
+  for binary in go goimports
+  do
+    if [ "$binary" = go ]; then
+      native="$GOROOT/bin/go"
+    else
+      native="$GOROOT/bin/goimports.real-native"
+    fi
+    if [ -f "$native" ] && [ ! -L "$native" ]; then
+      printf '%s\n' file >"$record/goimports-$binary-native-kind"
+    else
+      printf '%s\n' unsafe >"$record/goimports-$binary-native-kind"
+    fi
+    /usr/bin/stat -f '%Lp' "$native" >"$record/goimports-$binary-native-mode"
+    /usr/bin/stat -f '%l' "$native" >"$record/goimports-$binary-native-links"
+    /usr/bin/wc -c <"$native" | /usr/bin/tr -d ' ' >"$record/goimports-$binary-native-size"
+    /usr/bin/shasum -a 256 "$native" | /usr/bin/awk '{print $1}' >"$record/goimports-$binary-native-sha256"
+  done
+  for binding in go goimports
+  do
+    if [ "$binding" = go ]; then
+      sidecar="$goimports_private_root/trace-bin/go.real-program"
+    else
+      sidecar="$GOROOT/bin/goimports.real-program"
+    fi
+    if [ -f "$sidecar" ] && [ ! -L "$sidecar" ]; then
+      printf '%s\n' file >"$record/goimports-$binding-sidecar-kind"
+    else
+      printf '%s\n' unsafe >"$record/goimports-$binding-sidecar-kind"
+    fi
+    /usr/bin/stat -f '%Lp' "$sidecar" >"$record/goimports-$binding-sidecar-mode"
+    /usr/bin/stat -f '%l' "$sidecar" >"$record/goimports-$binding-sidecar-links"
+    /usr/bin/wc -c <"$sidecar" | /usr/bin/tr -d ' ' >"$record/goimports-$binding-sidecar-size"
+    /usr/bin/shasum -a 256 "$sidecar" | /usr/bin/awk '{print $1}' >"$record/goimports-$binding-sidecar-sha256"
+    /bin/cat "$sidecar" >"$record/goimports-$binding-sidecar-content"
+  done
 fi
 if [ "$logical_program" = cargo ] || [ "$logical_program" = cargo-clippy ] || [ "$logical_program" = cargo-fmt ] || [ "$logical_program" = rustfmt ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
@@ -392,6 +519,26 @@ eslint_cache=''
 eslint_private_controls=0
 for argument in "$@"; do
   printf '%s\n' "$argument" >"$record/argv-$argument_index"
+  if [ "$goimports_private_trace" -eq 1 ]; then
+    goimports_private_argument=$argument
+    case $goimports_private_argument in
+      -srcdir=*) goimports_private_argument=${goimports_private_argument#-srcdir=} ;;
+    esac
+    case $goimports_private_argument in
+      "$goimports_private_root"/*)
+        printf '%s\n' "$goimports_private_argument" >"$record/goimports-argv-$argument_index-path"
+        if [ -f "$goimports_private_argument" ] && [ ! -L "$goimports_private_argument" ]; then
+          printf '%s\n' file >"$record/goimports-argv-$argument_index-kind"
+        else
+          printf '%s\n' unsafe >"$record/goimports-argv-$argument_index-kind"
+        fi
+        /usr/bin/stat -f '%Lp' "$goimports_private_argument" >"$record/goimports-argv-$argument_index-mode"
+        /usr/bin/stat -f '%l' "$goimports_private_argument" >"$record/goimports-argv-$argument_index-links"
+        /usr/bin/wc -c <"$goimports_private_argument" | /usr/bin/tr -d ' ' >"$record/goimports-argv-$argument_index-size"
+        /usr/bin/shasum -a 256 "$goimports_private_argument" | /usr/bin/awk '{print $1}' >"$record/goimports-argv-$argument_index-sha256"
+        ;;
+    esac
+  fi
   if [ "$logical_program" = dclint ]; then
     case $argument in
       --config=*)

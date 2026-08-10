@@ -1012,6 +1012,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "go-fmt",
             "go-vet",
             "gofumpt",
+            "goimports",
             "jq",
             "prettier",
             "rubocop",
@@ -1212,6 +1213,75 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         "official gofumpt asset requires no mutable module bootstrap"
     );
 
+    let goimports = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "goimports")
+        .expect("goimports pinned recipe");
+    assert_eq!(goimports.id, "goimports-macos-arm64");
+    assert_eq!(goimports.environment_id, "macos-arm64-goimports");
+    assert_eq!(goimports.version, "0.48.0");
+    assert_eq!(goimports.case_executables, ["goimports", "go", "python"]);
+    assert_eq!(
+        goimports.cases,
+        [
+            "clean",
+            "missing-import",
+            "multi-file",
+            "operational-failure"
+        ]
+    );
+    assert_eq!(goimports.representative_case, "multi-file");
+    assert_eq!(goimports.probe.argv, ["go", "version", "-m", "goimports"]);
+    assert_eq!(goimports.probe.match_kind, "exact");
+    assert_eq!(
+        goimports.probe.expected,
+        "golang.org/x/tools v0.48.0 h1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=; go1.26.5; darwin/arm64; sha256:2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27"
+    );
+    assert_eq!(goimports.integrity.kind, "go-module-build");
+    assert_eq!(
+        goimports.integrity.sha256.as_deref(),
+        Some("8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755")
+    );
+    assert_eq!(
+        goimports.integrity.built_artifact_sha256.as_deref(),
+        Some("2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27")
+    );
+    assert_eq!(
+        goimports.integrity.module_manifest_sha256.as_deref(),
+        Some("9de464c8f30dde87a846b165fadd6620a150e54352265f8b22a7b63959510778")
+    );
+    assert_eq!(
+        goimports.integrity.module_lock_sha256.as_deref(),
+        Some("d43f495d37c149ddc7145f20b13b84812ba3aea895834e7595d6eacd62bc7a44")
+    );
+    let goimports_environment = environments
+        .get(goimports.environment_id.as_str())
+        .expect("goimports controlled environment");
+    assert_eq!(
+        goimports_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<Vec<_>>(),
+        ["goimports-go"]
+    );
+    assert_eq!(goimports_environment.bootstrap.len(), 1);
+    assert_eq!(
+        goimports_environment.bootstrap[0].argv,
+        [
+            "go",
+            "-C",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/goimports",
+            "mod",
+            "download",
+            "golang.org/x/tools@v0.48.0",
+            "golang.org/x/mod@v0.38.0",
+            "golang.org/x/sync@v0.22.0",
+            "golang.org/x/telemetry@v0.0.0-20260708182218-49f421fb7959",
+        ]
+    );
+
     let cargo_fmt_environment = environments
         .get(cargo_fmt.environment_id.as_str())
         .expect("cargo-fmt controlled environment");
@@ -1302,6 +1372,7 @@ fn pinned_runner_registry_selection_is_exact_and_parser_stable() {
             "macos-arm64-github-actions",
             "macos-arm64-go",
             "macos-arm64-gofumpt",
+            "macos-arm64-goimports",
             "macos-arm64-node",
             "macos-arm64-prettier",
             "macos-arm64-python",
@@ -1994,6 +2065,58 @@ fn gofumpt_runner_binds_the_official_binary_and_exact_go_build_metadata() {
     }
 }
 
+#[test]
+fn goimports_runner_binds_the_exact_source_build_and_denied_network_artifact() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+
+    for required in [
+        "goimports_selected=false",
+        "index(\"goimports\") != null",
+        "goimports-build-0.48.0",
+        "goimports-go1.26.5-mod-cache",
+        "golang.org/x/tools@v0.48.0",
+        "golang.org/x/mod@v0.38.0",
+        "golang.org/x/sync@v0.22.0",
+        "golang.org/x/telemetry@v0.0.0-20260708182218-49f421fb7959",
+        "8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755",
+        "e6b55566a172ecfd21e5f4a8750f2d25665287288b24ff8d4e6cea5d5078c608",
+        "5487d5d99925cc2ad6884e66d70906ac13aa0180d88387bc66f0c706276c2f22",
+        "GOPROXY=file://$goimports_mod_cache/cache/download",
+        "-ldflags '-s -w -buildid='",
+        "2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27",
+        "validate_goimports_binary",
+        "pinned_component_cache_valid",
+    ] {
+        assert!(
+            outer.contains(required),
+            "outer goimports runner omits {required:?}"
+        );
+    }
+    for required in [
+        "goimports_selected=false",
+        "index(\"goimports\") != null",
+        "goimports_bin=\"$goimports_root/bin/goimports\"",
+        "goimports_go_bin=$(type -P go || true)",
+        "denied-network goimports Go resolves outside the managed mise root",
+        "observed_size != 5814322",
+        "version -m \"$goimports_bin\"",
+        "golang.org/x/tools/cmd/goimports",
+        "golang.org/x/telemetry\\tv0.0.0-20260708182218-49f421fb7959",
+        "validate_goimports_metadata",
+        "probe_argv=(\"$goimports_go_bin\" version -m \"$goimports_bin\")",
+        "resolved=\"$goimports_bin\"",
+    ] {
+        assert!(
+            inner.contains(required),
+            "inner goimports runner omits {required:?}"
+        );
+    }
+}
+
 fn validate_components<'a>(
     root: &Path,
     components: &'a [Component],
@@ -2055,6 +2178,121 @@ fn validate_integrity(root: &Path, integrity: &Integrity, owner: &str) {
         "{owner}: unsupported integrity kind"
     );
     if integrity.kind == "go-module-build" {
+        if owner == "goimports-macos-arm64" {
+            assert!(integrity.component_id.is_none());
+            assert_eq!(
+                integrity.path.as_deref(),
+                Some("crates/hookkit-pkl-config/validation/provisioning/goimports/go.mod")
+            );
+            assert_eq!(
+                integrity.url.as_deref(),
+                Some("https://proxy.golang.org/golang.org/x/tools/@v/v0.48.0.zip")
+            );
+            assert_eq!(
+                integrity.sha256.as_deref(),
+                Some("8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755")
+            );
+            assert!(integrity.patch_sha256.is_none());
+            assert_eq!(
+                integrity.module_manifest_path.as_deref(),
+                Some("crates/hookkit-pkl-config/validation/provisioning/goimports/go.mod")
+            );
+            assert_eq!(
+                integrity.module_manifest_sha256.as_deref(),
+                Some("9de464c8f30dde87a846b165fadd6620a150e54352265f8b22a7b63959510778")
+            );
+            assert_eq!(
+                integrity.module_lock_path.as_deref(),
+                Some("crates/hookkit-pkl-config/validation/provisioning/goimports/go.sum")
+            );
+            assert_eq!(
+                integrity.module_lock_sha256.as_deref(),
+                Some("d43f495d37c149ddc7145f20b13b84812ba3aea895834e7595d6eacd62bc7a44")
+            );
+            assert_eq!(
+                integrity.built_artifact_sha256.as_deref(),
+                Some("2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27")
+            );
+            assert_eq!(
+                integrity.build_toolchain_component_id.as_deref(),
+                Some("goimports-go")
+            );
+            assert_eq!(integrity.build_working_directory.as_deref(), Some("/"));
+            assert_eq!(
+                integrity.build_argv,
+                [
+                    "go",
+                    "install",
+                    "-trimpath",
+                    "-ldflags",
+                    "-s -w -buildid=",
+                    "golang.org/x/tools/cmd/goimports@v0.48.0",
+                ]
+            );
+            assert_eq!(
+                integrity.build_environment,
+                BTreeMap::from([
+                    ("CGO_ENABLED".to_owned(), "0".to_owned()),
+                    (
+                        "GOBIN".to_owned(),
+                        "{state}/goimports-build-0.48.0/install/bin".to_owned()
+                    ),
+                    (
+                        "GOCACHE".to_owned(),
+                        "{state}/goimports-build-0.48.0/go-build-cache".to_owned()
+                    ),
+                    (
+                        "GOMODCACHE".to_owned(),
+                        "{state}/goimports-go1.26.5-mod-cache".to_owned()
+                    ),
+                    ("GOOS".to_owned(), "darwin".to_owned()),
+                    ("GOARCH".to_owned(), "arm64".to_owned()),
+                    ("GOARM64".to_owned(), "v8.0".to_owned()),
+                    (
+                        "GOPROXY".to_owned(),
+                        "file://{state}/goimports-go1.26.5-mod-cache/cache/download".to_owned()
+                    ),
+                    ("GOSUMDB".to_owned(), "off".to_owned()),
+                    ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+                ])
+            );
+            assert!(integrity.archive_format.is_none());
+            assert!(integrity.archive_root.is_none());
+            assert_eq!(integrity.min_os_version.as_deref(), Some("12.0"));
+            assert_eq!(
+                integrity.allowed_dylib_prefixes,
+                ["/System/Library/", "/usr/lib/"]
+            );
+
+            let module_manifest_path = integrity
+                .module_manifest_path
+                .as_deref()
+                .expect("goimports module manifest path");
+            let module_lock_path = integrity
+                .module_lock_path
+                .as_deref()
+                .expect("goimports module lock path");
+            assert_file(root, module_manifest_path);
+            assert_file(root, module_lock_path);
+            let module_manifest =
+                std::fs::read_to_string(root.join(module_manifest_path)).expect("goimports go.mod");
+            assert_eq!(
+                module_manifest,
+                "module velvet-glove-goimports-build\n\ngo 1.26.5\n\nrequire golang.org/x/tools v0.48.0\n"
+            );
+            let module_lock =
+                std::fs::read_to_string(root.join(module_lock_path)).expect("goimports go.sum");
+            assert_eq!(module_lock.lines().count(), 8);
+            for required in [
+                "golang.org/x/mod v0.38.0 h1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=",
+                "golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=",
+                "golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 h1:RJhm5l6Fo4rmEIcndxDllNhhf/fAx8qIm4t6A7vpm2A=",
+                "golang.org/x/tools v0.48.0 h1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=",
+            ] {
+                assert!(module_lock.lines().any(|line| line == required));
+            }
+            return;
+        }
         assert_eq!(owner, "errcheck-macos-arm64");
         assert!(integrity.component_id.is_none());
         assert_eq!(
