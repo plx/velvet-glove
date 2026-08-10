@@ -1010,6 +1010,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "ghalint-workflow",
             "errcheck",
             "go-fmt",
+            "go-vet",
             "jq",
             "prettier",
             "rubocop",
@@ -1114,6 +1115,45 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     assert_eq!(
         errcheck.probe.expected,
         "github.com/kisielk/errcheck v1.20.0 h1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=; go1.26.5; darwin/arm64; sha256:4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c"
+    );
+
+    let go_vet = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "go-vet")
+        .expect("go-vet pinned recipe");
+    assert_eq!(go_vet.id, "go-vet-macos-arm64");
+    assert_eq!(go_vet.environment_id, "macos-arm64-go");
+    assert_eq!(go_vet.version, "go1.26.5");
+    assert_eq!(go_vet.case_executables, ["go", "python"]);
+    assert_eq!(
+        go_vet.cases,
+        [
+            "clean",
+            "multi-package",
+            "operational-failure",
+            "printf-mismatch",
+            "test-findings"
+        ]
+    );
+    assert_eq!(go_vet.representative_case, "test-findings");
+    assert_eq!(go_vet.probe.argv, ["go", "version"]);
+    assert_eq!(go_vet.probe.match_kind, "exact");
+    assert_eq!(go_vet.probe.expected, "go version go1.26.5 darwin/arm64");
+    assert_eq!(go_vet.integrity.kind, "mise-lock");
+    assert_eq!(
+        go_vet.integrity.path.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/mise.lock")
+    );
+    assert!(
+        go_vet
+            .installation_source
+            .contains("efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a")
+    );
+    assert!(
+        go_vet
+            .installation_source
+            .contains("c19862e5f8415b4f24b189d065ed739517c548ba")
     );
 
     let cargo_fmt_environment = environments
@@ -1834,6 +1874,33 @@ fn errcheck_provisioning_cross_links_proxy_module_artifact_and_go_identity() {
             .join("crates/hookkit-pkl-config/validation/provisioning/errcheck/recipe.draft.json")
             .exists()
     );
+}
+
+#[test]
+fn go_vet_runner_binds_the_unchanged_managed_go_environment() {
+    let root = repository_root();
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    let mise_lock = std::fs::read_to_string(
+        root.join("crates/hookkit-pkl-config/validation/provisioning/mise.lock"),
+    )
+    .expect("shared mise lock");
+
+    for required in [
+        "go_vet_selected=false",
+        "index(\"go-vet\") != null",
+        "go_vet_go_bin=$(type -P go || true)",
+        "denied-network go-vet Go resolves outside the managed mise root",
+        "go version go1.26.5 darwin/arm64",
+        "probe_argv=(\"$go_vet_go_bin\" version)",
+        "observed=$(env GOTOOLCHAIN=local \"${probe_argv[@]}\" 2>&1)",
+    ] {
+        assert!(inner.contains(required), "go-vet runner omits {required:?}");
+    }
+    assert!(mise_lock.contains("[[tools.go]]\nversion = \"1.26.5\""));
+    assert!(mise_lock.contains(
+        "checksum = \"sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a\""
+    ));
 }
 
 fn validate_components<'a>(

@@ -15,12 +15,13 @@ just tool-case dclint autofix-multi-file
 just tool-case eslint multi-file
 just tool-case ghalint-workflow multi-workflow
 just tool-case go-fmt multi-file
+just tool-case go-vet test-findings
 just tool-case errcheck multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all twenty behavior-rich representative contracts across sixteen environments
+Run all twenty-two behavior-rich representative contracts across seventeen environments
 with:
 
 ```sh
@@ -90,7 +91,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | ESLint | Node 24.19.0; npm 11.17.0; ESLint 10.8.1; Python 3.14.5 | official Node archive SHA-256; exact npm SHA-512 integrity closure | `eslint/multi-file` |
 | GitHub Actions | Go 1.26.5; ghalint 1.5.6+velvet-glove.1; Python 3.14.5 | mise SHA-256; source, closure patch, module graph, and reproducible built-artifact SHA-256 | `ghalint-workflow/multi-workflow` |
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
-| Go | Go/gofmt 1.26.5; Python 3.14.5 | mise SHA-256 | `go-fmt/multi-file` |
+| Go | Go/gofmt/go vet 1.26.5; Python 3.14.5 | official Go archive SHA-256; exact mise archive lock | `go-fmt/multi-file`, `go-vet/test-findings` |
 | Errcheck Go | Go 1.26.5; errcheck 1.20.0; Python 3.14.5 | official Go archive SHA-256; Go proxy zip SHA-256; exact module sums; reproducible binary SHA-256 and embedded build metadata | `errcheck/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Cargo Clippy/Fmt | Rust/Cargo 1.97.1; Clippy 0.1.97; cargo-fmt/rustfmt 1.9.0; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix`, `cargo-fmt/workspace-multi` |
@@ -459,6 +460,98 @@ checks. Native multi-file `-w` is not transactional, so a late write-time I/O
 failure such as a permission change or storage failure can still leave earlier
 files mutated even though deterministic parse/read failures are caught by the
 preflight.
+
+### go vet validation contract
+
+The go vet recipe reuses the unchanged Go environment and archive documented
+above: Go 1.26.5 at SHA-256
+`efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a`
+and tag commit `c19862e5f8415b4f24b189d065ed739517c548ba`. It adds no package,
+lock, license, or bootstrap step. The denied-network runner resolves `go`
+inside the managed mise root and requires the exact probe
+`go version go1.26.5 darwin/arm64`. The evaluated immediate phase and its
+compatibility-translated deferred check share one isolated Python command:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> go {extra-args} __VELVET_GLOVE_GO_VET_WORKSPACE__ {workspace-indicator}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+All extra arguments are rejected because analyzer flags such as
+`-printf=false` can manufacture a false clean, and ambient Go variables that
+can alter toolchain, analyzer, module, or build semantics are rejected before
+any child starts. A canonical inherited `GOMODCACHE` is treated only as the
+runner-controlled read cache. Every invocation receives a newly allocated
+0700 private home, temporary directory, GOPATH, GOTMPDIR, XDG cache, and
+GOCACHE. The child environment fixes `CGO_ENABLED=0`, `GOENV=off`,
+`GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOSUMDB=off`, `GOVCS=*:off`,
+`GOTOOLCHAIN=local`, and `GOWORK=off`; compiler, loader, debug, CI, and all
+other inherited Go channels are removed. The active mise deny-network wrapper
+remains authoritative.
+
+The adapter snapshots the unique regular `go.mod`, optional `go.sum`, and all
+physical Go files outside fixed skipped subtrees. Symlinks and hard links are
+rejected. It then runs exactly these commands through the selected Go
+executable, checking the complete snapshot after each child:
+
+```text
+go env -json GOARCH GOMODCACHE GOOS GOROOT GOVERSION
+go mod verify
+go list -mod=readonly -json ./...
+go vet -json -mod=readonly ./...
+```
+
+The environment record must contain only the requested fields, name exact Go
+1.26.5, retain the controlled module cache, and point to an executable GOROOT
+toolchain. Module verification must emit its exact success line. The complete
+concatenated `go list` stream must describe the selected main module without
+incomplete packages or dependency errors, cover every physical Go file as an
+enabled or explicitly ignored source, and derive the exact production,
+internal-test, and external-test action set.
+
+Go 1.26.5 `go vet -json` does not use its status to distinguish findings:
+valid diagnostics still exit zero. Its stdout is a concatenated JSON-object
+stream with one object per requested action, including anonymous `{}` objects
+for clean actions. The adapter decodes that stream through EOF exactly once,
+rejecting duplicate JSON fields, non-finite numbers, truncation, trailing
+garbage, and a missing completion newline. The record count must equal the
+trusted action count. Every nonempty object must name one expected unrepeated
+package or test action; embedded analyzer errors fail operationally. Analyzer
+names, diagnostic arrays, messages, canonical workspace paths, positive
+line/byte-column positions, UTF-8 boundaries, related information, and
+sorted nonoverlapping suggested-fix edits all use a closed validated schema.
+Only validated findings map to adapter status 1; a validated all-clean stream
+maps to 0. Every native nonzero, any stderr, malformed or incomplete scope,
+schema or position error, mutation, signal, descendant leak, or combined
+output beyond 16 MiB maps to 2 while preserving bounded native evidence.
+
+The five-case matrix covers a silent clean module, a printf finding, a
+multi-package module whose finding is outside the selected candidate file,
+both internal- and external-test findings, and an unselected syntax failure.
+Claude and Codex goldens cover both immediate and compatibility-deferred
+surfaces, including exact status, output, attribution, no mutation, and
+idempotence. The evaluated adversarial lifecycle covers analyzer-disable false
+cleans through argv and environment, malformed/truncated/multiple JSON,
+package/action-count drift, embedded errors, invalid positions and fixes,
+mutation, symlink and hard-link aliases, the output cap, pre-allocation,
+in-child, and post-removal signals, inherited- and closed-pipe descendants,
+and primary-plus-cleanup error composition.
+
+Anonymous `{}` records are deliberately conservative: their total count is
+bound to the trusted package/test action count, but Go supplies no identity by
+which to prove which clean action each object represents. Build-tag-ignored
+files are trusted only when `go list` reports them ignored, and a directory
+whose physical files are all ignored is rejected rather than silently
+accepted. CGO is disabled, so cgo-only scopes are unsupported. Local replace
+targets and already-cached external module sources can be read outside the
+workspace snapshot; the adapter proves the main-module inventory, not an
+immutable dependency closure. A concurrent replacement changed and restored
+between snapshots can evade detection, and a descendant that deliberately
+escapes its owned session or process group cannot be reaped. These are stated
+boundaries rather than coverage claims.
 
 ### errcheck validation contract
 

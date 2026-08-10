@@ -213,6 +213,33 @@ if [[ $errcheck_selected == true ]]; then
   fi
   validate_errcheck_binary "$errcheck_bin" "$errcheck_go_bin"
 fi
+go_vet_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("go-vet") != null' >/dev/null; then
+  go_vet_selected=true
+fi
+go_vet_go_bin=
+if [[ $go_vet_selected == true ]]; then
+  go_vet_go_bin=$(type -P go || true)
+  if [[ -z $go_vet_go_bin || ! -f $go_vet_go_bin || \
+    -L $go_vet_go_bin || ! -x $go_vet_go_bin ]]; then
+    echo "error: denied-network go-vet lane cannot resolve its managed Go toolchain" >&2
+    exit 1
+  fi
+  go_vet_go_real=$(python -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' \
+    "$go_vet_go_bin")
+  case $go_vet_go_real in
+    "${MISE_DATA_DIR:?}"/*) ;;
+    *)
+      echo "error: denied-network go-vet Go resolves outside the managed mise root" >&2
+      exit 1
+      ;;
+  esac
+  if [[ $(env GOTOOLCHAIN=local "$go_vet_go_bin" version) != \
+    "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: denied-network go-vet lane is not using exact Go 1.26.5 Darwin arm64" >&2
+    exit 1
+  fi
+fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
   [.recipes[] as $recipe
@@ -390,6 +417,7 @@ while IFS= read -r probe; do
   dclint_probe=false
   eslint_probe=false
   errcheck_probe=false
+  go_vet_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
   done < <(printf '%s\n' "$probe" | jq -r '.probe.argv[]')
@@ -493,9 +521,15 @@ while IFS= read -r probe; do
     probe_argv=("$errcheck_go_bin" version -m "$errcheck_bin")
     errcheck_probe=true
   fi
+  if [[ $go_vet_selected == true && $owner == go-vet ]]; then
+    probe_argv=("$go_vet_go_bin" version)
+    go_vet_probe=true
+  fi
   set +e
   if [[ $rust_197_probe == true ]]; then
     observed=$(env "DYLD_LIBRARY_PATH=$VELVET_GLOVE_FIXTURE_CARGO_CLIPPY_TOOLCHAIN_ROOT/lib" "${probe_argv[@]}" 2>&1)
+  elif [[ $go_vet_probe == true ]]; then
+    observed=$(env GOTOOLCHAIN=local "${probe_argv[@]}" 2>&1)
   elif [[ $prettier_probe == true || $contextlint_probe == true || $dclint_probe == true || \
     $eslint_probe == true ]]; then
     observed=$(env -i \

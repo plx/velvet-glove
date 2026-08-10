@@ -156,13 +156,14 @@ just tool-case eslint multi-file
 just tool-case ghalint-workflow multi-workflow
 just tool-case buf-format multi-file
 just tool-case go-fmt multi-file
+just tool-case go-vet test-findings
 just tool-case errcheck multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Twenty-one behavior-rich contracts across seventeen environments: jq, Buf, and
+# Twenty-two behavior-rich contracts across seventeen environments: jq, Buf, and
 # Vacuum data formats; shared Node; dedicated Prettier, Contextlint, dclint,
-# ESLint, and GitHub Actions; Python, gofmt, errcheck, Rust, Cargo Clippy/Fmt,
+# ESLint, and GitHub Actions; Python, gofmt/go vet, errcheck, Rust, Cargo Clippy/Fmt,
 # Ruby, security, and native macOS.
 just tool-representatives
 
