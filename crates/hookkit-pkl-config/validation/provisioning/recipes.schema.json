@@ -96,7 +96,8 @@
             "host-program",
             "runtime-bundled",
             "sha256-archive",
-            "go-source-build"
+            "go-source-build",
+            "go-module-build"
           ]
         },
         "path": { "type": "string", "minLength": 1 },
@@ -160,6 +161,27 @@
               "patchSha256",
               "archiveFormat",
               "archiveRoot",
+              "moduleManifestPath",
+              "moduleManifestSha256",
+              "moduleLockPath",
+              "moduleLockSha256",
+              "builtArtifactSha256",
+              "buildToolchainComponentId",
+              "buildWorkingDirectory",
+              "buildArgv",
+              "buildEnvironment",
+              "minOsVersion",
+              "allowedDylibPrefixes"
+            ]
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "go-module-build" } } },
+          "then": {
+            "required": [
+              "path",
+              "url",
+              "sha256",
               "moduleManifestPath",
               "moduleManifestSha256",
               "moduleLockPath",

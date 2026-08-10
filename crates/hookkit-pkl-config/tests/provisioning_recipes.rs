@@ -649,7 +649,6 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         eslint_lock["packages"]["node_modules/eslint"]["integrity"],
         "sha512-wqA7W2jbsC/BnV9Iv1UZpKVFkO1AdNoSmYW8NWG4HNOBbkAMvIqDZ27pI2f07dqn583NcIC44ckjAcOXDL1QbQ=="
     );
-
     let github_actions_environment = environments
         .get("macos-arm64-github-actions")
         .expect("dedicated GitHub Actions environment");
@@ -683,6 +682,57 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
     assert_eq!(github_actions_environment.bootstrap[1].network, "required");
     assert_eq!(github_actions_environment.bootstrap[2].network, "denied");
     assert_eq!(github_actions_environment.bootstrap[3].network, "denied");
+    let errcheck_environment = environments
+        .get("macos-arm64-errcheck")
+        .expect("dedicated errcheck environment");
+    assert_eq!(errcheck_environment.provisioning_group, "go");
+    assert_eq!(
+        errcheck_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["errcheck-go"])
+    );
+    assert_eq!(errcheck_environment.auxiliary_programs, ["go"]);
+    let errcheck_bootstrap = errcheck_environment
+        .bootstrap
+        .iter()
+        .find(|step| step.id == "errcheck-go-mod-download")
+        .expect("errcheck Go module bootstrap");
+    assert_eq!(errcheck_bootstrap.network, "required");
+    assert_eq!(errcheck_bootstrap.working_directory.as_deref(), Some("/"));
+    assert_eq!(
+        errcheck_bootstrap.lockfile.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/errcheck/go.sum")
+    );
+    assert_eq!(
+        errcheck_bootstrap.argv,
+        [
+            "go",
+            "-C",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/errcheck",
+            "mod",
+            "download",
+            "all",
+        ]
+    );
+    assert_eq!(
+        errcheck_bootstrap.environment,
+        BTreeMap::from([
+            (
+                "GOCACHE".to_owned(),
+                "{state}/errcheck-bootstrap-go1.26.5-build-cache".to_owned()
+            ),
+            (
+                "GOMODCACHE".to_owned(),
+                "{state}/errcheck-go1.26.5-mod-cache".to_owned()
+            ),
+            ("GOPROXY".to_owned(), "https://proxy.golang.org".to_owned()),
+            ("GOSUMDB".to_owned(), "sum.golang.org".to_owned()),
+            ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+        ])
+    );
     let mise_lock = std::fs::read_to_string(root.join(&registry.mise.lock)).expect("mise lock");
     for component in registry.shared_components.iter().chain(
         registry
@@ -958,6 +1008,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "dclint",
             "eslint",
             "ghalint-workflow",
+            "errcheck",
             "go-fmt",
             "jq",
             "prettier",
@@ -1044,6 +1095,27 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         "ghalint version 1.5.6+velvet-glove.1"
     );
 
+    let errcheck = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "errcheck")
+        .expect("errcheck pinned recipe");
+    assert_eq!(errcheck.id, "errcheck-macos-arm64");
+    assert_eq!(errcheck.environment_id, "macos-arm64-errcheck");
+    assert_eq!(errcheck.version, "1.20.0");
+    assert_eq!(errcheck.case_executables, ["errcheck", "go", "python"]);
+    assert_eq!(
+        errcheck.cases,
+        ["clean", "unhandled", "multi-file", "operational-failure"]
+    );
+    assert_eq!(errcheck.representative_case, "multi-file");
+    assert_eq!(errcheck.probe.argv, ["go", "version", "-m", "errcheck"]);
+    assert_eq!(errcheck.probe.match_kind, "exact");
+    assert_eq!(
+        errcheck.probe.expected,
+        "github.com/kisielk/errcheck v1.20.0 h1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=; go1.26.5; darwin/arm64; sha256:4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c"
+    );
+
     let cargo_fmt_environment = environments
         .get(cargo_fmt.environment_id.as_str())
         .expect("cargo-fmt controlled environment");
@@ -1064,6 +1136,143 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "cargo-fmt closure omits {required}"
         );
     }
+}
+
+#[test]
+fn pinned_runner_registry_selection_is_exact_and_parser_stable() {
+    let registry: Registry = serde_json::from_str(RECIPES_JSON).expect("strict recipe registry");
+    let plan = |selected_tools: &BTreeSet<&str>| {
+        let environment_ids = registry
+            .recipes
+            .iter()
+            .filter(|recipe| selected_tools.contains(recipe.tool_id.as_str()))
+            .map(|recipe| recipe.environment_id.clone())
+            .collect::<BTreeSet<_>>();
+        let selected_environments = registry
+            .environments
+            .iter()
+            .filter(|environment| environment_ids.contains(&environment.id))
+            .collect::<Vec<_>>();
+        let groups = selected_environments
+            .iter()
+            .map(|environment| environment.provisioning_group.clone())
+            .collect::<BTreeSet<_>>();
+        let mise_tools = registry
+            .shared_components
+            .iter()
+            .chain(
+                selected_environments
+                    .iter()
+                    .flat_map(|environment| environment.components.iter()),
+            )
+            .filter_map(|component| component.mise_tool.clone())
+            .collect::<BTreeSet<_>>();
+        (environment_ids, groups, mise_tools)
+    };
+
+    let errcheck_tools = BTreeSet::from(["errcheck"]);
+    let (environment_ids, groups, mise_tools) = plan(&errcheck_tools);
+    assert_eq!(
+        environment_ids,
+        BTreeSet::from(["macos-arm64-errcheck".to_owned()])
+    );
+    assert_eq!(groups, BTreeSet::from(["go".to_owned()]));
+    assert_eq!(
+        mise_tools,
+        BTreeSet::from([
+            "go@1.26.5".to_owned(),
+            "jq@1.8.2".to_owned(),
+            "pkl@0.31.1".to_owned(),
+            "python@3.14.5".to_owned(),
+        ])
+    );
+
+    let representative_tools = registry
+        .recipes
+        .iter()
+        .map(|recipe| recipe.tool_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let (environment_ids, groups, mise_tools) = plan(&representative_tools);
+    assert_eq!(
+        environment_ids,
+        [
+            "macos-arm64-buf",
+            "macos-arm64-cargo-clippy",
+            "macos-arm64-contextlint",
+            "macos-arm64-data-formats",
+            "macos-arm64-dclint",
+            "macos-arm64-errcheck",
+            "macos-arm64-eslint",
+            "macos-arm64-github-actions",
+            "macos-arm64-go",
+            "macos-arm64-node",
+            "macos-arm64-prettier",
+            "macos-arm64-python",
+            "macos-arm64-ruby",
+            "macos-arm64-rust",
+            "macos-arm64-security",
+            "macos-arm64-swift",
+            "macos-arm64-vacuum",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert_eq!(
+        groups,
+        [
+            "cargo-clippy",
+            "contextlint",
+            "data-formats",
+            "dclint",
+            "eslint",
+            "github-actions",
+            "go",
+            "node",
+            "prettier",
+            "python",
+            "ruby",
+            "rust",
+            "security",
+            "swift",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert_eq!(
+        mise_tools,
+        [
+            "buf@1.72.0",
+            "go@1.26.5",
+            "jq@1.8.2",
+            "node@24.18.0",
+            "pkl@0.31.1",
+            "python@3.14.5",
+            "swiftlint@0.65.0",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    for (name, runner) in [("outer", outer.as_str()), ("inner", inner.as_str())] {
+        assert!(
+            !runner.contains("select(.toolId as $tool | $tools | index($tool))"),
+            "{name} must bind the recipe outside its membership predicate"
+        );
+        assert!(
+            !runner.contains("select(.id as $id | $environmentIds | index($id))"),
+            "{name} must bind the environment outside its membership predicate"
+        );
+    }
+    assert!(!inner.contains("any(.recipes[] as"));
+    assert!(inner.contains(". as $registry\n  | ([.recipes[] as $recipe"));
 }
 
 #[test]
@@ -1553,6 +1762,80 @@ fn eslint_provisioning_uses_a_dedicated_runtime_and_case_only_binding() {
     assert!(harness.contains("ESLint trace did not pass the dedicated managed CLI"));
 }
 
+#[test]
+fn errcheck_provisioning_cross_links_proxy_module_artifact_and_go_identity() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    let mise_lock = std::fs::read_to_string(
+        root.join("crates/hookkit-pkl-config/validation/provisioning/mise.lock"),
+    )
+    .expect("shared mise lock");
+
+    for runner in [&outer, &inner] {
+        assert!(runner.contains("errcheck-macos-arm64"));
+        assert!(
+            runner.contains("4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c")
+        );
+        assert!(runner.contains("go1.26.5"));
+        assert!(runner.contains("github.com/kisielk/errcheck\\tv1.20.0"));
+        assert!(runner.contains("golang.org/x/mod\\tv0.35.0"));
+        assert!(runner.contains("golang.org/x/sync\\tv0.20.0"));
+        assert!(runner.contains("golang.org/x/tools\\tv0.44.0"));
+    }
+    assert!(outer.contains(
+        "errcheck_proxy_zip=\"$errcheck_mod_cache/cache/download/github.com/kisielk/errcheck/@v/v1.20.0.zip\""
+    ));
+    assert!(outer.contains("\"$errcheck_go_bin\" install \\"));
+    assert!(outer.contains("github.com/kisielk/errcheck@v1.20.0"));
+    assert!(
+        outer.contains(r#""$errcheck_go_bin" -C "${errcheck_manifest%/go.mod}" mod download \"#)
+    );
+    for module in [
+        "github.com/kisielk/errcheck@v1.20.0",
+        "golang.org/x/mod@v0.35.0",
+        "golang.org/x/sync@v0.20.0",
+        "golang.org/x/tools@v0.44.0",
+    ] {
+        assert!(
+            outer.contains(module),
+            "explicit errcheck bootstrap: {module}"
+        );
+    }
+    let errcheck_block = outer
+        .split("if [[ $errcheck_selected == true ]]; then")
+        .nth(1)
+        .expect("errcheck provisioning block")
+        .split("if needs_group ruby; then")
+        .next()
+        .expect("bounded errcheck provisioning block");
+    assert!(
+        !errcheck_block.contains("mod download all"),
+        "errcheck bootstrap must not expand the reviewed module lock"
+    );
+    assert!(
+        errcheck_block
+            .contains("error: errcheck network bootstrap changed the exact module inputs")
+    );
+    assert!(outer.contains("GOPROXY=file://$errcheck_mod_cache/cache/download"));
+    assert!(outer.contains("exec --locked --fresh-env --deny-net --"));
+    assert!(inner.contains("pinned_component_cache_valid \\"));
+    assert!(inner.contains("\"$errcheck_root\" \"$errcheck_identity\" bin/errcheck"));
+    assert!(inner.contains("probe_argv=(\"$errcheck_go_bin\" version -m \"$errcheck_bin\")"));
+    assert!(inner.contains("buildToolchainArtifactSha256"));
+    assert!(mise_lock.contains("[[tools.go]]\nversion = \"1.26.5\""));
+    assert!(mise_lock.contains(
+        "checksum = \"sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a\""
+    ));
+    assert!(
+        !root
+            .join("crates/hookkit-pkl-config/validation/provisioning/errcheck/recipe.draft.json")
+            .exists()
+    );
+}
+
 fn validate_components<'a>(
     root: &Path,
     components: &'a [Component],
@@ -1609,9 +1892,125 @@ fn validate_integrity(root: &Path, integrity: &Integrity, owner: &str) {
                 | "runtime-bundled"
                 | "sha256-archive"
                 | "go-source-build"
+                | "go-module-build"
         ),
         "{owner}: unsupported integrity kind"
     );
+    if integrity.kind == "go-module-build" {
+        assert_eq!(owner, "errcheck-macos-arm64");
+        assert!(integrity.component_id.is_none());
+        assert_eq!(
+            integrity.path.as_deref(),
+            Some("crates/hookkit-pkl-config/validation/provisioning/errcheck/go.mod")
+        );
+        assert_eq!(
+            integrity.url.as_deref(),
+            Some("https://proxy.golang.org/github.com/kisielk/errcheck/@v/v1.20.0.zip")
+        );
+        assert_eq!(
+            integrity.sha256.as_deref(),
+            Some("50dbdc1e07128552bda3dad27dfaad9dca100d16869bf58485fe05ed4a45f0b6")
+        );
+        assert!(integrity.patch_sha256.is_none());
+        assert_eq!(
+            integrity.module_manifest_path.as_deref(),
+            Some("crates/hookkit-pkl-config/validation/provisioning/errcheck/go.mod")
+        );
+        assert_eq!(
+            integrity.module_manifest_sha256.as_deref(),
+            Some("06abec38397f045f72e5496d0430dd3473ef2be2fe0187b4d29cd7ff7dd968ef")
+        );
+        assert_eq!(
+            integrity.module_lock_path.as_deref(),
+            Some("crates/hookkit-pkl-config/validation/provisioning/errcheck/go.sum")
+        );
+        assert_eq!(
+            integrity.module_lock_sha256.as_deref(),
+            Some("594d33a278d8c5313b8b7015f6d8e9590ed0e53ea393296fa9c03ea58a8fa145")
+        );
+        assert_eq!(
+            integrity.built_artifact_sha256.as_deref(),
+            Some("4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c")
+        );
+        assert_eq!(
+            integrity.build_toolchain_component_id.as_deref(),
+            Some("errcheck-go")
+        );
+        assert_eq!(integrity.build_working_directory.as_deref(), Some("/"));
+        assert_eq!(
+            integrity.build_argv,
+            [
+                "go",
+                "install",
+                "-trimpath",
+                "-ldflags",
+                "-s -w -buildid=",
+                "github.com/kisielk/errcheck@v1.20.0",
+            ]
+        );
+        assert_eq!(
+            integrity.build_environment,
+            BTreeMap::from([
+                ("CGO_ENABLED".to_owned(), "0".to_owned()),
+                (
+                    "GOBIN".to_owned(),
+                    "{state}/errcheck-build-1.20.0/install/bin".to_owned()
+                ),
+                (
+                    "GOCACHE".to_owned(),
+                    "{state}/errcheck-build-1.20.0/go-build-cache".to_owned()
+                ),
+                (
+                    "GOMODCACHE".to_owned(),
+                    "{state}/errcheck-go1.26.5-mod-cache".to_owned()
+                ),
+                ("GOOS".to_owned(), "darwin".to_owned()),
+                ("GOARCH".to_owned(), "arm64".to_owned()),
+                (
+                    "GOPROXY".to_owned(),
+                    "file://{state}/errcheck-go1.26.5-mod-cache/cache/download".to_owned()
+                ),
+                ("GOSUMDB".to_owned(), "off".to_owned()),
+                ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+            ])
+        );
+        assert!(integrity.archive_format.is_none());
+        assert!(integrity.archive_root.is_none());
+        assert_eq!(integrity.min_os_version.as_deref(), Some("12.0"));
+        assert_eq!(
+            integrity.allowed_dylib_prefixes,
+            ["/System/Library/", "/usr/lib/"]
+        );
+
+        let module_manifest_path = integrity
+            .module_manifest_path
+            .as_deref()
+            .expect("errcheck module manifest path");
+        let module_lock_path = integrity
+            .module_lock_path
+            .as_deref()
+            .expect("errcheck module lock path");
+        assert_file(root, module_manifest_path);
+        assert_file(root, module_lock_path);
+        let module_manifest =
+            std::fs::read_to_string(root.join(module_manifest_path)).expect("errcheck go.mod");
+        assert_eq!(
+            module_manifest,
+            "module velvet-glove.invalid/errcheck-provisioning\n\ngo 1.26.0\n\ntoolchain go1.26.5\n\nrequire github.com/kisielk/errcheck v1.20.0\n\nrequire (\n\tgolang.org/x/mod v0.35.0 // indirect\n\tgolang.org/x/sync v0.20.0 // indirect\n\tgolang.org/x/tools v0.44.0 // indirect\n)\n"
+        );
+        let module_lock =
+            std::fs::read_to_string(root.join(module_lock_path)).expect("errcheck go.sum");
+        assert_eq!(module_lock.lines().count(), 8);
+        for required in [
+            "github.com/kisielk/errcheck v1.20.0 h1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=",
+            "golang.org/x/mod v0.35.0 h1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=",
+            "golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=",
+            "golang.org/x/tools v0.44.0 h1:UP4ajHPIcuMjT1GqzDWRlalUEoY+uzoZKnhOjbIPD2c=",
+        ] {
+            assert!(module_lock.lines().any(|line| line == required));
+        }
+        return;
+    }
     if integrity.kind == "go-source-build" {
         assert!(
             integrity.component_id.is_none(),
@@ -2039,14 +2438,19 @@ fn validate_ghalint_source_build(root: &Path, integrity: &Integrity, owner: &str
 fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Component) {
     match component.integrity.kind.as_str() {
         "mise-lock" => {
-            let expected_selector = format!("{}@{}", component.id, component.version);
+            let selector = component
+                .mise_tool
+                .as_deref()
+                .unwrap_or_else(|| panic!("{}: missing mise selector", component.id));
+            let (mise_id, mise_version) = selector
+                .split_once('@')
+                .unwrap_or_else(|| panic!("{}: invalid mise selector", component.id));
             assert_eq!(
-                component.mise_tool.as_deref(),
-                Some(expected_selector.as_str()),
-                "{}: mise install selector",
+                mise_version, component.version,
+                "{}: mise version",
                 component.id
             );
-            let header = format!("[[tools.{}]]", component.id);
+            let header = format!("[[tools.{mise_id}]]");
             let section = mise_lock
                 .split_once(&header)
                 .unwrap_or_else(|| panic!("{}: missing mise lock entry", component.id))
@@ -2084,11 +2488,18 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                 ));
                 assert!(section.contains("provenance = \"github-attestations\""));
             }
-            if component.id == "go" {
+            if matches!(component.id.as_str(), "go" | "errcheck-go") {
                 assert_eq!(component.version, "1.26.5");
                 assert!(section.contains(
                     "checksum = \"sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a\""
                 ));
+                if component.id == "errcheck-go" {
+                    assert_eq!(selector, "go@1.26.5");
+                    assert_eq!(
+                        component.integrity.sha256.as_deref(),
+                        Some("efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a")
+                    );
+                }
             }
         }
         "sha256-archive" => {

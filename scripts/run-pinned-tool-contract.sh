@@ -78,6 +78,7 @@ eslint_extract_dir=
 ruby_extract_dir=
 betterleaks_build_dir=
 ghalint_build_dir=
+errcheck_build_dir=
 cleanup() {
   case $run_home in
     /private/tmp/velvet-glove-pinned.*) rm -rf -- "$run_home" ;;
@@ -111,6 +112,9 @@ cleanup() {
   esac
   case $ghalint_build_dir in
     "$state_dir"/ghalint-build-1.5.6-vg1) rm -rf -- "$ghalint_build_dir" ;;
+  esac
+  case $errcheck_build_dir in
+    "$state_dir"/errcheck-build-1.20.0) rm -rf -- "$errcheck_build_dir" ;;
   esac
 }
 trap cleanup EXIT INT TERM
@@ -252,7 +256,7 @@ verify_macho_closure() {
   while IFS= read -r allowed_prefix; do
     allowed_prefixes+=("$allowed_prefix")
   done < <("$jq_bin" -r --arg id "$owner" '
-    first((.sharedComponents + [.environments[].components[]])[] | select(.id == $id))
+    first((.sharedComponents + [.environments[].components[]] + .recipes)[] | select(.id == $id))
     | .integrity.allowedDylibPrefixes[]' "$registry")
   if [[ ${#allowed_prefixes[@]} -eq 0 ]]; then
     echo "error: $owner declares no allowed dynamic-library roots" >&2
@@ -301,8 +305,12 @@ fi
 
 groups=$("$jq_bin" -r --arg selection "$selection" \
   '($selection | split(",") | map(split("/")[0])) as $tools
-   | [.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId] as $environmentIds
-   | [.environments[] | select(.id as $id | $environmentIds | index($id)) | .provisioningGroup]
+   | [.recipes[] as $recipe
+      | select(any($tools[]; . == $recipe.toolId))
+      | $recipe.environmentId] as $environmentIds
+   | [.environments[] as $environment
+      | select(any($environmentIds[]; . == $environment.id))
+      | $environment.provisioningGroup]
    | unique | join(",")' "$registry")
 
 vacuum_selected=false
@@ -311,18 +319,26 @@ if "$jq_bin" -en --arg selection "$selection" \
   >/dev/null; then
   vacuum_selected=true
 fi
+errcheck_selected=false
+if "$jq_bin" -en --arg selection "$selection" \
+  '$selection | split(",") | map(split("/")[0]) | index("errcheck") != null' \
+  >/dev/null; then
+  errcheck_selected=true
+fi
 
 tool_specs=()
 while IFS= read -r tool_spec; do
   tool_specs+=("$tool_spec")
 done < <("$jq_bin" -r --arg selection "$selection" '
   ($selection | split(",") | map(split("/")[0])) as $tools
-  | ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
+  | ([.recipes[] as $recipe
+      | select(any($tools[]; . == $recipe.toolId))
+      | $recipe.environmentId]
      | unique) as $environmentIds
   | (.sharedComponents
-     + [.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | .components[]])
+     + [.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | $environment.components[]])
   | map(select(.miseTool != null) | .miseTool)
   | unique[]' "$registry")
 if [[ ${#tool_specs[@]} -eq 0 ]]; then
@@ -345,6 +361,47 @@ component_integrity_json() {
   "$jq_bin" -c --arg id "$component_id" '
     first((.sharedComponents + [.environments[].components[]])[] | select(.id == $id))
     | {id, version, integrity}' "$registry"
+}
+
+recipe_integrity_json() {
+  local recipe_id=$1
+  "$jq_bin" -ce --arg id "$recipe_id" '
+    first(.recipes[] | select(.id == $id))
+    | {id, toolId, version, installationSource, integrity}' "$registry"
+}
+
+validate_errcheck_binary() {
+  local binary=$1
+  local go_binary=$2
+  local expected_sha256=$3
+  local observed_sha256
+  local metadata
+  local metadata_body
+  local expected_metadata_body
+
+  if [[ ! -f $binary || -L $binary || ! -x $binary ]]; then
+    echo "error: controlled errcheck artifact is not an executable regular file: $binary" >&2
+    return 1
+  fi
+  read -r observed_sha256 _ < <(/usr/bin/shasum -a 256 "$binary")
+  if [[ $observed_sha256 != "$expected_sha256" ]]; then
+    echo "error: controlled errcheck artifact checksum mismatch" >&2
+    return 1
+  fi
+  metadata=$(env -i "${provisioning_env[@]}" \
+    "PATH=${go_binary%/bin/go}/bin:/usr/bin:/bin" \
+    "GOTOOLCHAIN=local" \
+    "$go_binary" version -m "$binary")
+  if [[ ${metadata%%$'\n'*} != "$binary: go1.26.5" ]]; then
+    echo "error: errcheck artifact was not linked by locked Go 1.26.5" >&2
+    return 1
+  fi
+  metadata_body=${metadata#*$'\n'}
+  expected_metadata_body=$'\tpath\tgithub.com/kisielk/errcheck\n\tmod\tgithub.com/kisielk/errcheck\tv1.20.0\th1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=\n\tdep\tgolang.org/x/mod\tv0.35.0\th1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=\n\tdep\tgolang.org/x/sync\tv0.20.0\th1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=\n\tdep\tgolang.org/x/tools\tv0.44.0\th1:UP4ajHPIcuMjT1GqzDWRlalUEoY+uzoZKnhOjbIPD2c=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
+  if [[ $metadata_body != "$expected_metadata_body" ]]; then
+    echo "error: errcheck artifact module or build metadata differs from the exact closure" >&2
+    return 1
+  fi
 }
 
 rust_archive=$(fetch_component_archive rust)
@@ -1422,6 +1479,193 @@ if needs_group github-actions; then
     exit 1
   fi
   verify_macho_closure "$ghalint_root" ghalint-workflow
+fi
+
+if [[ $errcheck_selected == true ]]; then
+  errcheck_identity=$(recipe_integrity_json errcheck-macos-arm64)
+  errcheck_root=$(pinned_component_cache_root \
+    "$state_dir" errcheck-1.20.0 "$errcheck_identity")
+  errcheck_binary="$errcheck_root/bin/errcheck"
+  errcheck_expected_sha256=$(printf '%s\n' "$errcheck_identity" | \
+    "$jq_bin" -r '.integrity.builtArtifactSha256')
+  errcheck_manifest_path=$(printf '%s\n' "$errcheck_identity" | \
+    "$jq_bin" -r '.integrity.moduleManifestPath')
+  errcheck_lock_path=$(printf '%s\n' "$errcheck_identity" | \
+    "$jq_bin" -r '.integrity.moduleLockPath')
+  errcheck_manifest_sha256=$(printf '%s\n' "$errcheck_identity" | \
+    "$jq_bin" -r '.integrity.moduleManifestSha256')
+  errcheck_lock_sha256=$(printf '%s\n' "$errcheck_identity" | \
+    "$jq_bin" -r '.integrity.moduleLockSha256')
+  errcheck_proxy_sha256=$(printf '%s\n' "$errcheck_identity" | \
+    "$jq_bin" -r '.integrity.sha256')
+  if [[ $errcheck_expected_sha256 != \
+      4f369aeb1bd8454d6ebb6789fedd948ef216fe04c6be629d5016aca78908aa0c || \
+    $errcheck_proxy_sha256 != \
+      50dbdc1e07128552bda3dad27dfaad9dca100d16869bf58485fe05ed4a45f0b6 || \
+    $(printf '%s\n' "$errcheck_identity" | \
+      "$jq_bin" -r '.integrity.buildToolchainComponentId') != errcheck-go ]]; then
+    echo "error: errcheck recipe does not cross-link the reviewed proxy, artifact, and Go identity" >&2
+    exit 1
+  fi
+  errcheck_manifest="$repository_root/$errcheck_manifest_path"
+  errcheck_lock="$repository_root/$errcheck_lock_path"
+  if [[ ! -f $errcheck_manifest || -L $errcheck_manifest || \
+    ! -f $errcheck_lock || -L $errcheck_lock ]]; then
+    echo "error: errcheck exact module closure is missing or linked" >&2
+    exit 1
+  fi
+  read -r observed_errcheck_manifest_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$errcheck_manifest"
+  )
+  read -r observed_errcheck_lock_sha256 _ < <(
+    /usr/bin/shasum -a 256 "$errcheck_lock"
+  )
+  if [[ $observed_errcheck_manifest_sha256 != "$errcheck_manifest_sha256" || \
+    $observed_errcheck_lock_sha256 != "$errcheck_lock_sha256" ]]; then
+    echo "error: errcheck module manifest or sum checksum mismatch" >&2
+    exit 1
+  fi
+
+  errcheck_go_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where go@1.26.5)
+  errcheck_go_bin="$errcheck_go_root/bin/go"
+  case $errcheck_go_bin in
+    "$state_dir"/*) ;;
+    *)
+      echo "error: pinned errcheck Go resolved outside the controlled state: $errcheck_go_bin" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! -f $errcheck_go_bin || -L $errcheck_go_bin || ! -x $errcheck_go_bin ]]; then
+    echo "error: pinned errcheck Go executable is unavailable: $errcheck_go_bin" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" \
+    "PATH=$errcheck_go_root/bin:/usr/bin:/bin" \
+    "GOTOOLCHAIN=local" \
+    "$errcheck_go_bin" version) != "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: pinned errcheck build toolchain is not exact Go 1.26.5 Darwin arm64" >&2
+    exit 1
+  fi
+
+  if [[ -e $errcheck_root && ( ! -d $errcheck_root || -L $errcheck_root ) ]]; then
+    echo "error: controlled errcheck root is not a directory: $errcheck_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $errcheck_root ]]; then
+    echo "==> Building the exact errcheck v1.20.0 module closure with locked Go 1.26.5"
+    errcheck_build_dir="$state_dir/errcheck-build-1.20.0"
+    if [[ -e $errcheck_build_dir ]]; then
+      echo "warning: removing stale transactional errcheck build directory" >&2
+      rm -rf -- "$errcheck_build_dir"
+    fi
+    errcheck_staging_root="$errcheck_build_dir/install"
+    errcheck_staging_binary="$errcheck_staging_root/bin/errcheck"
+    errcheck_mod_cache="$state_dir/errcheck-go1.26.5-mod-cache"
+    errcheck_bootstrap_cache="$state_dir/errcheck-bootstrap-go1.26.5-build-cache"
+    mkdir -p \
+      "$errcheck_staging_root/bin" \
+      "$errcheck_build_dir/go-build-cache" \
+      "$errcheck_mod_cache" \
+      "$errcheck_bootstrap_cache"
+    errcheck_go_env=(
+      "${provisioning_env[@]}"
+      "PATH=$errcheck_go_root/bin:/usr/bin:/bin"
+      "GOTOOLCHAIN=local"
+      "CGO_ENABLED=0"
+      "GOOS=darwin"
+      "GOARCH=arm64"
+      "GOMODCACHE=$errcheck_mod_cache"
+    )
+    env -i "${errcheck_go_env[@]}" \
+      "GOCACHE=$errcheck_bootstrap_cache" \
+      "GOPROXY=https://proxy.golang.org" \
+      "GOSUMDB=sum.golang.org" \
+      "$errcheck_go_bin" -C "${errcheck_manifest%/go.mod}" mod download \
+        github.com/kisielk/errcheck@v1.20.0 \
+        golang.org/x/mod@v0.35.0 \
+        golang.org/x/sync@v0.20.0 \
+        golang.org/x/tools@v0.44.0
+    read -r observed_errcheck_manifest_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$errcheck_manifest"
+    )
+    read -r observed_errcheck_lock_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$errcheck_lock"
+    )
+    if [[ $observed_errcheck_manifest_sha256 != "$errcheck_manifest_sha256" || \
+      $observed_errcheck_lock_sha256 != "$errcheck_lock_sha256" ]]; then
+      echo "error: errcheck network bootstrap changed the exact module inputs" >&2
+      exit 1
+    fi
+    errcheck_proxy_zip="$errcheck_mod_cache/cache/download/github.com/kisielk/errcheck/@v/v1.20.0.zip"
+    if [[ ! -f $errcheck_proxy_zip || -L $errcheck_proxy_zip ]]; then
+      echo "error: errcheck proxy bootstrap did not produce the declared module archive" >&2
+      exit 1
+    fi
+    read -r observed_errcheck_proxy_sha256 _ < <(
+      /usr/bin/shasum -a 256 "$errcheck_proxy_zip"
+    )
+    if [[ $observed_errcheck_proxy_sha256 != "$errcheck_proxy_sha256" ]]; then
+      echo "error: errcheck Go proxy archive checksum mismatch" >&2
+      exit 1
+    fi
+    env -i "${errcheck_go_env[@]}" \
+      "GOCACHE=$errcheck_bootstrap_cache" \
+      "GOPROXY=off" \
+      "GOSUMDB=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$errcheck_go_bin" -C "${errcheck_manifest%/go.mod}" mod verify
+    errcheck_observed_modules=$(env -i "${errcheck_go_env[@]}" \
+      "GOCACHE=$errcheck_bootstrap_cache" \
+      "GOPROXY=off" \
+      "GOSUMDB=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$errcheck_go_bin" -C "${errcheck_manifest%/go.mod}" list \
+        -mod=readonly \
+        -deps \
+        -f '{{with .Module}}{{.Path}} {{.Version}} {{.Sum}}{{end}}' \
+        github.com/kisielk/errcheck | LC_ALL=C /usr/bin/sort -u)
+    errcheck_expected_modules=$'github.com/kisielk/errcheck v1.20.0 h1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=\ngolang.org/x/mod v0.35.0 h1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=\ngolang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=\ngolang.org/x/tools v0.44.0 h1:UP4ajHPIcuMjT1GqzDWRlalUEoY+uzoZKnhOjbIPD2c='
+    if [[ $errcheck_observed_modules != "$errcheck_expected_modules" ]]; then
+      echo "error: errcheck denied-network package dependency closure drifted" >&2
+      exit 1
+    fi
+    (
+      cd /
+      env -i "${errcheck_go_env[@]}" \
+        "GOCACHE=$errcheck_build_dir/go-build-cache" \
+        "GOPROXY=file://$errcheck_mod_cache/cache/download" \
+        "GOSUMDB=off" \
+        "GOBIN=$errcheck_staging_root/bin" \
+        "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+        "$errcheck_go_bin" install \
+          -trimpath \
+          -ldflags '-s -w -buildid=' \
+          github.com/kisielk/errcheck@v1.20.0
+    )
+    validate_errcheck_binary \
+      "$errcheck_staging_binary" "$errcheck_go_bin" "$errcheck_expected_sha256"
+    printf '%s\n' "$errcheck_identity" \
+      >"$errcheck_staging_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$errcheck_staging_root" errcheck-macos-arm64
+    mv "$errcheck_staging_root" "$errcheck_root"
+    rm -rf -- "$errcheck_build_dir"
+    errcheck_build_dir=
+  fi
+  if ! pinned_component_cache_valid \
+    "$errcheck_root" "$errcheck_identity" bin/errcheck; then
+    echo "error: controlled errcheck installation does not match its exact recipe identity" >&2
+    exit 1
+  fi
+  if [[ -n $(/usr/bin/find "$errcheck_root" -type l -print -quit) || \
+    $(/usr/bin/find "$errcheck_root" -type f | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 2 || \
+    $(/usr/bin/find "$errcheck_root" -type d | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 2 || \
+    -n $(/usr/bin/find "$errcheck_root" -mindepth 1 ! -type d ! -type f -print -quit) ]]; then
+    echo "error: controlled errcheck installation has an unexpected or linked closure" >&2
+    exit 1
+  fi
+  validate_errcheck_binary \
+    "$errcheck_binary" "$errcheck_go_bin" "$errcheck_expected_sha256"
+  verify_macho_closure "$errcheck_root" errcheck-macos-arm64
 fi
 
 if needs_group ruby; then
