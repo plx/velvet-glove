@@ -197,6 +197,64 @@ const ERRCHECK_LOADER_SCRUBBED_ENV: &[&str] = &[
     "LD_LIBRARY_PATH",
     "LD_PRELOAD",
 ];
+const GO_VET_POISON_ENV_VALUE: &str = "velvet-glove-go-vet-adapter-must-reject-this";
+const GO_VET_INITIAL_CHILD_PATH: &str = "/usr/bin:/bin";
+const GO_VET_CONTROLLED_ENV: &[(&str, &str)] = &[
+    ("CGO_ENABLED", "0"),
+    ("GO111MODULE", "on"),
+    ("GODEBUG", ""),
+    ("GOENV", "off"),
+    ("GOFLAGS", "-mod=readonly"),
+    ("GOMAXPROCS", "1"),
+    ("GONOPROXY", ""),
+    ("GONOSUMDB", ""),
+    ("GOPRIVATE", ""),
+    ("GOPROXY", "off"),
+    ("GOSUMDB", "off"),
+    ("GOTELEMETRY", "off"),
+    ("GOTOOLCHAIN", "local"),
+    ("GOVCS", "*:off"),
+    ("GOWORK", "off"),
+];
+const GO_VET_AMBIENT_OVERRIDE_ENV: &[&str] = &[
+    "CGO_ENABLED",
+    "GO111MODULE",
+    "GOARCH",
+    "GOARM64",
+    "GOENV",
+    "GOEXPERIMENT",
+    "GOFLAGS",
+    "GOINSECURE",
+    "GONOPROXY",
+    "GONOSUMDB",
+    "GOOS",
+    "GOPATH",
+    "GOPRIVATE",
+    "GOPROXY",
+    "GOROOT",
+    "GOSUMDB",
+    "GOTELEMETRY",
+    "GOTOOLCHAIN",
+    "GOTMPDIR",
+    "GOVCS",
+    "GOWORK",
+];
+const GO_VET_SCRUBBED_ENV: &[&str] = &[
+    "CC",
+    "CXX",
+    "CGO_CFLAGS",
+    "CGO_CPPFLAGS",
+    "CGO_CXXFLAGS",
+    "CGO_LDFLAGS",
+    "PKG_CONFIG",
+    "GOAUTH",
+    "GO_VELVET_GLOVE_POISON",
+    "DYLD_VELVET_GLOVE_POISON",
+    "LD_VELVET_GLOVE_POISON",
+    CI_ENV,
+    DEBUG_ENV,
+];
+const GO_VET_LOADER_SCRUBBED_ENV: &[&str] = ERRCHECK_LOADER_SCRUBBED_ENV;
 const GOFMT_CHILD_PATH: &str = "/usr/bin:/bin";
 const GOFMT_CONTROLLED_ENV: &[(&str, &str)] = &[
     ("GODEBUG", ""),
@@ -513,6 +571,12 @@ enum TracePlan {
         go_commands: &'static [&'static [&'static str]],
         checker_arguments: &'static [&'static str],
     },
+    GoWorkspaceIndicatorAdapter {
+        nested_program_index: usize,
+        adapter_prefix: &'static [&'static str],
+        marker: &'static str,
+        commands: &'static [&'static [&'static str]],
+    },
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
         validation: &'static [&'static str],
@@ -695,6 +759,24 @@ const ERRCHECK_TRACE_PLAN: TracePlan = TracePlan::ErrcheckWorkspaceIndicatorAdap
     marker: ERRCHECK_WORKSPACE_MARKER,
     go_commands: ERRCHECK_GO_COMMANDS,
     checker_arguments: ERRCHECK_ARGUMENTS,
+};
+
+const GO_VET_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_GO_VET_WORKSPACE__";
+const GO_VET_GO_ENV_COMMAND: &[&str] = ERRCHECK_GO_ENV_COMMAND;
+const GO_VET_GO_VERIFY_COMMAND: &[&str] = ERRCHECK_GO_VERIFY_COMMAND;
+const GO_VET_GO_LIST_COMMAND: &[&str] = ERRCHECK_GO_LIST_COMMAND;
+const GO_VET_COMMAND: &[&str] = &["vet", "-json", "-mod=readonly", "./..."];
+const GO_VET_COMMANDS: &[&[&str]] = &[
+    GO_VET_GO_ENV_COMMAND,
+    GO_VET_GO_VERIFY_COMMAND,
+    GO_VET_GO_LIST_COMMAND,
+    GO_VET_COMMAND,
+];
+const GO_VET_TRACE_PLAN: TracePlan = TracePlan::GoWorkspaceIndicatorAdapter {
+    nested_program_index: 3,
+    adapter_prefix: &["-I", "-c"],
+    marker: GO_VET_WORKSPACE_MARKER,
+    commands: GO_VET_COMMANDS,
 };
 
 const BUF_WORKSPACE_MARKER: &str = "__VELVET_GLOVE_BUF_WORKSPACE__";
@@ -1833,6 +1915,86 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["gofmt: changed example.go"],
             trace_plan: GOFMT_TRACE_PLAN,
         },
+        ("go-vet", "clean") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: GO_VET_TRACE_PLAN,
+        },
+        ("go-vet", "printf-mismatch") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "example.go:6:14",
+                "fmt.Printf format %d has arg \"string\" of wrong type string",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: GO_VET_TRACE_PLAN,
+        },
+        ("go-vet", "multi-package") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "pkg/selected_clean.go"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "other/workspace_only.go:6:14",
+                "fmt.Printf format %d has arg \"workspace-only\" of wrong type string",
+            ],
+            diagnostic_excludes: &["selected_clean.go:6"],
+            trace_plan: GO_VET_TRACE_PLAN,
+        },
+        ("go-vet", "test-findings") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "example_test.go", "external_test.go"],
+                exit_code: 1,
+                trace_exit_codes: &[0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &[
+                "example_test.go:10:14",
+                "external_test.go:10:14",
+                "internal-test",
+                "external-test",
+            ],
+            diagnostic_excludes: &[],
+            trace_plan: GO_VET_TRACE_PLAN,
+        },
+        ("go-vet", "operational-failure") => RealToolContractCase {
+            phase_id: "verify",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 0, 1],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "invalid.go:3:14",
+                "expected ')', found '{'",
+                "velvet-glove-go-vet: go vet exited 1",
+            ],
+            diagnostic_excludes: &["classification: Some(Issues)"],
+            trace_plan: GO_VET_TRACE_PLAN,
+        },
         ("vacuum", "clean") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -1904,7 +2066,7 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
         },
         (
             "jq" | "asciidoctor" | "astro" | "betterleaks" | "biome" | "buf-format" | "cargo-fmt"
-            | "cargo-clippy" | "dclint" | "errcheck" | "go-fmt" | "prettier" | "vacuum",
+            | "cargo-clippy" | "dclint" | "errcheck" | "go-fmt" | "go-vet" | "prettier" | "vacuum",
             other,
         ) => {
             return Err(format!(
@@ -3084,6 +3246,49 @@ fn errcheck_contract_registry_covers_clean_issue_workspace_and_failure() {
             .iter()
             .any(|diagnostic| diagnostic.contains("workspace_only.go")),
         "workspace-only issue must remain attributed outside the selected candidate set"
+    );
+}
+
+#[test]
+fn go_vet_contract_registry_covers_zero_status_findings_tests_scope_and_failure() {
+    for (case_name, outcome, adapter_status, native_status) in [
+        ("clean", ExpectedOutcome::Clean, 0, 0),
+        ("printf-mismatch", ExpectedOutcome::Issues, 1, 0),
+        ("multi-package", ExpectedOutcome::Issues, 1, 0),
+        ("test-findings", ExpectedOutcome::Issues, 1, 0),
+        (
+            "operational-failure",
+            ExpectedOutcome::OperationalFailure,
+            2,
+            1,
+        ),
+    ] {
+        let contract = real_tool_contract_case(&named_fixture_case("go-vet", case_name))
+            .expect("go-vet contract lookup")
+            .expect("go-vet contract");
+        assert_eq!(contract.phase_id, "verify");
+        assert_eq!(contract.outcome, outcome);
+        assert_eq!(contract.invocations.len(), 1);
+        assert_eq!(contract.invocations[0].exit_code, adapter_status);
+        assert_eq!(
+            contract.invocations[0].trace_exit_codes,
+            &[0, 0, 0, native_status]
+        );
+        assert_eq!(contract.trace_plan, GO_VET_TRACE_PLAN);
+    }
+    let multi = real_tool_contract_case(&named_fixture_case("go-vet", "multi-package"))
+        .expect("go-vet multi-package contract lookup")
+        .expect("go-vet multi-package contract");
+    assert_eq!(
+        multi.invocations[0].targets,
+        &["example.go", "pkg/selected_clean.go"]
+    );
+    assert!(
+        multi
+            .diagnostic_contains
+            .iter()
+            .any(|diagnostic| diagnostic.contains("workspace_only.go")),
+        "workspace-only vet issue must remain attributed outside the selected candidates"
     );
 }
 
@@ -4324,6 +4529,66 @@ fn errcheck_trace_plan_stops_at_failed_preflight_and_rejects_forwarding() {
 }
 
 #[test]
+fn go_vet_trace_plan_binds_exact_preflights_and_zero_status_vet_json() {
+    let root = unique_temp_dir("velvet-glove-go-vet-trace-test");
+    let indicator = root.join("go.mod");
+    let target = root.join("pkg/example.go");
+    std::fs::create_dir_all(target.parent().unwrap()).expect("Go package directory");
+    std::fs::write(&indicator, "module example\n\ngo 1.25.0\n").expect("go.mod indicator");
+    std::fs::write(&target, "package pkg\n").expect("selected Go source");
+    let indicator = canonical_project(&indicator).to_string_lossy().into_owned();
+    let outer_arguments = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "go".to_owned(),
+        GO_VET_WORKSPACE_MARKER.to_owned(),
+        indicator,
+    ];
+    let targets = [canonical_project(&target)];
+
+    let (program, invocations) = resolve_trace_invocations(
+        GO_VET_TRACE_PLAN,
+        "python",
+        &outer_arguments,
+        &targets,
+        &[0, 0, 0, 0],
+    )
+    .expect("resolve go-vet workspace trace");
+
+    assert_eq!(program, "go");
+    assert_eq!(invocations.len(), 4);
+    for (invocation, arguments) in invocations.iter().zip(GO_VET_COMMANDS) {
+        assert_eq!(invocation.program, "go");
+        assert_eq!(invocation.arguments, *arguments);
+        assert_eq!(invocation.targets, targets);
+        assert_eq!(invocation.exit_code, 0);
+    }
+
+    let forwarded = [
+        "-I".to_owned(),
+        "-c".to_owned(),
+        "adapter".to_owned(),
+        "go".to_owned(),
+        "-printf=false".to_owned(),
+        GO_VET_WORKSPACE_MARKER.to_owned(),
+        canonical_project(&root.join("go.mod"))
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let error = resolve_trace_invocations(
+        GO_VET_TRACE_PLAN,
+        "python",
+        &forwarded,
+        &targets,
+        &[0, 0, 0, 0],
+    )
+    .expect_err("forwarded analyzer disables must fail closed");
+    assert!(error.contains("does not permit forwarded extra arguments"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn tool_trace_shim_dispatches_distinct_program_bindings() {
     let root = unique_temp_dir("velvet-glove-multi-program-trace-test");
     let shim_dir = root.join("shims");
@@ -5079,6 +5344,19 @@ fn errcheck_evaluated_adapter_adversarial_contract() {
 }
 
 #[test]
+#[ignore = "evaluated go-vet adapter adversarial contract; requires controlled Python"]
+fn go_vet_evaluated_adapter_adversarial_contract() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("go-vet")
+        .unwrap_or_else(|| panic!("builtin catalog has no go-vet spec"));
+    verify_go_vet_adapter_adversarial_contract(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated Cargo Fmt adapter lifecycle; requires controlled Python"]
 fn cargo_fmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -5236,6 +5514,11 @@ fn run_all_tool_fixtures() {
         verify_errcheck_adapter_adversarial_contract(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("errcheck adapter adversarial contract probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "go-vet") {
+        verify_go_vet_adapter_adversarial_contract(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("go-vet adapter adversarial contract probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "cargo-fmt") {
         verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -8470,6 +8753,113 @@ fn resolve_trace_invocations(
             }
             Ok((go_program, traces))
         }
+        TracePlan::GoWorkspaceIndicatorAdapter {
+            nested_program_index,
+            adapter_prefix,
+            marker,
+            commands,
+        } => {
+            if expected_exit_codes.is_empty() || expected_exit_codes.len() > commands.len() {
+                return Err(format!(
+                    "Go workspace adapter trace for {outer_program} must declare one through {} exit codes, got {expected_exit_codes:?}",
+                    commands.len()
+                ));
+            }
+            if nested_program_index != adapter_prefix.len() + 1 {
+                return Err(format!(
+                    "Go workspace adapter trace plan for {outer_program} must place exactly one script before the Go tool"
+                ));
+            }
+            let rendered_prefix = outer_arguments
+                .get(..adapter_prefix.len())
+                .unwrap_or(outer_arguments);
+            if rendered_prefix != adapter_prefix {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} prefix mismatch: expected {adapter_prefix:?}, got {rendered_prefix:?}"
+                ));
+            }
+            outer_arguments
+                .get(adapter_prefix.len())
+                .filter(|script| !script.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "Go workspace adapter {outer_program} has no script after {adapter_prefix:?}: {outer_arguments:?}"
+                    )
+                })?;
+            let go_program = outer_arguments
+                .get(nested_program_index)
+                .filter(|program| !program.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Go workspace adapter {outer_program} has no Go tool at argument {nested_program_index}: {outer_arguments:?}"
+                    )
+                })?;
+            let marker_indices = outer_arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| (argument == marker).then_some(index))
+                .collect::<Vec<_>>();
+            let [marker_index] = marker_indices.as_slice() else {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} requires exactly one {marker:?} marker, found {marker_indices:?}: {outer_arguments:?}"
+                ));
+            };
+            if *marker_index <= nested_program_index {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} places {marker:?} before its tool: {outer_arguments:?}"
+                ));
+            }
+            let forwarded = &outer_arguments[(nested_program_index + 1)..*marker_index];
+            if !forwarded.is_empty() {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} fixture trace does not permit forwarded extra arguments: {forwarded:?}"
+                ));
+            }
+            let rendered_indicators = &outer_arguments[(*marker_index + 1)..];
+            let [indicator] = rendered_indicators else {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} requires exactly one indicator after {marker:?}, got {rendered_indicators:?}"
+                ));
+            };
+            let indicator_path = Path::new(indicator);
+            if !indicator_path.is_absolute()
+                || indicator_path.file_name() != Some(OsStr::new("go.mod"))
+                || !indicator_path.is_file()
+            {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} rendered an invalid go.mod indicator {indicator:?}"
+                ));
+            }
+            let workspace = indicator_path.parent().ok_or_else(|| {
+                format!(
+                    "Go workspace adapter {outer_program} indicator has no parent: {indicator:?}"
+                )
+            })?;
+            let outside_workspace = targets
+                .iter()
+                .filter(|target| !target.starts_with(workspace))
+                .collect::<Vec<_>>();
+            if !outside_workspace.is_empty() {
+                return Err(format!(
+                    "Go workspace adapter {outer_program} targets escape indicator workspace {workspace:?}: {outside_workspace:?}"
+                ));
+            }
+            let traces = commands
+                .iter()
+                .zip(expected_exit_codes)
+                .map(|(arguments, exit_code)| ResolvedTraceInvocation {
+                    program: go_program.clone(),
+                    targets: targets.to_vec(),
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| (*argument).to_owned())
+                        .collect(),
+                    exit_code: *exit_code,
+                })
+                .collect::<Vec<_>>();
+            Ok((go_program, traces))
+        }
         TracePlan::CargoFmtWorkspaceIndicatorMarker {
             adapter_prefix,
             marker,
@@ -10111,6 +10501,19 @@ impl ToolTraceHarness {
                 })?;
             }
         }
+        if case.tool == "go-vet" {
+            if logical_programs != &BTreeSet::from(["go".to_owned()]) {
+                return Err(format!(
+                    "go-vet trace requires exactly its Go binding, got {logical_programs:?}"
+                ));
+            }
+            for directory in ["tmp", "go-vet-mod-cache"] {
+                let path = workspace.root.join(directory);
+                std::fs::create_dir_all(&path).map_err(|error| {
+                    format!("create controlled go-vet environment directory {path:?}: {error}")
+                })?;
+            }
+        }
         for (logical_program, real_program) in &programs {
             let shim = shim_dir.join(logical_program);
             std::fs::write(&shim, include_bytes!("support/tool-trace.sh"))
@@ -10348,6 +10751,42 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
+        if self.programs.contains_key("go") && !self.programs.contains_key("errcheck") {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "go-vet trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            let controlled_tmp = root
+                .join("tmp")
+                .canonicalize()
+                .map_err(|error| format!("canonicalize controlled go-vet TMPDIR: {error}"))?;
+            let controlled_modcache = root
+                .join("go-vet-mod-cache")
+                .canonicalize()
+                .map_err(|error| format!("canonicalize controlled go-vet module cache: {error}"))?;
+            command
+                .env(TMPDIR_ENV, controlled_tmp)
+                .env("GOMODCACHE", controlled_modcache)
+                .env(HOME_ENV, GO_VET_POISON_ENV_VALUE)
+                .env(XDG_CACHE_HOME_ENV, GO_VET_POISON_ENV_VALUE)
+                .env("GOCACHE", GO_VET_POISON_ENV_VALUE)
+                .env(CI_ENV, GO_VET_POISON_ENV_VALUE)
+                .env(DEBUG_ENV, GO_VET_POISON_ENV_VALUE)
+                .env("GO_VELVET_GLOVE_POISON", GO_VET_POISON_ENV_VALUE);
+            for name in GO_VET_AMBIENT_OVERRIDE_ENV {
+                command.env_remove(name);
+            }
+            for name in GO_VET_SCRUBBED_ENV {
+                if *name != CI_ENV && *name != DEBUG_ENV && *name != "GO_VELVET_GLOVE_POISON" {
+                    command.env(name, GO_VET_POISON_ENV_VALUE);
+                }
+            }
+            for name in GO_VET_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         if let Some(toolchain) = &self.cargo_clippy_toolchain {
             command
                 .env(DYLD_LIBRARY_PATH_ENV, CARGO_CLIPPY_POISON_ENV_VALUE)
@@ -10443,6 +10882,7 @@ fn verify_tool_trace_invocations(
     let mut clippy_conf_dir = None;
     let mut dclint_private_configs = Vec::new();
     let mut errcheck_private_root = None;
+    let mut go_vet_private_root = None;
     for (invocation, expected) in invocations.iter().zip(expected_invocations) {
         let trace_program = expected.program.as_str();
         let record = invocation.path();
@@ -10663,6 +11103,16 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if trace_program == "go" && !harness.programs.contains_key("errcheck") {
+            let controlled =
+                verify_go_vet_trace_environment(&record, harness, &mut go_vet_private_root)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
         {
@@ -10730,6 +11180,12 @@ fn verify_tool_trace_invocations(
             serde_json::json!({
                 "go": harness.programs.get("go"),
                 "moduleCache": "<controlled-module-cache>",
+            })
+        } else if trace_program == "go" {
+            serde_json::json!({
+                "go": harness.programs.get("go"),
+                "moduleCache": "<controlled-go-vet-module-cache>",
+                "freshBuildCache": true,
             })
         } else if harness.cargo_fmt_toolchain.is_some()
             && matches!(trace_program, "cargo" | "cargo-fmt" | "rustfmt")
@@ -12110,6 +12566,153 @@ fn verify_errcheck_trace_environment(
     if path != expected_path {
         return Err(format!(
             "errcheck trace expected controlled PATH={expected_path:?}, got {path:?}"
+        ));
+    }
+    environment.insert(PATH_ENV.to_owned(), path);
+    Ok(environment)
+}
+
+fn verify_go_vet_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+    expected_private_root: &mut Option<PathBuf>,
+) -> Result<BTreeMap<String, String>, String> {
+    let logical_program = read_record(record, "logical-program")?;
+    if logical_program != "go" {
+        return Err(format!(
+            "go-vet trace recorded an unexpected logical program {logical_program:?}"
+        ));
+    }
+    let observed_shim = PathBuf::from(read_record(record, "program")?)
+        .canonicalize()
+        .map_err(|error| format!("canonicalize traced go-vet shim: {error}"))?;
+    let expected_shim = harness
+        .shim_dir
+        .join("go")
+        .canonicalize()
+        .map_err(|error| format!("canonicalize expected go-vet shim: {error}"))?;
+    if observed_shim != expected_shim {
+        return Err(format!(
+            "go-vet adapter escaped its Go trace shim: expected {expected_shim:?}, got {observed_shim:?}"
+        ));
+    }
+
+    let mut environment = BTreeMap::new();
+    for (name, expected) in
+        std::iter::once(("TERM", "dumb")).chain(GO_VET_CONTROLLED_ENV.iter().copied())
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "go-vet trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    for name in GO_VET_SCRUBBED_ENV.iter().chain(GO_VET_LOADER_SCRUBBED_ENV) {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "go-vet trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+
+    let controlled_root = harness
+        .trace_root
+        .parent()
+        .ok_or_else(|| {
+            format!(
+                "go-vet trace root has no controlled environment parent: {:?}",
+                harness.trace_root
+            )
+        })?
+        .canonicalize()
+        .map_err(|error| format!("canonicalize go-vet trace environment root: {error}"))?;
+    let home = PathBuf::from(read_record(record, &format!("env-{HOME_ENV}"))?);
+    let private_root = home
+        .parent()
+        .ok_or_else(|| format!("go-vet HOME has no private root: {home:?}"))?
+        .to_path_buf();
+    if home != private_root.join("home")
+        || private_root.parent() != Some(controlled_root.join("tmp").as_path())
+        || !private_root
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("velvet-glove-go-vet-"))
+    {
+        return Err(format!(
+            "go-vet trace escaped its controlled temporary parent: {private_root:?}"
+        ));
+    }
+    if private_root.exists() {
+        return Err(format!(
+            "go-vet adapter retained its private root after completion: {private_root:?}"
+        ));
+    }
+    if let Some(expected) = expected_private_root {
+        if expected != &private_root {
+            return Err(format!(
+                "go-vet child invocations changed private roots: expected {expected:?}, got {private_root:?}"
+            ));
+        }
+    } else {
+        *expected_private_root = Some(private_root.clone());
+    }
+
+    for (name, expected) in [
+        (HOME_ENV, private_root.join("home")),
+        (TMPDIR_ENV, private_root.join("tmp")),
+        (XDG_CACHE_HOME_ENV, private_root.join("xdg-cache")),
+        ("GOCACHE", private_root.join("go-build")),
+        ("GOPATH", private_root.join("gopath")),
+        ("GOTMPDIR", private_root.join("go-tmp")),
+    ] {
+        let value = PathBuf::from(read_record(record, &format!("env-{name}"))?);
+        if value != expected {
+            return Err(format!(
+                "go-vet trace expected private {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(
+            name.to_owned(),
+            format!(
+                "<controlled-go-vet>/{}",
+                expected.file_name().unwrap().to_string_lossy()
+            ),
+        );
+    }
+    let expected_modcache = controlled_root.join("go-vet-mod-cache");
+    let modcache = PathBuf::from(read_record(record, "env-GOMODCACHE")?);
+    if modcache != expected_modcache {
+        return Err(format!(
+            "go-vet trace expected controlled GOMODCACHE={expected_modcache:?}, got {modcache:?}"
+        ));
+    }
+    environment.insert(
+        "GOMODCACHE".to_owned(),
+        "<controlled-go-vet-module-cache>".to_owned(),
+    );
+
+    let go_program = harness
+        .programs
+        .get("go")
+        .ok_or_else(|| "go-vet trace has no managed Go binding".to_owned())?;
+    let go_directory = go_program
+        .parent()
+        .ok_or_else(|| format!("go-vet trace Go executable has no parent: {go_program:?}"))?;
+    let expected_path = if read_record(record, "argv-0")? == "env" {
+        GO_VET_INITIAL_CHILD_PATH.to_owned()
+    } else {
+        std::env::join_paths([go_directory, Path::new("/usr/bin"), Path::new("/bin")])
+            .map_err(|error| format!("construct go-vet child PATH: {error}"))?
+            .to_string_lossy()
+            .into_owned()
+    };
+    let path = read_record(record, &format!("env-{PATH_ENV}"))?;
+    if path != expected_path {
+        return Err(format!(
+            "go-vet trace expected controlled PATH={expected_path:?}, got {path:?}"
         ));
     }
     environment.insert(PATH_ENV.to_owned(), path);
@@ -17610,6 +18213,774 @@ esac
         })();
         let _ = std::fs::remove_dir_all(&root);
         result
+    }
+}
+
+fn verify_go_vet_adapter_adversarial_contract(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let phase = spec
+            .phases
+            .get("verify")
+            .ok_or_else(|| "go-vet adversarial probe lacks a verify phase".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::WorkspaceIndicator),
+        ] = phase.argv.as_slice()
+        else {
+            return Err(
+                "go-vet adversarial probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        if isolated != "-I" || command != "-c" || marker != GO_VET_WORKSPACE_MARKER {
+            return Err(format!(
+                "go-vet adversarial probe expected isolated Python and exact marker, got {isolated:?} {command:?} {marker:?}"
+            ));
+        }
+        let python_program = phase
+            .program
+            .as_deref()
+            .ok_or_else(|| "go-vet adversarial probe lacks a Python program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("go-vet adversarial probe cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize go-vet adversarial Python: {error}"))?;
+
+        let temporary = unique_temp_dir("velvet-glove-go-vet-adversarial");
+        let root = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize go-vet adversarial root: {error}"))?;
+        let result = (|| {
+            let workspace = root.join("workspace");
+            let fake_root = root.join("fake-go-root");
+            let fake_bin = fake_root.join("bin");
+            let fake_go = fake_bin.join("go");
+            let adapter_tmp = root.join("tmp");
+            let modcache = root.join("module-cache");
+            let go_log = root.join("go.jsonl");
+            let child_pid = root.join("child.pid");
+            let descendant_pid = root.join("descendant.pid");
+            let signal_ready = root.join("signal.ready");
+            for directory in [&workspace, &fake_bin, &adapter_tmp, &modcache] {
+                std::fs::create_dir_all(directory).map_err(|error| {
+                    format!("create go-vet adversarial directory {directory:?}: {error}")
+                })?;
+            }
+            write_go_vet_probe_workspace(&workspace)?;
+
+            let fake_source = r#"#!__PYTHON__
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+arguments = sys.argv[1:]
+mode = os.environ.get("VELVET_GLOVE_GO_VET_PROBE_MODE", "clean")
+workspace = os.environ["VELVET_GLOVE_GO_VET_PROBE_WORKSPACE"]
+log_path = os.environ["VELVET_GLOVE_GO_VET_PROBE_LOG"]
+with open(log_path, "a", encoding="utf-8") as log:
+    log.write(json.dumps(arguments, separators=(",", ":")) + "\n")
+
+source = os.path.join(workspace, "example.go")
+manifest = os.path.join(workspace, "go.mod")
+package_id = "example.com/govetprobe"
+root = os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0])))
+
+def emit(value):
+    sys.stdout.write(json.dumps(value, indent="\t") + "\n")
+
+def diagnostic(**extra):
+    value = {
+        "posn": source + ":1:1",
+        "end": source + ":1:8",
+        "message": "synthetic vet finding",
+    }
+    value.update(extra)
+    return {package_id: {"printf": [value]}}
+
+if arguments[:2] == ["env", "-json"]:
+    emit({
+        "GOARCH": "arm64",
+        "GOMODCACHE": os.environ["GOMODCACHE"],
+        "GOOS": "darwin",
+        "GOROOT": root,
+        "GOVERSION": "go1.26.5",
+    })
+    raise SystemExit(0)
+if arguments == ["mod", "verify"]:
+    sys.stdout.write("all modules verified\n")
+    raise SystemExit(0)
+if arguments == ["list", "-mod=readonly", "-json", "./..."]:
+    record = {
+        "Dir": workspace,
+        "ImportPath": package_id,
+        "GoFiles": ["example.go"],
+        "Module": {"GoMod": manifest, "Main": True},
+    }
+    if mode == "list-incomplete":
+        record["Incomplete"] = True
+    elif mode == "list-dependency-error":
+        record["DepsErrors"] = [{"Err": "synthetic dependency failure"}]
+    elif mode == "list-omits-source":
+        record["GoFiles"] = []
+    emit(record)
+    raise SystemExit(0)
+if arguments != ["vet", "-json", "-mod=readonly", "./..."]:
+    print("unexpected fake Go arguments: " + repr(arguments), file=sys.stderr)
+    raise SystemExit(97)
+
+if mode == "clean":
+    emit({})
+elif mode == "finding":
+    emit(diagnostic())
+elif mode == "valid-fix":
+    emit(diagnostic(suggested_fixes=[{
+        "message": "insert comment",
+        "edits": [{"filename": source, "start": 0, "end": 0, "new": "// fixed\n"}],
+    }]))
+elif mode == "malformed":
+    sys.stdout.write("{not-json}\n")
+elif mode == "truncated":
+    sys.stdout.write("{}\n{")
+elif mode == "multiple":
+    emit({})
+    emit({})
+elif mode == "wrong-package":
+    value = diagnostic()
+    emit({"example.com/escape": value[package_id]})
+elif mode == "embedded-error":
+    emit({package_id: {"printf": {"error": "synthetic analyzer failure"}}})
+elif mode == "bad-position":
+    emit(diagnostic(posn=source + ":99:1", end=source + ":99:2"))
+elif mode == "bad-fix":
+    emit(diagnostic(suggested_fixes=[{
+        "message": "bad edit",
+        "edits": [{"filename": source, "start": 0, "end": 99999, "new": ""}],
+    }]))
+elif mode == "mutation":
+    with open(source, "a", encoding="utf-8") as target:
+        target.write("// mutated\n")
+    emit({})
+elif mode == "native-nonzero":
+    print("synthetic native failure", file=sys.stderr)
+    raise SystemExit(1)
+elif mode == "stderr-zero":
+    emit({})
+    print("synthetic native stderr", file=sys.stderr)
+elif mode == "output-cap":
+    sys.stdout.write("x" * (17 * 1024 * 1024))
+elif mode in ("inherited-pipe-descendant", "closed-pipe-descendant", "signal"):
+    closed = mode == "closed-pipe-descendant"
+    stream = subprocess.DEVNULL if closed else None
+    descendant = subprocess.Popen(
+        ["/bin/sh", "-c", "trap '' HUP INT TERM; while :; do sleep 1; done"],
+        stdin=subprocess.DEVNULL,
+        stdout=stream,
+        stderr=stream,
+    )
+    with open(os.environ["VELVET_GLOVE_GO_VET_DESCENDANT_PID"], "w", encoding="ascii") as target:
+        target.write(str(descendant.pid) + "\n")
+    with open(os.environ["VELVET_GLOVE_GO_VET_CHILD_PID"], "w", encoding="ascii") as target:
+        target.write(str(os.getpid()) + "\n")
+    if mode == "signal":
+        with open(os.environ["VELVET_GLOVE_GO_VET_SIGNAL_READY"], "x", encoding="ascii"):
+            pass
+        while True:
+            time.sleep(1)
+    raise SystemExit(0)
+else:
+    print("unexpected probe mode: " + mode, file=sys.stderr)
+    raise SystemExit(98)
+"#
+            .replacen("__PYTHON__", python.to_string_lossy().as_ref(), 1);
+            write_executable_fixture(&fake_go, &fake_source, "go-vet adversarial Go")?;
+
+            let reset_probe = || -> Result<(), String> {
+                for path in [&go_log, &child_pid, &descendant_pid, &signal_ready] {
+                    match std::fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!(
+                                "reset go-vet adversarial probe path {path:?}: {error}"
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            };
+            let adapter_command = |script: &str,
+                                   selected_workspace: &Path,
+                                   mode: &str,
+                                   extra_arguments: &[&str]|
+             -> Command {
+                let mut command = Command::new(&python);
+                command
+                    .args(["-I", "-c", script, "go"])
+                    .args(extra_arguments)
+                    .arg(GO_VET_WORKSPACE_MARKER)
+                    .arg(selected_workspace.join("go.mod"))
+                    .current_dir(selected_workspace)
+                    .env_clear()
+                    .env(PATH_ENV, &fake_bin)
+                    .env(TMPDIR_ENV, &adapter_tmp)
+                    .env("GOMODCACHE", &modcache)
+                    .env("VELVET_GLOVE_GO_VET_PROBE_MODE", mode)
+                    .env("VELVET_GLOVE_GO_VET_PROBE_WORKSPACE", selected_workspace)
+                    .env("VELVET_GLOVE_GO_VET_PROBE_LOG", &go_log)
+                    .env("VELVET_GLOVE_GO_VET_CHILD_PID", &child_pid)
+                    .env("VELVET_GLOVE_GO_VET_DESCENDANT_PID", &descendant_pid)
+                    .env("VELVET_GLOVE_GO_VET_SIGNAL_READY", &signal_ready);
+                command
+            };
+            let run_probe = |script: &str,
+                             selected_workspace: &Path,
+                             mode: &str,
+                             extra_arguments: &[&str]|
+             -> Result<BoundedOutput, String> {
+                reset_probe()?;
+                let mut command =
+                    adapter_command(script, selected_workspace, mode, extra_arguments);
+                run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(10)),
+                    &root.join(format!("evidence-{mode}")),
+                )
+                .map_err(|error| format!("run go-vet {mode} adversarial probe: {error}"))
+            };
+            let expect = |label: &str,
+                          output: &BoundedOutput,
+                          status: i32,
+                          stderr_contains: Option<&str>|
+             -> Result<(), String> {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(status)
+                    || stderr_contains.is_some_and(|needle| !stderr.contains(needle))
+                {
+                    return Err(format!(
+                        "go-vet {label} mismatch: status={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                    ));
+                }
+                assert_go_vet_private_roots_removed(&adapter_tmp, label)
+            };
+
+            let clean = run_probe(adapter, &workspace, "clean", &[])?;
+            expect("clean", &clean, 0, None)?;
+            if !clean.stdout.is_empty() || !clean.stderr.is_empty() {
+                return Err(format!(
+                    "go-vet clean adapter did not suppress anonymous action evidence: stdout={:?}; stderr={:?}",
+                    String::from_utf8_lossy(&clean.stdout),
+                    String::from_utf8_lossy(&clean.stderr)
+                ));
+            }
+            let log_records = std::fs::read_to_string(&go_log)
+                .map_err(|error| format!("read go-vet clean command log: {error}"))?
+                .lines()
+                .map(|line| {
+                    serde_json::from_str::<Vec<String>>(line).map_err(|error| error.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let expected_commands = GO_VET_COMMANDS
+                .iter()
+                .map(|arguments| arguments.iter().map(|value| (*value).to_owned()).collect())
+                .collect::<Vec<Vec<String>>>();
+            if log_records != expected_commands {
+                return Err(format!(
+                    "go-vet adapter command protocol drifted: expected {expected_commands:?}, got {log_records:?}"
+                ));
+            }
+
+            let source_before = std::fs::read(workspace.join("example.go"))
+                .map_err(|error| format!("read go-vet idempotence source: {error}"))?;
+            let finding = run_probe(adapter, &workspace, "finding", &[])?;
+            expect("finding", &finding, 1, None)?;
+            let repeated = run_probe(adapter, &workspace, "finding", &[])?;
+            expect("repeated finding", &repeated, 1, None)?;
+            if finding.stdout != repeated.stdout
+                || finding.stderr != repeated.stderr
+                || std::fs::read(workspace.join("example.go"))
+                    .map_err(|error| format!("re-read go-vet idempotence source: {error}"))?
+                    != source_before
+                || !String::from_utf8_lossy(&finding.stdout).contains("synthetic vet finding")
+            {
+                return Err(
+                    "go-vet validated finding was not exact, repeatable, and read-only".to_owned(),
+                );
+            }
+            let valid_fix = run_probe(adapter, &workspace, "valid-fix", &[])?;
+            expect("valid suggested fix", &valid_fix, 1, None)?;
+
+            reset_probe()?;
+            let mut extra = adapter_command(adapter, &workspace, "clean", &["-printf=false"]);
+            let extra_output = run_with_timeout(
+                &mut extra,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("evidence-extra-disable"),
+            )
+            .map_err(|error| format!("run go-vet extra-disable probe: {error}"))?;
+            expect(
+                "extra analyzer disable",
+                &extra_output,
+                2,
+                Some("extra arguments are unsupported"),
+            )?;
+            if go_log.exists() {
+                return Err("go-vet extra analyzer disable reached the native tool".to_owned());
+            }
+
+            reset_probe()?;
+            let mut ambient = adapter_command(adapter, &workspace, "clean", &[]);
+            ambient.env("GOFLAGS", "-printf=false");
+            let ambient_output = run_with_timeout(
+                &mut ambient,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &root.join("evidence-ambient-disable"),
+            )
+            .map_err(|error| format!("run go-vet ambient-disable probe: {error}"))?;
+            expect(
+                "ambient analyzer disable",
+                &ambient_output,
+                2,
+                Some("ambient Go overrides are unsupported: GOFLAGS"),
+            )?;
+            if go_log.exists() {
+                return Err("go-vet ambient analyzer disable reached the native tool".to_owned());
+            }
+
+            for (mode, diagnostic) in [
+                ("list-incomplete", "go list reported an incomplete package"),
+                (
+                    "list-dependency-error",
+                    "go list reported dependency errors",
+                ),
+                (
+                    "list-omits-source",
+                    "go list package has no enabled non-test sources",
+                ),
+                ("malformed", "not a complete JSON object stream"),
+                ("truncated", "omitted its completion newline"),
+                ("multiple", "emitted 2 action objects for 1 trusted actions"),
+                ("wrong-package", "unexpected or repeated package action"),
+                ("embedded-error", "embedded an analyzer error"),
+                ("bad-position", "line escapes its source"),
+                ("bad-fix", "byte range is invalid"),
+                ("native-nonzero", "go vet exited 1"),
+                (
+                    "stderr-zero",
+                    "wrote stderr without valid JSON completion evidence",
+                ),
+                ("output-cap", "combined output exceeded 16777216 bytes"),
+            ] {
+                let output = run_probe(adapter, &workspace, mode, &[])?;
+                expect(mode, &output, 2, Some(diagnostic))?;
+            }
+
+            let mutation = run_probe(adapter, &workspace, "mutation", &[])?;
+            expect(
+                "workspace mutation",
+                &mutation,
+                2,
+                Some("Go source changed while go vet was running"),
+            )?;
+            std::fs::write(workspace.join("example.go"), &source_before)
+                .map_err(|error| format!("restore go-vet mutation source: {error}"))?;
+
+            let alias_anchor = root.join("alias-anchor.go");
+            std::fs::write(&alias_anchor, &source_before)
+                .map_err(|error| format!("write go-vet alias anchor: {error}"))?;
+            for alias_kind in ["symlink", "hardlink"] {
+                let alias_workspace = root.join(format!("{alias_kind}-workspace"));
+                std::fs::create_dir(&alias_workspace)
+                    .map_err(|error| format!("create go-vet {alias_kind} workspace: {error}"))?;
+                std::fs::write(
+                    alias_workspace.join("go.mod"),
+                    "module example.com/govetprobe\n\ngo 1.25.0\n",
+                )
+                .map_err(|error| format!("write go-vet {alias_kind} manifest: {error}"))?;
+                if alias_kind == "symlink" {
+                    std::os::unix::fs::symlink(&alias_anchor, alias_workspace.join("example.go"))
+                        .map_err(|error| format!("create go-vet source symlink: {error}"))?;
+                } else {
+                    std::fs::hard_link(&alias_anchor, alias_workspace.join("example.go"))
+                        .map_err(|error| format!("create go-vet source hardlink: {error}"))?;
+                }
+                let output = run_probe(adapter, &alias_workspace, "clean", &[])?;
+                expect(
+                    &format!("{alias_kind} source"),
+                    &output,
+                    2,
+                    Some("path is not a unique regular file"),
+                )?;
+                if go_log.exists() {
+                    return Err(format!(
+                        "go-vet {alias_kind} source reached the native tool"
+                    ));
+                }
+            }
+
+            for mode in ["inherited-pipe-descendant", "closed-pipe-descendant"] {
+                let output = run_probe(adapter, &workspace, mode, &[])?;
+                expect(mode, &output, 2, Some("native go"))?;
+                let pid = read_pid_file(&descendant_pid, &format!("go-vet {mode} descendant"))?;
+                if process_survives(pid, Duration::from_secs(1))? {
+                    let _ = signal_process(pid, "KILL");
+                    return Err(format!("go-vet {mode} retained descendant {pid}"));
+                }
+            }
+
+            let cleanup_anchor = "                shutil.rmtree(private_root)\n";
+            if adapter.matches(cleanup_anchor).count() != 1 {
+                return Err("go-vet cleanup composition probe lost its exact anchor".to_owned());
+            }
+            let cleanup_adapter = adapter.replacen(
+                cleanup_anchor,
+                concat!(
+                    "                shutil.rmtree(private_root)\n",
+                    "                raise OSError(\"synthetic cleanup failure\")\n",
+                ),
+                1,
+            );
+            let cleanup = run_probe(&cleanup_adapter, &workspace, "malformed", &[])?;
+            let cleanup_stderr = String::from_utf8_lossy(&cleanup.stderr);
+            expect(
+                "cleanup composition",
+                &cleanup,
+                2,
+                Some("synthetic cleanup failure"),
+            )?;
+            if !cleanup_stderr.contains("not a complete JSON object stream") {
+                return Err(format!(
+                    "go-vet cleanup failure replaced its primary evidence: {cleanup_stderr:?}"
+                ));
+            }
+
+            let allocation_anchor = concat!(
+                "    allocation_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n",
+                "    try:\n",
+            );
+            if adapter.matches(allocation_anchor).count() != 1 {
+                return Err(
+                    "go-vet pre-allocation signal probe lost its exact SIG_BLOCK anchor".to_owned(),
+                );
+            }
+            let allocation_adapter = adapter.replacen(
+                allocation_anchor,
+                concat!(
+                    "    allocation_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)\n",
+                    "    allocation_ready = os.environ.get(\"GO_VET_ALLOCATION_READY\")\n",
+                    "    allocation_release = os.environ.get(\"GO_VET_ALLOCATION_RELEASE\")\n",
+                    "    if allocation_ready is not None and allocation_release is not None:\n",
+                    "        ready_descriptor = os.open(allocation_ready, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n",
+                    "        os.close(ready_descriptor)\n",
+                    "        release_descriptor = os.open(allocation_release, os.O_RDONLY)\n",
+                    "        os.close(release_descriptor)\n",
+                    "    try:\n",
+                ),
+                1,
+            );
+            let allocation_ready = root.join("pre-allocation.ready");
+            let allocation_release = root.join("pre-allocation.release");
+            let allocation_fifo = Command::new("/usr/bin/mkfifo")
+                .arg(&allocation_release)
+                .status()
+                .map_err(|error| format!("create go-vet pre-allocation FIFO: {error}"))?;
+            if !allocation_fifo.success() {
+                return Err(format!(
+                    "create go-vet pre-allocation FIFO exited {allocation_fifo:?}"
+                ));
+            }
+            reset_probe()?;
+            let mut allocation_command =
+                adapter_command(&allocation_adapter, &workspace, "clean", &[]);
+            allocation_command
+                .env("GO_VET_ALLOCATION_READY", &allocation_ready)
+                .env("GO_VET_ALLOCATION_RELEASE", &allocation_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut allocation_outer = allocation_command
+                .spawn()
+                .map_err(|error| format!("spawn go-vet pre-allocation adapter: {error}"))?;
+            let allocation_outer_pid = allocation_outer.id();
+            let allocation_deadline =
+                std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+            while !allocation_ready.is_file() {
+                if let Some(status) = allocation_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll go-vet pre-allocation adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "go-vet pre-allocation adapter exited {status:?} before its hook"
+                    ));
+                }
+                if std::time::Instant::now() >= allocation_deadline {
+                    let _ = signal_process(allocation_outer_pid, "KILL");
+                    let _ = allocation_outer.wait();
+                    return Err("go-vet pre-allocation adapter did not reach its hook".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_go_vet_private_roots_removed(&adapter_tmp, "pre-allocation cutoff")?;
+            if go_log.exists() {
+                let _ = signal_process(allocation_outer_pid, "KILL");
+                let _ = allocation_outer.wait();
+                return Err("go-vet pre-allocation cutoff launched native Go".to_owned());
+            }
+            if !signal_process(allocation_outer_pid, "TERM")?.success() {
+                let _ = signal_process(allocation_outer_pid, "KILL");
+                let _ = allocation_outer.wait();
+                return Err("send pre-allocation SIGTERM to go-vet adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&allocation_release)
+                .map_err(|error| format!("release go-vet pre-allocation hook: {error}"))?;
+            let (allocation_sender, allocation_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = allocation_sender.send(allocation_outer.wait_with_output());
+            });
+            let allocation_output = allocation_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(5)))
+                .map_err(|error| {
+                    let _ = signal_process(allocation_outer_pid, "KILL");
+                    format!("wait for go-vet pre-allocation adapter: {error}")
+                })?
+                .map_err(|error| format!("collect go-vet pre-allocation output: {error}"))?;
+            if allocation_output.status.code() != Some(2)
+                || !allocation_output.stdout.is_empty()
+                || allocation_output.stderr != b"velvet-glove-go-vet: received signal 15\n"
+                || go_log.exists()
+            {
+                return Err(format!(
+                    "go-vet pre-allocation signal cutoff mismatch: status={:?}; go_ran={}; stdout={:?}; stderr={:?}",
+                    allocation_output.status.code(),
+                    go_log.exists(),
+                    String::from_utf8_lossy(&allocation_output.stdout),
+                    String::from_utf8_lossy(&allocation_output.stderr),
+                ));
+            }
+            assert_go_vet_private_roots_removed(&adapter_tmp, "pre-allocation exit")?;
+
+            let cleanup_cutoff_adapter = adapter.replacen(
+                cleanup_anchor,
+                concat!(
+                    "                shutil.rmtree(private_root)\n",
+                    "                cleanup_ready = os.environ.get(\"GO_VET_CLEANUP_READY\")\n",
+                    "                cleanup_release = os.environ.get(\"GO_VET_CLEANUP_RELEASE\")\n",
+                    "                if cleanup_ready is not None and cleanup_release is not None:\n",
+                    "                    ready_descriptor = os.open(cleanup_ready, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n",
+                    "                    os.close(ready_descriptor)\n",
+                    "                    release_descriptor = os.open(cleanup_release, os.O_RDONLY)\n",
+                    "                    os.close(release_descriptor)\n",
+                ),
+                1,
+            );
+            let cleanup_ready = root.join("post-rmtree.ready");
+            let cleanup_release = root.join("post-rmtree.release");
+            let cleanup_fifo = Command::new("/usr/bin/mkfifo")
+                .arg(&cleanup_release)
+                .status()
+                .map_err(|error| format!("create go-vet post-rmtree FIFO: {error}"))?;
+            if !cleanup_fifo.success() {
+                return Err(format!(
+                    "create go-vet post-rmtree FIFO exited {cleanup_fifo:?}"
+                ));
+            }
+            reset_probe()?;
+            let mut cleanup_command =
+                adapter_command(&cleanup_cutoff_adapter, &workspace, "clean", &[]);
+            cleanup_command
+                .env("GO_VET_CLEANUP_READY", &cleanup_ready)
+                .env("GO_VET_CLEANUP_RELEASE", &cleanup_release)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut cleanup_outer = cleanup_command
+                .spawn()
+                .map_err(|error| format!("spawn go-vet post-rmtree adapter: {error}"))?;
+            let cleanup_outer_pid = cleanup_outer.id();
+            let cleanup_deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+            while !cleanup_ready.is_file() {
+                if let Some(status) = cleanup_outer
+                    .try_wait()
+                    .map_err(|error| format!("poll go-vet post-rmtree adapter: {error}"))?
+                {
+                    return Err(format!(
+                        "go-vet post-rmtree adapter exited {status:?} before its hook"
+                    ));
+                }
+                if std::time::Instant::now() >= cleanup_deadline {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    let _ = cleanup_outer.wait();
+                    return Err("go-vet post-rmtree adapter did not reach its hook".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_go_vet_private_roots_removed(&adapter_tmp, "post-rmtree cutoff")?;
+            if !go_log.exists() {
+                let _ = signal_process(cleanup_outer_pid, "KILL");
+                let _ = cleanup_outer.wait();
+                return Err("go-vet post-rmtree cutoff ran before native Go".to_owned());
+            }
+            if !signal_process(cleanup_outer_pid, "TERM")?.success() {
+                let _ = signal_process(cleanup_outer_pid, "KILL");
+                let _ = cleanup_outer.wait();
+                return Err("send post-rmtree SIGTERM to go-vet adapter".to_owned());
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&cleanup_release)
+                .map_err(|error| format!("release go-vet post-rmtree hook: {error}"))?;
+            let (cleanup_sender, cleanup_receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let _ = cleanup_sender.send(cleanup_outer.wait_with_output());
+            });
+            let cleanup_output = cleanup_receiver
+                .recv_timeout(timeout.min(Duration::from_secs(5)))
+                .map_err(|error| {
+                    let _ = signal_process(cleanup_outer_pid, "KILL");
+                    format!("wait for go-vet post-rmtree adapter: {error}")
+                })?
+                .map_err(|error| format!("collect go-vet post-rmtree output: {error}"))?;
+            if cleanup_output.status.code() != Some(2)
+                || !cleanup_output.stdout.is_empty()
+                || cleanup_output.stderr != b"velvet-glove-go-vet: received signal 15\n"
+            {
+                return Err(format!(
+                    "go-vet post-rmtree signal cutoff mismatch: status={:?}; stdout={:?}; stderr={:?}",
+                    cleanup_output.status.code(),
+                    String::from_utf8_lossy(&cleanup_output.stdout),
+                    String::from_utf8_lossy(&cleanup_output.stderr),
+                ));
+            }
+            assert_go_vet_private_roots_removed(&adapter_tmp, "post-rmtree exit")?;
+
+            for (signal_name, signal_number) in [("HUP", 1), ("INT", 2), ("TERM", 15)] {
+                reset_probe()?;
+                let mut command = adapter_command(adapter, &workspace, "signal", &[]);
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+                let mut outer = command.spawn().map_err(|error| {
+                    format!("spawn go-vet SIG{signal_name} adversarial adapter: {error}")
+                })?;
+                let outer_pid = outer.id();
+                let deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+                while !signal_ready.is_file() {
+                    if let Some(status) = outer
+                        .try_wait()
+                        .map_err(|error| format!("poll go-vet SIG{signal_name}: {error}"))?
+                    {
+                        return Err(format!(
+                            "go-vet SIG{signal_name} adapter exited {status:?} before readiness"
+                        ));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!("go-vet SIG{signal_name} readiness timed out"));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let native_pid =
+                    read_pid_file(&child_pid, &format!("go-vet SIG{signal_name} child"))?;
+                let native_descendant = read_pid_file(
+                    &descendant_pid,
+                    &format!("go-vet SIG{signal_name} descendant"),
+                )?;
+                if !signal_process(outer_pid, signal_name)?.success() {
+                    let _ = signal_process_group(native_pid, "KILL");
+                    let _ = signal_process(outer_pid, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!("send SIG{signal_name} to go-vet adapter"));
+                }
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send(outer.wait_with_output());
+                });
+                let output = receiver
+                    .recv_timeout(timeout.min(Duration::from_secs(5)))
+                    .map_err(|error| {
+                        let _ = signal_process_group(native_pid, "KILL");
+                        format!("wait for go-vet SIG{signal_name}: {error}")
+                    })?
+                    .map_err(|error| format!("collect go-vet SIG{signal_name}: {error}"))?;
+                let child_alive = process_survives(native_pid, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(native_descendant, Duration::from_secs(1))?;
+                if child_alive || descendant_alive {
+                    let _ = signal_process_group(native_pid, "KILL");
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains(&format!("received signal {signal_number}"))
+                    || child_alive
+                    || descendant_alive
+                {
+                    return Err(format!(
+                        "go-vet SIG{signal_name} lifecycle mismatch: status={:?}; child={child_alive}; descendant={descendant_alive}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                    ));
+                }
+                assert_go_vet_private_roots_removed(&adapter_tmp, &format!("SIG{signal_name}"))?;
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn write_go_vet_probe_workspace(root: &Path) -> Result<(), String> {
+    std::fs::write(
+        root.join("go.mod"),
+        "module example.com/govetprobe\n\ngo 1.25.0\n",
+    )
+    .map_err(|error| format!("write go-vet adversarial go.mod: {error}"))?;
+    std::fs::write(
+        root.join("example.go"),
+        "package probe\n\nfunc Example() {}\n",
+    )
+    .map_err(|error| format!("write go-vet adversarial source: {error}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assert_go_vet_private_roots_removed(root: &Path, label: &str) -> Result<(), String> {
+    let retained = sorted_entries(root)?
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("velvet-glove-go-vet-"))
+                .then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "go-vet {label} lifecycle retained private roots: {retained:?}"
+        ))
     }
 }
 
@@ -24918,6 +26289,7 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
         "go-fmt" => Some(GOFMT_FILES_MARKER),
         "dclint" => Some(DCLINT_FILES_MARKER),
         "errcheck" => Some(ERRCHECK_WORKSPACE_MARKER),
+        "go-vet" => Some(GO_VET_WORKSPACE_MARKER),
         _ => None,
     };
     if let Some(inline_marker) = inline_marker {

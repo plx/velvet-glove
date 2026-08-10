@@ -1,15 +1,1121 @@
 /// go vet — Go's built-in static analyzer.
+///
+/// Go 1.26.5 deliberately exits zero when analyzers report diagnostics in
+/// `-json` mode. The native stdout is also a concatenated stream containing
+/// one JSON object per requested package/test action, including anonymous `{}`
+/// objects for clean actions. This isolated adapter proves the action scope,
+/// validates the complete stream and its diagnostic/fix schema, and translates
+/// validated diagnostics to the checker issue status without trusting Go's
+/// native status alone.
 
 module velvet_glove.builtins.tools.GoVet
 
 import "../Config.pkl" as Config
 
+goVetAdapter: String = #"""
+  import hashlib
+  import json
+  import os
+  import re
+  import selectors
+  import shutil
+  import signal
+  import stat
+  import subprocess
+  import sys
+  import tempfile
+  import time
+
+  MARKER = "__VELVET_GLOVE_GO_VET_WORKSPACE__"
+  LIMIT = 16 * 1024 * 1024
+  SOURCE_LIMIT = 64 * 1024 * 1024
+  SOURCE_COUNT_LIMIT = 4096
+  EXPECTED_GO_VERSION = "go1.26.5"
+  ANALYZER = re.compile(r"^[a-z][a-z0-9]*$")
+  AMBIENT_GO_OVERRIDES = {
+      "CGO_ENABLED",
+      "GO111MODULE",
+      "GOARCH",
+      "GOARM64",
+      "GOENV",
+      "GOEXPERIMENT",
+      "GOFLAGS",
+      "GOINSECURE",
+      "GONOPROXY",
+      "GONOSUMDB",
+      "GOOS",
+      "GOPATH",
+      "GOPRIVATE",
+      "GOPROXY",
+      "GOROOT",
+      "GOSUMDB",
+      "GOTELEMETRY",
+      "GOTOOLCHAIN",
+      "GOTMPDIR",
+      "GOVCS",
+      "GOWORK",
+  }
+
+
+  def fail(message):
+      print(f"velvet-glove-go-vet: {message}", file=sys.stderr)
+      raise SystemExit(2)
+
+
+  if len(sys.argv) < 4 or sys.argv[2:].count(MARKER) != 1:
+      fail("invalid adapter arguments")
+
+  requested_tool = sys.argv[1]
+  payload = sys.argv[2:]
+  marker_index = payload.index(MARKER)
+  extra_args = payload[:marker_index]
+  indicators = payload[marker_index + 1 :]
+  if requested_tool != "go":
+      fail("the analyzer executable must be go")
+  if extra_args:
+      fail("extra arguments are unsupported because they can disable analyzers or change package scope")
+  if len(indicators) != 1:
+      fail("the adapter requires exactly one workspace indicator")
+
+  ambient_overrides = sorted(AMBIENT_GO_OVERRIDES.intersection(os.environ))
+  if ambient_overrides:
+      fail("ambient Go overrides are unsupported: " + ", ".join(ambient_overrides))
+
+  requested_manifest = os.path.abspath(indicators[0])
+  try:
+      manifest_info = os.lstat(requested_manifest)
+      if (
+          stat.S_ISLNK(manifest_info.st_mode)
+          or not stat.S_ISREG(manifest_info.st_mode)
+          or manifest_info.st_nlink != 1
+      ):
+          fail(f"workspace manifest is not a unique regular file: {requested_manifest}")
+      manifest = os.path.realpath(requested_manifest)
+      if manifest != requested_manifest or os.path.basename(manifest) != "go.mod":
+          fail(f"workspace manifest path is not canonical: {requested_manifest}")
+      workspace = os.path.dirname(manifest)
+      workspace_info = os.lstat(workspace)
+      if stat.S_ISLNK(workspace_info.st_mode) or not stat.S_ISDIR(workspace_info.st_mode):
+          fail(f"workspace is not a real directory: {workspace}")
+  except OSError as error:
+      fail(f"cannot inspect workspace manifest {requested_manifest}: {error}")
+
+
+  def file_snapshot(path, size_limit=LIMIT):
+      initial = os.lstat(path)
+      if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
+          raise ValueError(f"path is not a unique regular file: {path}")
+      flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+      descriptor = os.open(path, flags)
+      with os.fdopen(descriptor, "rb", closefd=True) as source_file:
+          opened = os.fstat(source_file.fileno())
+          if (
+              not stat.S_ISREG(opened.st_mode)
+              or opened.st_nlink != 1
+              or opened.st_dev != initial.st_dev
+              or opened.st_ino != initial.st_ino
+          ):
+              raise ValueError(f"path changed while it was opened: {path}")
+          content = source_file.read(size_limit + 1)
+          final = os.fstat(source_file.fileno())
+      if len(content) > size_limit:
+          raise ValueError(f"path exceeds the {size_limit}-byte validation limit: {path}")
+      stable_fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns")
+      if any(getattr(opened, field) != getattr(final, field) for field in stable_fields):
+          raise ValueError(f"path changed while it was read: {path}")
+      return {
+          "device": final.st_dev,
+          "inode": final.st_ino,
+          "mode": stat.S_IMODE(final.st_mode),
+          "size": final.st_size,
+          "mtime": final.st_mtime_ns,
+          "sha256": hashlib.sha256(content).hexdigest(),
+          "content": content,
+      }
+
+
+  def scan_workspace():
+      sources = {}
+      total_size = 0
+
+      def walk_error(error):
+          raise ValueError(f"cannot walk workspace: {error}")
+
+      for directory, child_directories, names in os.walk(
+          workspace, followlinks=False, onerror=walk_error
+      ):
+          if directory != workspace and "go.mod" in names:
+              child_directories[:] = []
+              continue
+          retained = []
+          for name in child_directories:
+              path = os.path.join(directory, name)
+              if name in {".git", "node_modules", "target", "testdata", "vendor"}:
+                  continue
+              if name.startswith(".") or name.startswith("_"):
+                  continue
+              if os.path.islink(path):
+                  raise ValueError(f"workspace contains a symlink directory: {path}")
+              retained.append(name)
+          child_directories[:] = retained
+          for name in names:
+              if not name.endswith(".go"):
+                  continue
+              path = os.path.join(directory, name)
+              relative = os.path.relpath(path, workspace).replace(os.sep, "/")
+              snapshot = file_snapshot(path)
+              total_size += snapshot["size"]
+              if len(sources) >= SOURCE_COUNT_LIMIT:
+                  raise ValueError(
+                      f"workspace contains more than {SOURCE_COUNT_LIMIT} Go source files"
+                  )
+              if total_size > SOURCE_LIMIT:
+                  raise ValueError(
+                      f"workspace Go sources exceed the {SOURCE_LIMIT}-byte validation limit"
+                  )
+              sources[relative] = snapshot
+      if not sources:
+          raise ValueError("workspace contains no physical Go source files")
+      controls = {manifest: file_snapshot(manifest, 1024 * 1024)}
+      go_sum = os.path.join(workspace, "go.sum")
+      if os.path.lexists(go_sum):
+          controls[go_sum] = file_snapshot(go_sum)
+      return sources, controls
+
+
+  try:
+      source_snapshots, control_snapshots = scan_workspace()
+  except (OSError, ValueError) as error:
+      fail(str(error))
+
+
+  def resolve_program(name):
+      resolved = shutil.which(name)
+      if resolved is None:
+          fail(f"cannot resolve required executable {name!r}")
+      resolved = os.path.abspath(resolved)
+      try:
+          info = os.stat(resolved)
+      except OSError as error:
+          fail(f"cannot inspect required executable {resolved}: {error}")
+      if not stat.S_ISREG(info.st_mode) or not os.access(resolved, os.X_OK):
+          fail(f"required executable is not a regular executable file: {resolved}")
+      return resolved
+
+
+  tool = resolve_program(requested_tool)
+  inherited_modcache = os.environ.get("GOMODCACHE")
+  temporary_parent = os.environ.get("TMPDIR", "")
+  if not os.path.isabs(temporary_parent):
+      fail("TMPDIR must be an absolute path")
+  temporary_parent = os.path.realpath(temporary_parent)
+  if not os.path.isdir(temporary_parent):
+      fail("TMPDIR must identify an existing directory")
+  if inherited_modcache is not None:
+      if not os.path.isabs(inherited_modcache):
+          fail("GOMODCACHE must be absolute when configured")
+      canonical_modcache = os.path.realpath(inherited_modcache)
+      if canonical_modcache != inherited_modcache or not os.path.isdir(canonical_modcache):
+          fail("GOMODCACHE must identify a canonical existing directory")
+      inherited_modcache = canonical_modcache
+
+  private_root = None
+  process = None
+  process_group = None
+  pending_signal = None
+  reported_signal = None
+  cleaning = False
+  stdout_bytes = b""
+  stderr_bytes = b""
+  emit_stdout_bytes = False
+  emit_stderr_bytes = False
+  handled_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+  private_prefix = "velvet-glove-go-vet-"
+
+
+  class AdapterSignal(BaseException):
+      def __init__(self, signum):
+          super().__init__(f"received signal {signum}")
+          self.signum = signum
+
+
+  class EvidenceError(Exception):
+      pass
+
+
+  def signal_group(signum):
+      if process_group is None:
+          return None
+      try:
+          os.killpg(process_group, signum)
+      except ProcessLookupError:
+          return None
+      except (OSError, ValueError) as error:
+          return EvidenceError(f"cannot signal native child process group: {error}")
+      return None
+
+
+  def process_group_exists():
+      if process_group is None:
+          return False
+      try:
+          os.killpg(process_group, 0)
+          return True
+      except ProcessLookupError:
+          return False
+      except PermissionError:
+          return True
+
+
+  def sweep_process_group():
+      if not process_group_exists():
+          return False
+      failure = signal_group(signal.SIGKILL)
+      if failure is not None:
+          raise failure
+      deadline = time.monotonic() + 1
+      while process_group_exists() and time.monotonic() < deadline:
+          time.sleep(0.01)
+      if process_group_exists():
+          raise EvidenceError("native child process group survived SIGKILL")
+      return True
+
+
+  def stop_child(initial_signal=None):
+      global process
+      global process_group
+      global cleaning
+      child = process
+      if child is None and process_group is None:
+          return None
+      failures = []
+      previous_cleaning = cleaning
+      cleaning = True
+      try:
+          if child is not None:
+              try:
+                  running = child.poll() is None
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot poll native child: {error}")
+                  running = True
+              if running:
+                  failure = signal_group(
+                      initial_signal if initial_signal is not None else signal.SIGTERM
+                  )
+                  if failure is not None:
+                      failures.append(str(failure))
+                  try:
+                      child.wait(timeout=1)
+                  except subprocess.TimeoutExpired:
+                      pass
+                  except (OSError, ValueError) as error:
+                      failures.append(f"cannot stop native child gracefully: {error}")
+          failure = signal_group(signal.SIGKILL)
+          if failure is not None:
+              failures.append(str(failure))
+          if child is not None:
+              try:
+                  child.wait(timeout=1)
+              except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                  failures.append(f"cannot reap native child: {error}")
+          deadline = time.monotonic() + 1
+          while process_group_exists() and time.monotonic() < deadline:
+              time.sleep(0.01)
+          if process_group_exists():
+              failures.append("native child process group survived SIGKILL")
+      except (OSError, ValueError) as error:
+          failures.append(f"cannot verify native child process-group cleanup: {error}")
+      finally:
+          process = None
+          process_group = None
+          cleaning = previous_cleaning
+      if failures:
+          return EvidenceError("; ".join(failures))
+      return None
+
+
+  def forward_signal(signum, _frame):
+      global pending_signal
+      pending_signal = signum
+      if cleaning:
+          return
+      if process is not None:
+          signal_group(signum)
+      raise AdapterSignal(signum)
+
+
+  def append_adapter_error(primary, secondary):
+      if secondary is None:
+          return primary
+      if primary is None:
+          return secondary
+      return EvidenceError(f"{primary}; {secondary}")
+
+
+  def apply_pending_signal(primary):
+      global reported_signal
+      if pending_signal is None or pending_signal == reported_signal:
+          return primary
+      reported_signal = pending_signal
+      return append_adapter_error(primary, AdapterSignal(pending_signal))
+
+
+  def drain_blocked_signals(primary):
+      global pending_signal
+      while True:
+          queued = sorted(set(signal.sigpending()).intersection(handled_signals), key=int)
+          if not queued:
+              return primary
+          pending_signal = int(signal.sigwait({queued[0]}))
+          primary = apply_pending_signal(primary)
+
+
+  def clear_raw_output():
+      global stdout_bytes
+      global stderr_bytes
+      global emit_stdout_bytes
+      global emit_stderr_bytes
+      stdout_bytes = b""
+      stderr_bytes = b""
+      emit_stdout_bytes = False
+      emit_stderr_bytes = False
+
+
+  def run_child(arguments, environment):
+      global process
+      global process_group
+      global cleaning
+      global reported_signal
+      global stdout_bytes
+      global stderr_bytes
+      global emit_stdout_bytes
+      global emit_stderr_bytes
+      stdout_chunks = []
+      stderr_chunks = []
+      total = 0
+      child = None
+      selector = selectors.DefaultSelector()
+      clear_raw_output()
+      try:
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+          try:
+              child = subprocess.Popen(
+                  arguments,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  cwd=workspace,
+                  env=environment,
+                  start_new_session=True,
+              )
+              process = child
+              process_group = child.pid
+          finally:
+              signal.pthread_sigmask(signal.SIG_SETMASK, spawn_mask)
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          for stream, target in ((child.stdout, stdout_chunks), (child.stderr, stderr_chunks)):
+              if stream is None:
+                  raise OSError("failed to capture tool output")
+              os.set_blocking(stream.fileno(), False)
+              selector.register(stream, selectors.EVENT_READ, target)
+          leader_status = None
+          leader_exit_deadline = None
+          while selector.get_map():
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
+              for key, _ in selector.select(timeout=0.1):
+                  chunk = os.read(key.fileobj.fileno(), 65536)
+                  if chunk:
+                      total += len(chunk)
+                      if total > LIMIT:
+                          raise BufferError(f"combined output exceeded {LIMIT} bytes")
+                      key.data.append(chunk)
+                  else:
+                      selector.unregister(key.fileobj)
+                      key.fileobj.close()
+              if leader_status is None:
+                  leader_status = child.poll()
+                  if leader_status is not None:
+                      leader_exit_deadline = time.monotonic() + 0.25
+              if (
+                  leader_status is not None
+                  and selector.get_map()
+                  and time.monotonic() >= leader_exit_deadline
+              ):
+                  previous_cleaning = cleaning
+                  cleaning = True
+                  try:
+                      left_descendants = sweep_process_group()
+                  finally:
+                      cleaning = previous_cleaning
+                  if left_descendants:
+                      raise EvidenceError(
+                          "native go left same-group descendants after child exit"
+                      )
+                  raise EvidenceError("native go child exited without closing output pipes")
+          while leader_status is None:
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
+              leader_status = child.poll()
+              if leader_status is None:
+                  time.sleep(0.01)
+          previous_cleaning = cleaning
+          cleaning = True
+          try:
+              left_descendants = sweep_process_group()
+          finally:
+              cleaning = previous_cleaning
+          if left_descendants:
+              raise EvidenceError("native go left same-group descendants after child exit")
+          process = None
+          process_group = None
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          return leader_status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+      except AdapterSignal as error:
+          reported_signal = error.signum
+          raise append_adapter_error(error, stop_child(error.signum))
+      except BaseException as error:
+          raise append_adapter_error(error, stop_child())
+      finally:
+          selector.close()
+          if child is not None:
+              for stream in (child.stdout, child.stderr):
+                  if stream is not None:
+                      try:
+                          stream.close()
+                      except OSError:
+                          pass
+          stdout_bytes = b"".join(stdout_chunks)
+          stderr_bytes = b"".join(stderr_chunks)
+
+
+  def assert_workspace_unchanged():
+      current_sources, current_controls = scan_workspace()
+      if set(current_sources) != set(source_snapshots):
+          raise ValueError("workspace Go source set changed while go vet was running")
+      if set(current_controls) != set(control_snapshots):
+          raise ValueError("workspace module controls changed while go vet was running")
+      for label, before, after in (
+          ("Go source", source_snapshots, current_sources),
+          ("module control", control_snapshots, current_controls),
+      ):
+          for path, initial in before.items():
+              current = after[path]
+              for field in ("device", "inode", "mode", "size", "mtime", "sha256"):
+                  if current[field] != initial[field]:
+                      raise ValueError(f"{label} changed while go vet was running: {path}")
+
+
+  def unique_object(pairs):
+      result = {}
+      for key, value in pairs:
+          if key in result:
+              raise ValueError(f"JSON object repeats field {key!r}")
+          result[key] = value
+      return result
+
+
+  def invalid_constant(value):
+      raise ValueError(f"JSON contains non-finite number {value}")
+
+
+  json_decoder = json.JSONDecoder(
+      object_pairs_hook=unique_object,
+      parse_constant=invalid_constant,
+  )
+
+
+  def parse_json_stream(raw, label, require_records=True):
+      try:
+          text = raw.decode("utf-8")
+      except UnicodeError as error:
+          raise ValueError(f"{label} is not UTF-8: {error}")
+      if raw and not raw.endswith(b"\n"):
+          raise ValueError(f"{label} omitted its completion newline")
+      records = []
+      cursor = 0
+      while True:
+          while cursor < len(text) and text[cursor].isspace():
+              cursor += 1
+          if cursor == len(text):
+              break
+          try:
+              record, cursor = json_decoder.raw_decode(text, cursor)
+          except (json.JSONDecodeError, ValueError) as error:
+              raise ValueError(f"{label} is not a complete JSON object stream: {error}")
+          if not isinstance(record, dict):
+              raise ValueError(f"{label} contains a non-object record")
+          records.append(record)
+      if require_records and not records:
+          raise ValueError(f"{label} returned no records")
+      return records
+
+
+  def parse_json_object(raw, label):
+      records = parse_json_stream(raw, label)
+      if len(records) != 1:
+          raise ValueError(f"{label} returned {len(records)} objects instead of one")
+      return records[0]
+
+
+  def package_file(directory, value, label):
+      if (
+          not isinstance(value, str)
+          or not value
+          or os.path.basename(value) != value
+          or "\0" in value
+          or "\n" in value
+          or "\r" in value
+      ):
+          raise ValueError(f"{label} is not one package-local filename: {value!r}")
+      path = os.path.realpath(os.path.join(directory, value))
+      if os.path.commonpath((workspace, path)) != workspace:
+          raise ValueError(f"{label} escapes the selected workspace: {value!r}")
+      return os.path.relpath(path, workspace).replace(os.sep, "/")
+
+
+  def string_array(record, key):
+      values = record.get(key, [])
+      if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+          raise ValueError(f"go list {key} is not a string array")
+      return values
+
+
+  def validate_package_scope(raw):
+      records = parse_json_stream(raw, "go list preflight")
+      actions = {}
+      ignored = set()
+      analyzed = set()
+      import_paths = set()
+      for record in records:
+          if record.get("Incomplete") is True or record.get("Error") is not None:
+              raise ValueError("go list reported an incomplete package")
+          if record.get("DepsErrors", []) not in (None, []):
+              raise ValueError("go list reported dependency errors")
+          invalid_files = record.get("InvalidGoFiles", [])
+          if invalid_files not in (None, []):
+              raise ValueError("go list reported invalid Go files")
+          import_path = record.get("ImportPath")
+          if not isinstance(import_path, str) or not import_path or import_path in import_paths:
+              raise ValueError("go list returned an invalid or repeated import path")
+          import_paths.add(import_path)
+          directory_value = record.get("Dir")
+          if not isinstance(directory_value, str) or not os.path.isabs(directory_value):
+              raise ValueError("go list package directory is not absolute")
+          directory = os.path.realpath(directory_value)
+          if os.path.commonpath((workspace, directory)) != workspace:
+              raise ValueError(f"go list package escaped the selected workspace: {directory}")
+          module = record.get("Module")
+          if not isinstance(module, dict):
+              raise ValueError("go list workspace package omitted module metadata")
+          go_mod = module.get("GoMod")
+          if not isinstance(go_mod, str) or os.path.realpath(go_mod) != manifest:
+              raise ValueError("go list package belongs to a different module")
+          if module.get("Main") is not True:
+              raise ValueError("go list package is not in the selected main module")
+
+          files = {}
+          for key in ("GoFiles", "CgoFiles", "TestGoFiles", "XTestGoFiles"):
+              files[key] = {
+                  package_file(directory, value, f"go list {key} entry")
+                  for value in string_array(record, key)
+              }
+          package_ignored = {
+              package_file(directory, value, "go list IgnoredGoFiles entry")
+              for value in string_array(record, "IgnoredGoFiles")
+          }
+          if not files["GoFiles"] and not files["CgoFiles"]:
+              raise ValueError(f"go list package has no enabled non-test sources: {import_path}")
+          if any(files[left].intersection(files[right]) for index, left in enumerate(files) for right in tuple(files)[index + 1 :]):
+              raise ValueError(f"go list assigned a source to multiple package file classes: {import_path}")
+          internal_sources = files["GoFiles"] | files["CgoFiles"] | files["TestGoFiles"]
+          # Go's test-augmented internal action retains the package import path
+          # as its unitchecker JSON ID. An external-test action appends `_test`.
+          # The action count, not an invented display ID, distinguishes them.
+          internal_action = import_path
+          if internal_action in actions:
+              raise ValueError(f"go list produced a repeated vet action: {internal_action}")
+          actions[internal_action] = internal_sources
+          if files["XTestGoFiles"]:
+              external_action = f"{import_path}_test"
+              if external_action in actions:
+                  raise ValueError(f"go list produced a repeated vet action: {external_action}")
+              actions[external_action] = files["XTestGoFiles"]
+          package_analyzed = set().union(*files.values())
+          if analyzed.intersection(package_analyzed):
+              raise ValueError("go list assigned a source to multiple packages")
+          if ignored.intersection(package_ignored) or package_analyzed.intersection(package_ignored):
+              raise ValueError("go list repeated an ignored or analyzed source")
+          analyzed.update(package_analyzed)
+          ignored.update(package_ignored)
+      if not actions or not analyzed:
+          raise ValueError("go list found no analyzable workspace package sources")
+      physical = set(source_snapshots)
+      uncovered = sorted(physical - analyzed - ignored)
+      unexpected = sorted((analyzed | ignored) - physical)
+      if uncovered:
+          raise ValueError("go list omitted physical Go sources: " + ", ".join(uncovered))
+      if unexpected:
+          raise ValueError("go list reported unvalidated Go sources: " + ", ".join(unexpected))
+      return actions
+
+
+  def stable_source(relative):
+      path = os.path.join(workspace, relative.replace("/", os.sep))
+      current = file_snapshot(path)
+      initial = source_snapshots[relative]
+      for field in ("device", "inode", "mode", "size", "mtime", "sha256"):
+          if current[field] != initial[field]:
+              raise ValueError(f"go vet diagnostic source is not stable: {relative}")
+      return initial["content"]
+
+
+  def parse_position(value, allowed_sources, label):
+      if not isinstance(value, str) or "\0" in value or "\n" in value or "\r" in value:
+          raise ValueError(f"{label} is not a position string")
+      parts = value.rsplit(":", 2)
+      if len(parts) != 3 or re.fullmatch(r"[1-9][0-9]*", parts[1]) is None or re.fullmatch(r"[1-9][0-9]*", parts[2]) is None:
+          raise ValueError(f"{label} is malformed: {value!r}")
+      path_text, line_text, column_text = parts
+      if not os.path.isabs(path_text) or os.path.normpath(path_text) != path_text:
+          raise ValueError(f"{label} path is not normalized and absolute: {path_text!r}")
+      path = os.path.realpath(path_text)
+      if path != path_text:
+          raise ValueError(f"{label} path is not canonical: {path_text!r}")
+      try:
+          relative = os.path.relpath(path, workspace).replace(os.sep, "/")
+      except ValueError:
+          relative = "../"
+      if relative not in allowed_sources:
+          raise ValueError(f"{label} is outside its analyzed package action: {path_text!r}")
+      content = stable_source(relative)
+      line = int(line_text)
+      column = int(column_text)
+      lines = content.splitlines(keepends=True)
+      if line > len(lines):
+          raise ValueError(f"{label} line escapes its source: {value!r}")
+      line_bytes = lines[line - 1]
+      logical_line = line_bytes.rstrip(b"\r\n")
+      if column > len(logical_line) + 1:
+          raise ValueError(f"{label} column escapes its source: {value!r}")
+      line_start = sum(len(part) for part in lines[: line - 1])
+      offset = line_start + column - 1
+      try:
+          content[:offset].decode("utf-8")
+      except UnicodeError as error:
+          raise ValueError(f"{label} is not on a UTF-8 boundary: {error}")
+      return relative, offset
+
+
+  def valid_message(value, label, allow_newline=False):
+      forbidden = "\0\r" + ("" if allow_newline else "\n")
+      if not isinstance(value, str) or not value or any(character in value for character in forbidden):
+          raise ValueError(f"{label} is not a non-empty diagnostic string")
+
+
+  def validate_fix(value, allowed_sources, label):
+      if not isinstance(value, dict) or set(value) != {"message", "edits"}:
+          raise ValueError(f"{label} has an invalid suggested-fix field set")
+      valid_message(value["message"], f"{label} message")
+      edits = value["edits"]
+      if not isinstance(edits, list) or not edits:
+          raise ValueError(f"{label} has no text edits")
+      previous = None
+      for index, edit in enumerate(edits):
+          edit_label = f"{label} edit {index}"
+          if not isinstance(edit, dict) or set(edit) != {"filename", "start", "end", "new"}:
+              raise ValueError(f"{edit_label} has an invalid field set")
+          filename = edit["filename"]
+          if not isinstance(filename, str) or not os.path.isabs(filename):
+              raise ValueError(f"{edit_label} filename is not absolute")
+          path = os.path.realpath(filename)
+          if path != filename or os.path.normpath(filename) != filename:
+              raise ValueError(f"{edit_label} filename is not canonical")
+          relative = os.path.relpath(path, workspace).replace(os.sep, "/")
+          if relative not in allowed_sources:
+              raise ValueError(f"{edit_label} is outside its analyzed package action")
+          content = stable_source(relative)
+          start = edit["start"]
+          end = edit["end"]
+          if (
+              isinstance(start, bool)
+              or isinstance(end, bool)
+              or not isinstance(start, int)
+              or not isinstance(end, int)
+              or start < 0
+              or end < start
+              or end > len(content)
+          ):
+              raise ValueError(f"{edit_label} byte range is invalid")
+          try:
+              content[:start].decode("utf-8")
+              content[:end].decode("utf-8")
+          except UnicodeError as error:
+              raise ValueError(f"{edit_label} is not on UTF-8 boundaries: {error}")
+          replacement = edit["new"]
+          if not isinstance(replacement, str) or "\0" in replacement:
+              raise ValueError(f"{edit_label} replacement is invalid")
+          key = (relative, start, end)
+          if previous is not None and key < previous:
+              raise ValueError(f"{label} edits are not sorted")
+          if previous is not None and relative == previous[0] and start < previous[2]:
+              raise ValueError(f"{label} edits overlap")
+          previous = key
+
+
+  def validate_diagnostic(value, allowed_sources, label):
+      required = {"posn", "end", "message"}
+      optional = {"category", "suggested_fixes", "related"}
+      if not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(required | optional):
+          raise ValueError(f"{label} has an invalid diagnostic field set")
+      valid_message(value["message"], f"{label} message")
+      start_relative, start = parse_position(value["posn"], allowed_sources, f"{label} posn")
+      end_relative, end = parse_position(value["end"], allowed_sources, f"{label} end")
+      if start_relative != end_relative or end < start:
+          raise ValueError(f"{label} has a reversed or cross-file primary range")
+      if "category" in value:
+          valid_message(value["category"], f"{label} category")
+      if "suggested_fixes" in value:
+          fixes = value["suggested_fixes"]
+          if not isinstance(fixes, list) or not fixes:
+              raise ValueError(f"{label} suggested_fixes is not a non-empty array")
+          for index, fix in enumerate(fixes):
+              validate_fix(fix, allowed_sources, f"{label} suggested fix {index}")
+      if "related" in value:
+          related = value["related"]
+          if not isinstance(related, list) or not related:
+              raise ValueError(f"{label} related is not a non-empty array")
+          for index, item in enumerate(related):
+              item_label = f"{label} related {index}"
+              if not isinstance(item, dict) or set(item) != {"posn", "end", "message"}:
+                  raise ValueError(f"{item_label} has an invalid field set")
+              valid_message(item["message"], f"{item_label} message")
+              related_start_file, related_start = parse_position(
+                  item["posn"], allowed_sources, f"{item_label} posn"
+              )
+              related_end_file, related_end = parse_position(
+                  item["end"], allowed_sources, f"{item_label} end"
+              )
+              if related_start_file != related_end_file or related_end < related_start:
+                  raise ValueError(f"{item_label} has a reversed or cross-file range")
+
+
+  def validate_vet_output(raw, actions):
+      records = parse_json_stream(raw, "go vet JSON output")
+      if len(records) != len(actions):
+          raise ValueError(
+              f"go vet emitted {len(records)} action objects for {len(actions)} trusted actions"
+          )
+      observed_actions = set()
+      findings = 0
+      for record_index, record in enumerate(records):
+          if not record:
+              continue
+          if len(record) != 1:
+              raise ValueError(f"go vet action object {record_index} does not name exactly one package")
+          package_id, analyses = next(iter(record.items()))
+          if package_id not in actions or package_id in observed_actions:
+              raise ValueError(f"go vet returned an unexpected or repeated package action: {package_id!r}")
+          observed_actions.add(package_id)
+          if not isinstance(analyses, dict) or not analyses:
+              raise ValueError(f"go vet package action has no analyzer results: {package_id}")
+          for analyzer, result in analyses.items():
+              if not isinstance(analyzer, str) or ANALYZER.fullmatch(analyzer) is None:
+                  raise ValueError(f"go vet returned an invalid analyzer name: {analyzer!r}")
+              if isinstance(result, dict):
+                  if set(result) == {"error"} and isinstance(result["error"], str) and result["error"]:
+                      raise ValueError(
+                          f"go vet embedded an analyzer error for {package_id}/{analyzer}: {result['error']}"
+                      )
+                  raise ValueError(f"go vet returned malformed analyzer error data for {package_id}/{analyzer}")
+              if not isinstance(result, list) or not result:
+                  raise ValueError(f"go vet analyzer result is not a non-empty diagnostic array: {package_id}/{analyzer}")
+              seen_diagnostics = set()
+              for index, diagnostic in enumerate(result):
+                  validate_diagnostic(
+                      diagnostic,
+                      actions[package_id],
+                      f"go vet {package_id}/{analyzer} diagnostic {index}",
+                  )
+                  identity = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
+                  if identity in seen_diagnostics:
+                      raise ValueError(f"go vet repeated a diagnostic for {package_id}/{analyzer}")
+                  seen_diagnostics.add(identity)
+                  findings += 1
+      return findings
+
+
+  def sanitize(value):
+      if isinstance(value, bytes):
+          message = value
+          if private_root is not None:
+              message = message.replace(os.fsencode(private_root), b"<go-vet-private>")
+          attempted_prefix = os.fsencode(os.path.join(temporary_parent, private_prefix))
+          return re.sub(
+              re.escape(attempted_prefix) + rb"[A-Za-z0-9._-]*",
+              b"<go-vet-private>",
+              message,
+          )
+      message = str(value)
+      if private_root is not None:
+          message = message.replace(private_root, "<go-vet-private>")
+      attempted_prefix = os.path.join(temporary_parent, private_prefix)
+      message = re.sub(
+          re.escape(attempted_prefix) + r"[A-Za-z0-9._-]*",
+          "<go-vet-private>",
+          message,
+      )
+      if isinstance(value, OSError) and value.filename is not None:
+          filename = os.fsdecode(value.filename)
+          candidate = os.path.abspath(filename)
+          if (
+              os.path.dirname(candidate) == temporary_parent
+              and os.path.basename(candidate).startswith(private_prefix)
+          ):
+              message = message.replace(filename, "<go-vet-private>")
+      return message
+
+
+  previous_handlers = {}
+  result_status = 2
+  result_stdout = b""
+  adapter_error = None
+  try:
+      for signum in handled_signals:
+          previous_handlers[signum] = signal.signal(signum, forward_signal)
+      allocation_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+      try:
+          private_root = tempfile.mkdtemp(prefix=private_prefix, dir=temporary_parent)
+      finally:
+          signal.pthread_sigmask(signal.SIG_SETMASK, allocation_mask)
+      os.chmod(private_root, 0o700)
+      private_paths = {
+          "HOME": os.path.join(private_root, "home"),
+          "TMPDIR": os.path.join(private_root, "tmp"),
+          "XDG_CACHE_HOME": os.path.join(private_root, "xdg-cache"),
+          "GOCACHE": os.path.join(private_root, "go-build"),
+          "GOPATH": os.path.join(private_root, "gopath"),
+          "GOTMPDIR": os.path.join(private_root, "go-tmp"),
+      }
+      for path in private_paths.values():
+          os.mkdir(path, mode=0o700)
+      if inherited_modcache is None:
+          inherited_modcache = os.path.join(private_paths["GOPATH"], "pkg", "mod")
+          os.makedirs(inherited_modcache, mode=0o700)
+      environment = os.environ.copy()
+      for name in tuple(environment):
+          if (
+              name.startswith("GO")
+              or name.startswith("DYLD_")
+              or name.startswith("LD_")
+              or name
+              in {
+                  "CC",
+                  "CXX",
+                  "CGO_CFLAGS",
+                  "CGO_CPPFLAGS",
+                  "CGO_CXXFLAGS",
+                  "CGO_LDFLAGS",
+                  "CI",
+                  "DEBUG",
+                  "HOME",
+                  "PKG_CONFIG",
+                  "TMPDIR",
+                  "XDG_CACHE_HOME",
+              }
+          ):
+              environment.pop(name, None)
+      environment.update(private_paths)
+      environment.update(
+          {
+              "PATH": "/usr/bin:/bin",
+              "LANG": "C",
+              "LC_ALL": "C",
+              "TZ": "UTC",
+              "TERM": "dumb",
+              "NO_COLOR": "1",
+              "CLICOLOR": "0",
+              "FORCE_COLOR": "0",
+              "CGO_ENABLED": "0",
+              "GO111MODULE": "on",
+              "GODEBUG": "",
+              "GOENV": "off",
+              "GOFLAGS": "-mod=readonly",
+              "GOMAXPROCS": "1",
+              "GOMODCACHE": inherited_modcache,
+              "GONOPROXY": "",
+              "GONOSUMDB": "",
+              "GOPRIVATE": "",
+              "GOPROXY": "off",
+              "GOSUMDB": "off",
+              "GOTELEMETRY": "off",
+              "GOTOOLCHAIN": "local",
+              "GOVCS": "*:off",
+              "GOWORK": "off",
+          }
+      )
+      env_arguments = [
+          tool,
+          "env",
+          "-json",
+          "GOARCH",
+          "GOMODCACHE",
+          "GOOS",
+          "GOROOT",
+          "GOVERSION",
+      ]
+      env_status, env_stdout, env_stderr = run_child(env_arguments, environment)
+      if env_status != 0 or env_stderr:
+          emit_stdout_bytes = bool(env_stdout)
+          emit_stderr_bytes = bool(env_stderr)
+          raise ValueError(
+              f"Go environment preflight exited {env_status} without valid completion evidence"
+          )
+      go_environment = parse_json_object(env_stdout, "Go environment preflight")
+      expected_go_keys = {"GOARCH", "GOMODCACHE", "GOOS", "GOROOT", "GOVERSION"}
+      if set(go_environment) != expected_go_keys:
+          raise ValueError("Go environment preflight returned an unexpected field set")
+      if go_environment["GOMODCACHE"] != inherited_modcache:
+          raise ValueError("Go environment preflight ignored the controlled module cache")
+      if go_environment["GOVERSION"] != EXPECTED_GO_VERSION:
+          raise ValueError(
+              f"Go environment preflight requires {EXPECTED_GO_VERSION}, observed {go_environment['GOVERSION']!r}"
+          )
+      for key in ("GOARCH", "GOOS"):
+          if not isinstance(go_environment[key], str) or not go_environment[key]:
+              raise ValueError(f"Go environment preflight returned an invalid {key}")
+      go_root_value = go_environment["GOROOT"]
+      if not isinstance(go_root_value, str) or not os.path.isabs(go_root_value):
+          raise ValueError("Go environment preflight returned a non-absolute GOROOT")
+      go_root = os.path.realpath(go_root_value)
+      real_go = os.path.realpath(os.path.join(go_root, "bin", "go"))
+      real_go_info = os.stat(real_go)
+      if not stat.S_ISREG(real_go_info.st_mode) or not os.access(real_go, os.X_OK):
+          raise ValueError("Go environment preflight did not identify an executable toolchain")
+      environment["PATH"] = os.pathsep.join((os.path.dirname(real_go), "/usr/bin", "/bin"))
+      clear_raw_output()
+      assert_workspace_unchanged()
+
+      verify_status, verify_stdout, verify_stderr = run_child(
+          [tool, "mod", "verify"], environment
+      )
+      if verify_status != 0 or verify_stdout != b"all modules verified\n" or verify_stderr:
+          emit_stdout_bytes = bool(verify_stdout)
+          emit_stderr_bytes = bool(verify_stderr)
+          raise ValueError(
+              f"go mod verify exited {verify_status} without exact completion evidence"
+          )
+      clear_raw_output()
+      assert_workspace_unchanged()
+
+      list_status, list_stdout, list_stderr = run_child(
+          [tool, "list", "-mod=readonly", "-json", "./..."], environment
+      )
+      if list_status != 0 or list_stderr:
+          emit_stdout_bytes = bool(list_stdout)
+          emit_stderr_bytes = bool(list_stderr)
+          raise ValueError(
+              f"go list scope preflight exited {list_status} without valid completion evidence"
+          )
+      actions = validate_package_scope(list_stdout)
+      clear_raw_output()
+      assert_workspace_unchanged()
+
+      native_status, native_stdout, native_stderr = run_child(
+          [tool, "vet", "-json", "-mod=readonly", "./..."], environment
+      )
+      assert_workspace_unchanged()
+      if native_status != 0 or native_stderr:
+          emit_stdout_bytes = bool(native_stdout)
+          emit_stderr_bytes = bool(native_stderr)
+          raise ValueError(
+              f"go vet exited {native_status} or wrote stderr without valid JSON completion evidence"
+          )
+      findings = validate_vet_output(native_stdout, actions)
+      if findings:
+          result_status = 1
+          result_stdout = native_stdout
+      else:
+          result_status = 0
+          result_stdout = b""
+      clear_raw_output()
+  except AdapterSignal as error:
+      adapter_error = append_adapter_error(error, stop_child(error.signum))
+      reported_signal = error.signum
+      result_status = 2
+      result_stdout = b""
+  except BaseException as error:
+      adapter_error = append_adapter_error(error, stop_child())
+      result_status = 2
+      result_stdout = b""
+  finally:
+      cleaning = True
+      signals_blocked = False
+      try:
+          adapter_error = append_adapter_error(adapter_error, stop_child())
+          if private_root is not None:
+              try:
+                  shutil.rmtree(private_root)
+              except FileNotFoundError:
+                  pass
+              except OSError as cleanup_error:
+                  adapter_error = append_adapter_error(
+                      adapter_error,
+                      EvidenceError(
+                          f"cannot remove controlled temporary directory: {cleanup_error}"
+                      ),
+                  )
+          try:
+              signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+              signals_blocked = True
+          except (AttributeError, OSError, ValueError) as error:
+              adapter_error = append_adapter_error(
+                  adapter_error, EvidenceError(f"cannot block cleanup signals: {error}")
+              )
+          adapter_error = apply_pending_signal(adapter_error)
+          if signals_blocked:
+              try:
+                  adapter_error = drain_blocked_signals(adapter_error)
+              except (OSError, ValueError) as error:
+                  adapter_error = append_adapter_error(
+                      adapter_error, EvidenceError(f"cannot drain cleanup signals: {error}")
+                  )
+      finally:
+          for signum, handler in previous_handlers.items():
+              try:
+                  signal.signal(signum, handler)
+              except (OSError, ValueError) as error:
+                  adapter_error = append_adapter_error(
+                      adapter_error,
+                      EvidenceError(f"cannot restore signal handler {signum}: {error}"),
+                  )
+          cleaning = False
+      if adapter_error is not None:
+          result_status = 2
+          result_stdout = b""
+
+  if adapter_error is not None:
+      if emit_stdout_bytes and stdout_bytes:
+          sys.stdout.buffer.write(sanitize(stdout_bytes))
+      if emit_stderr_bytes and stderr_bytes:
+          sys.stderr.buffer.write(sanitize(stderr_bytes))
+      fail(sanitize(adapter_error))
+  if result_stdout:
+      sys.stdout.buffer.write(sanitize(result_stdout))
+  raise SystemExit(result_status)
+  """#
+
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "go-vet"
   displayName = "go vet"
   executable = "go"
-  installHint = "install the Go toolchain (go vet ships with it)"
+  installHint = "install the checksum-locked Go 1.26.5 toolchain and a Python 3 interpreter with isolated-mode support"
   workspaceIndicator = "go.mod"
+  phaseInvocation = "batch"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*.go"; "**/*.go" }
@@ -18,17 +1124,28 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
-        "vet"
+        "-I"
+        "-c"
+        goVetAdapter
+        new Config.ToolExecutable {}
         new Config.ExtraArgs {}
-        "./..."
+        "__VELVET_GLOVE_GO_VET_WORKSPACE__"
+        new Config.WorkspaceIndicator {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
         unexpected = "failure"
       }
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  messages = new Config.Messages {
+    issuesAgent =
+      "go vet reports likely mistakes; inspect diagnostics at {{ diagnostics_path }}."
+  }
 }
