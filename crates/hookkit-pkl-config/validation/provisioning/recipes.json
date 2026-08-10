@@ -695,6 +695,51 @@
       ]
     },
     {
+      "id": "macos-arm64-gofumpt",
+      "provisioningGroup": "go",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "gofumpt",
+          "version": "0.11.0",
+          "miseTool": "gofumpt@0.11.0",
+          "installationSource": "official raw gofumpt v0.11.0 Darwin arm64 release asset for signed tag object 2eb2409f833722c24213089299ba9d6778a441fa, peeled commit 5dca7d819315c5c6338d290ad2e7847f07438693, checksum-locked at SHA-256 18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b and independently reproduced byte-for-byte from the exact Git tag checkout with Go 1.26.5 release flags; no artifact-attestation claim",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock",
+            "sha256": "18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b"
+          },
+          "probe": {
+            "argv": ["gofumpt", "-version"],
+            "match": "exact",
+            "expected": "v0.11.0 (go1.26.5)"
+          }
+        },
+        {
+          "id": "gofumpt-go",
+          "version": "1.26.5",
+          "miseTool": "go@1.26.5",
+          "installationSource": "official go1.26.5 Darwin arm64 archive at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a, tag commit c19862e5f8415b4f24b189d065ed739517c548ba, and the exact mise archive lock in validation/provisioning/mise.lock",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock",
+            "sha256": "efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a"
+          },
+          "probe": {
+            "argv": ["go", "version"],
+            "match": "exact",
+            "expected": "go version go1.26.5 darwin/arm64"
+          }
+        }
+      ],
+      "auxiliaryPrograms": ["go"],
+      "bootstrap": []
+    },
+    {
       "id": "macos-arm64-rust",
       "provisioningGroup": "rust",
       "platform": "macos",
@@ -1745,6 +1790,26 @@
         "test-findings"
       ],
       "representativeCase": "test-findings"
+    },
+    {
+      "id": "gofumpt-macos-arm64",
+      "toolId": "gofumpt",
+      "environmentId": "macos-arm64-gofumpt",
+      "version": "0.11.0",
+      "installationSource": "official raw gofumpt v0.11.0 Darwin arm64 release asset `gofumpt_v0.11.0_darwin_arm64` at SHA-256 18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b; immutable signed tag object 2eb2409f833722c24213089299ba9d6778a441fa peels to commit 5dca7d819315c5c6338d290ad2e7847f07438693; exact binary metadata records go1.26.5, that VCS revision, 2026-07-27T08:46:00Z, and modified=false; independent exact-tag Go1.26.5 release build reproduced the bytes; GitHub exposes no retrievable artifact attestation",
+      "integrity": {
+        "kind": "mise-lock",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock",
+        "sha256": "18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b"
+      },
+      "probe": {
+        "argv": ["gofumpt", "-version"],
+        "match": "exact",
+        "expected": "v0.11.0 (go1.26.5)"
+      },
+      "caseExecutables": ["gofumpt", "go", "python"],
+      "cases": ["clean", "multi-file", "operational-failure", "standalone", "unformatted"],
+      "representativeCase": "multi-file"
     },
     {
       "id": "errcheck-macos-arm64",

@@ -1,3 +1,3 @@
-module example.com/clean
+module example
 
 go 1.26

@@ -281,6 +281,37 @@ const GOFMT_LOADER_SCRUBBED_ENV: &[&str] = &[
     "LD_LIBRARY_PATH",
     "LD_PRELOAD",
 ];
+const GOFUMPT_POISON_ENV_VALUE: &str = "velvet-glove-gofumpt-adapter-must-clear-this";
+const GOFUMPT_CHILD_PATH: &str = "/usr/bin:/bin";
+const GOFUMPT_CONTROLLED_ENV: &[(&str, &str)] = &[
+    ("GODEBUG", ""),
+    ("GOENV", "off"),
+    ("GOMAXPROCS", "1"),
+    ("GOTELEMETRY", "off"),
+    ("GOTOOLCHAIN", "local"),
+    ("GOWORK", "off"),
+    ("GOPROXY", "off"),
+    ("GOSUMDB", "off"),
+    ("GOVCS", "*:off"),
+];
+const GOFUMPT_SCRUBBED_ENV: &[&str] = &[
+    "GOFLAGS",
+    "GOCACHE",
+    "GOPATH",
+    "GOROOT",
+    "GOTMPDIR",
+    "GOFUMPT_SPLIT_LONG_LINES",
+    "GO_VERSION_TEST",
+    "GO_VELVET_GLOVE_POISON",
+    "VELVET_GLOVE_GOFUMPT_TIMEOUT_MS",
+    DEBUG_ENV,
+];
+const GOFUMPT_LOADER_SCRUBBED_ENV: &[&str] = &[
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_PRINT_LIBRARIES",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+];
 const BUF_CACHE_DIR_ENV: &str = "BUF_CACHE_DIR";
 const BUF_CHILD_PATH: &str = "/usr/bin:/bin";
 const BUF_DIFF_PROGRAM: &str = "/usr/bin/diff";
@@ -577,6 +608,7 @@ enum TracePlan {
         marker: &'static str,
         commands: &'static [&'static [&'static str]],
     },
+    GofumptPrivateInputsAdapter,
     TrailingOptionsAdapter {
         preflight: &'static [&'static str],
         validation: &'static [&'static str],
@@ -704,6 +736,11 @@ const GOFMT_TRACE_PLAN: TracePlan = TracePlan::PreflightThenNestedModeFilesMarke
     marker: GOFMT_FILES_MARKER,
     mode_arguments: GOFMT_MODE_ARGUMENTS,
 };
+
+const GOFUMPT_FILES_MARKER: &str = "__VELVET_GLOVE_GOFUMPT_FILES__";
+const GOFUMPT_PRIVATE_ROOT_PLACEHOLDER: &str = "<gofumpt-private>";
+const GOFUMPT_PRIVATE_ROOT_PREFIX: &str = "velvet-glove-gofumpt-";
+const GOFUMPT_TRACE_PLAN: TracePlan = TracePlan::GofumptPrivateInputsAdapter;
 
 const PRETTIER_FILES_MARKER: &str = "__VELVET_GLOVE_PRETTIER_FILES__";
 const PRETTIER_MODE_ARGUMENTS: &[(&str, &[&str])] = &[
@@ -1915,6 +1952,74 @@ fn real_tool_contract_case(case: &FixtureCase) -> Result<Option<RealToolContract
             diagnostic_excludes: &["gofmt: changed example.go"],
             trace_plan: GOFMT_TRACE_PLAN,
         },
+        ("gofumpt", "clean") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Clean,
+            diagnostic_contains: &[],
+            diagnostic_excludes: &[],
+            trace_plan: GOFUMPT_TRACE_PLAN,
+        },
+        ("gofumpt", "unformatted") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go"],
+            diagnostic_excludes: &["<gofumpt-private>"],
+            trace_plan: GOFUMPT_TRACE_PLAN,
+        },
+        ("gofumpt", "standalone") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go"],
+            diagnostic_excludes: &["<gofumpt-private>"],
+            trace_plan: GOFUMPT_TRACE_PLAN,
+        },
+        ("gofumpt", "multi-file") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::Issues,
+            diagnostic_contains: &["example.go"],
+            diagnostic_excludes: &["selected-clean.go", "unselected-sentinel.go"],
+            trace_plan: GOFUMPT_TRACE_PLAN,
+        },
+        ("gofumpt", "operational-failure") => RealToolContractCase {
+            phase_id: "format",
+            invocations: &[ExpectedInvocation {
+                targets: &["example.go", "invalid.go"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 2],
+            }],
+            extra_args: &[],
+            outcome: ExpectedOutcome::OperationalFailure,
+            diagnostic_contains: &[
+                "invalid.go:3:15: expected ')', found '{'",
+                "gofumpt syntax preflight exited 2",
+            ],
+            diagnostic_excludes: &["classification: Some(Issues)", "<gofumpt-private>"],
+            trace_plan: GOFUMPT_TRACE_PLAN,
+        },
         ("go-vet", "clean") => RealToolContractCase {
             phase_id: "verify",
             invocations: &[ExpectedInvocation {
@@ -2739,9 +2844,107 @@ fn mutating_tool_contract_case(
             immediate_outcome: ExpectedOutcome::OperationalFailure,
             changed_targets: &[],
         },
+        ("gofumpt", "clean") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &[],
+        },
+        ("gofumpt", "unformatted") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.go"],
+        },
+        ("gofumpt", "standalone") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.go"],
+        },
+        ("gofumpt", "multi-file") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            repeat_remedy_invocations: Some(&[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }]),
+            final_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "selected-clean.go"],
+                exit_code: 0,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            }],
+            immediate_outcome: ExpectedOutcome::Clean,
+            changed_targets: &["example.go"],
+        },
+        ("gofumpt", "operational-failure") => MutatingToolContractCase {
+            remedy_phase_id: "format",
+            remedy_mode: PhaseMode::Format,
+            remedy_writes: WriteBehavior::TargetFiles,
+            remedy_invocations: &[ExpectedInvocation {
+                targets: &["example.go", "invalid.go"],
+                exit_code: 2,
+                trace_exit_codes: &[0, 0, 0, 0, 0, 0, 0, 0, 2],
+            }],
+            repeat_remedy_invocations: None,
+            final_invocations: &[],
+            immediate_outcome: ExpectedOutcome::OperationalFailure,
+            changed_targets: &[],
+        },
         (
             "biome" | "prettier" | "buf-format" | "cargo-fmt" | "cargo-clippy" | "dclint"
-            | "go-fmt",
+            | "go-fmt" | "gofumpt",
             other,
         ) => {
             return Err(format!(
@@ -4734,6 +4937,7 @@ fn astro_trace_environment_is_bound_to_the_executable_package_graph() {
         contextlint: false,
         dclint_toolchain: None,
         eslint: false,
+        gofumpt: false,
     };
 
     let (observed_root, telemetry, ci, debug) =
@@ -4800,6 +5004,7 @@ fn astro_trace_environment_rejects_a_different_module_graph() {
         contextlint: false,
         dclint_toolchain: None,
         eslint: false,
+        gofumpt: false,
     };
 
     let error = verify_astro_trace_environment(&record, &harness)
@@ -4885,6 +5090,7 @@ fn buf_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         contextlint: false,
         dclint_toolchain: None,
         eslint: false,
+        gofumpt: false,
     };
 
     let environment = verify_buf_trace_environment(&record, &harness)
@@ -4955,6 +5161,7 @@ fn gofmt_trace_environment_is_isolated_and_bound_to_the_managed_tool() {
         contextlint: false,
         dclint_toolchain: None,
         eslint: false,
+        gofumpt: false,
     };
 
     let environment = verify_gofmt_trace_environment(&record, &harness)
@@ -5068,6 +5275,7 @@ fn errcheck_trace_environment_is_private_offline_and_bound_to_managed_go() {
         contextlint: false,
         dclint_toolchain: None,
         eslint: false,
+        gofumpt: false,
     };
     let mut observed_private_root = None;
 
@@ -5357,6 +5565,19 @@ fn go_vet_evaluated_adapter_adversarial_contract() {
 }
 
 #[test]
+#[ignore = "evaluated gofumpt adapter adversarial lifecycle; requires controlled Python"]
+fn gofumpt_evaluated_adapter_adversarial_lifecycle() {
+    let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
+    require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
+    let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
+    let (_, spec) = specs
+        .get("gofumpt")
+        .unwrap_or_else(|| panic!("builtin catalog has no gofumpt spec"));
+    verify_gofumpt_adapter_adversarial_lifecycle(spec, timeout)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 #[ignore = "evaluated Cargo Fmt adapter lifecycle; requires controlled Python"]
 fn cargo_fmt_evaluated_adapter_lifecycle() {
     let timeout = configured_timeout().unwrap_or_else(|error| panic!("{error}"));
@@ -5519,6 +5740,11 @@ fn run_all_tool_fixtures() {
         verify_go_vet_adapter_adversarial_contract(&case.spec, options.timeout)
             .unwrap_or_else(|error| panic!("{error}"));
         println!("go-vet adapter adversarial contract probe: pass");
+    }
+    if let Some(case) = catalog.cases.iter().find(|case| case.tool == "gofumpt") {
+        verify_gofumpt_adapter_adversarial_lifecycle(&case.spec, options.timeout)
+            .unwrap_or_else(|error| panic!("{error}"));
+        println!("gofumpt adapter adversarial lifecycle probe: pass");
     }
     if let Some(case) = catalog.cases.iter().find(|case| case.tool == "cargo-fmt") {
         verify_cargo_fmt_adapter_lifecycle(&case.spec, options.timeout)
@@ -8860,6 +9086,138 @@ fn resolve_trace_invocations(
                 .collect::<Vec<_>>();
             Ok((go_program, traces))
         }
+        TracePlan::GofumptPrivateInputsAdapter => {
+            let [
+                isolated,
+                command,
+                adapter,
+                formatter,
+                go_program,
+                mode,
+                marker,
+                rendered_files @ ..,
+            ] = outer_arguments
+            else {
+                return Err(format!(
+                    "gofumpt adapter trace has an incomplete outer command: {outer_arguments:?}"
+                ));
+            };
+            if isolated != "-I"
+                || command != "-c"
+                || adapter.is_empty()
+                || formatter != "gofumpt"
+                || go_program != "go"
+                || !matches!(mode.as_str(), "verify" | "write")
+                || marker != GOFUMPT_FILES_MARKER
+            {
+                return Err(format!(
+                    "gofumpt adapter trace expected exact isolated adapter arguments, got {outer_arguments:?}"
+                ));
+            }
+            let expected_files = targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            if rendered_files != expected_files {
+                return Err(format!(
+                    "gofumpt adapter trace selected-file suffix mismatch: expected {expected_files:?}, got {rendered_files:?}"
+                ));
+            }
+            let private = |suffix: &str| {
+                format!(
+                    "{GOFUMPT_PRIVATE_ROOT_PLACEHOLDER}/{}",
+                    suffix.trim_start_matches('/')
+                )
+            };
+            let standalone = targets.iter().all(|target| {
+                target
+                    .parent()
+                    .is_some_and(|parent| !parent.join("go.mod").is_file())
+            });
+            let fixed = if standalone {
+                vec!["-lang=go1".to_owned(), "-modpath=".to_owned()]
+            } else {
+                vec!["-lang=go1.26".to_owned(), "-modpath=example".to_owned()]
+            };
+            let mut planned = vec![
+                (formatter.clone(), vec!["-version".to_owned()]),
+                (go_program.clone(), vec!["version".to_owned()]),
+                (
+                    formatter.clone(),
+                    vec![
+                        "-lang=go1.26".to_owned(),
+                        "-modpath=velvet.invalid/canary".to_owned(),
+                        "-l".to_owned(),
+                        private("inputs/canary.go"),
+                    ],
+                ),
+                (
+                    formatter.clone(),
+                    vec![
+                        "-lang=go1.26".to_owned(),
+                        "-modpath=velvet.invalid/canary".to_owned(),
+                    ],
+                ),
+            ];
+            if !standalone {
+                planned.push((
+                    go_program.clone(),
+                    vec![
+                        "mod".to_owned(),
+                        "edit".to_owned(),
+                        "-json".to_owned(),
+                        private("controls/0000.mod"),
+                    ],
+                ));
+            }
+            for index in 0..targets.len() {
+                planned.push((
+                    formatter.clone(),
+                    fixed
+                        .iter()
+                        .cloned()
+                        .chain(["-l".to_owned(), private(&format!("inputs/{index:04}.go"))])
+                        .collect(),
+                ));
+                planned.push((formatter.clone(), fixed.clone()));
+                planned.push((formatter.clone(), fixed.clone()));
+            }
+            if mode == "write" {
+                for index in 0..targets.len() {
+                    planned.push((
+                        formatter.clone(),
+                        fixed
+                            .iter()
+                            .cloned()
+                            .chain([
+                                "-l".to_owned(),
+                                private(&format!("inputs/post-{index:04}.go")),
+                            ])
+                            .collect(),
+                    ));
+                    planned.push((formatter.clone(), fixed.clone()));
+                }
+            }
+            if expected_exit_codes.is_empty() || expected_exit_codes.len() > planned.len() {
+                return Err(format!(
+                    "gofumpt adapter trace must declare one through {} child exit codes, got {expected_exit_codes:?}",
+                    planned.len()
+                ));
+            }
+            let traces = planned
+                .into_iter()
+                .zip(expected_exit_codes)
+                .map(
+                    |((program, arguments), exit_code)| ResolvedTraceInvocation {
+                        program,
+                        targets: targets.to_vec(),
+                        arguments,
+                        exit_code: *exit_code,
+                    },
+                )
+                .collect();
+            Ok((formatter.clone(), traces))
+        }
         TracePlan::CargoFmtWorkspaceIndicatorMarker {
             adapter_prefix,
             marker,
@@ -10324,6 +10682,7 @@ struct ToolTraceHarness {
     contextlint: bool,
     dclint_toolchain: Option<DclintToolchain>,
     eslint: bool,
+    gofumpt: bool,
 }
 
 impl ToolTraceHarness {
@@ -10435,6 +10794,16 @@ impl ToolTraceHarness {
             .map_err(|error| format!("create tool shim directory {shim_dir:?}: {error}"))?;
         std::fs::create_dir_all(&trace_root)
             .map_err(|error| format!("create tool trace directory {trace_root:?}: {error}"))?;
+        // macOS commonly spells its temporary root as `/var/...` even though
+        // `/var` is a symlink to `/private/var`.  Adapters that deliberately
+        // reject executable paths traversing symlinks must see the canonical
+        // trace paths, just as they do for the resolved native executables.
+        let shim_dir = shim_dir
+            .canonicalize()
+            .map_err(|error| format!("canonicalize tool shim directory: {error}"))?;
+        let trace_root = trace_root
+            .canonicalize()
+            .map_err(|error| format!("canonicalize tool trace directory: {error}"))?;
         if logical_programs.contains("buf") {
             let diff = Path::new(BUF_DIFF_PROGRAM);
             let metadata = std::fs::metadata(diff).map_err(|error| {
@@ -10546,6 +10915,7 @@ impl ToolTraceHarness {
             contextlint,
             dclint_toolchain,
             eslint,
+            gofumpt: case.tool == "gofumpt",
         })
     }
 
@@ -10697,6 +11067,34 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
+        if self.gofumpt {
+            let root = self.trace_root.parent().ok_or_else(|| {
+                format!(
+                    "gofumpt trace root has no controlled environment parent: {:?}",
+                    self.trace_root
+                )
+            })?;
+            let controlled_tmp = root.join("tmp");
+            std::fs::create_dir_all(&controlled_tmp).map_err(|error| {
+                format!("create controlled gofumpt TMPDIR {controlled_tmp:?}: {error}")
+            })?;
+            let controlled_tmp = controlled_tmp
+                .canonicalize()
+                .map_err(|error| format!("canonicalize controlled gofumpt TMPDIR: {error}"))?;
+            command
+                .env(TMPDIR_ENV, controlled_tmp)
+                .env(HOME_ENV, GOFUMPT_POISON_ENV_VALUE)
+                .env(XDG_CACHE_HOME_ENV, GOFUMPT_POISON_ENV_VALUE);
+            for (name, _) in GOFUMPT_CONTROLLED_ENV {
+                command.env(name, GOFUMPT_POISON_ENV_VALUE);
+            }
+            for name in GOFUMPT_SCRUBBED_ENV {
+                command.env(name, GOFUMPT_POISON_ENV_VALUE);
+            }
+            for name in GOFUMPT_LOADER_SCRUBBED_ENV {
+                command.env_remove(name);
+            }
+        }
         if self.programs.contains_key("dclint") {
             let root = self.trace_root.parent().ok_or_else(|| {
                 format!(
@@ -10751,7 +11149,10 @@ impl ToolTraceHarness {
                 command.env_remove(name);
             }
         }
-        if self.programs.contains_key("go") && !self.programs.contains_key("errcheck") {
+        if self.programs.contains_key("go")
+            && !self.programs.contains_key("errcheck")
+            && !self.gofumpt
+        {
             let root = self.trace_root.parent().ok_or_else(|| {
                 format!(
                     "go-vet trace root has no controlled environment parent: {:?}",
@@ -10883,8 +11284,18 @@ fn verify_tool_trace_invocations(
     let mut dclint_private_configs = Vec::new();
     let mut errcheck_private_root = None;
     let mut go_vet_private_root = None;
+    let mut gofumpt_private_root = None;
     for (invocation, expected) in invocations.iter().zip(expected_invocations) {
         let trace_program = expected.program.as_str();
+        if harness.gofumpt
+            && trace_program == "gofumpt"
+            && expected.arguments.as_slice() == ["-version"]
+        {
+            // A mutating workflow may concatenate remedy and authoritative
+            // check traces. Each isolated adapter allocates its own private
+            // root, beginning with the pinned version probe.
+            gofumpt_private_root = None;
+        }
         let record = invocation.path();
         assert_record(&record, "logical-program", trace_program)?;
         for (name, expected) in [
@@ -10907,6 +11318,14 @@ fn verify_tool_trace_invocations(
             real_program.to_string_lossy().as_ref(),
         )?;
         let recorded_cwd = read_record(&record, "cwd")?;
+        let gofumpt_root = if harness.gofumpt {
+            Some(resolve_gofumpt_private_trace_root(
+                &recorded_cwd,
+                &mut gofumpt_private_root,
+            )?)
+        } else {
+            None
+        };
         let contextlint_private_root = if trace_program == "node" && harness.contextlint {
             resolve_contextlint_private_trace_root(&record, &expected.arguments, &recorded_cwd)?
         } else {
@@ -10927,7 +11346,12 @@ fn verify_tool_trace_invocations(
         } else {
             None
         };
-        let expected_cwd = if trace_program == "node" && harness.contextlint {
+        let expected_cwd = if let Some(private_root) = gofumpt_root.as_deref() {
+            Path::new(private_root)
+                .join("work")
+                .to_string_lossy()
+                .into_owned()
+        } else if trace_program == "node" && harness.contextlint {
             let indices = expected
                 .arguments
                 .iter()
@@ -10950,6 +11374,7 @@ fn verify_tool_trace_invocations(
                 contextlint_private_root.as_deref(),
                 eslint_private_root.as_deref(),
                 ghalint_private_root.as_deref(),
+                gofumpt_root.as_deref(),
             )?
         } else {
             cwd.to_string_lossy().into_owned()
@@ -10974,6 +11399,7 @@ fn verify_tool_trace_invocations(
                 contextlint_private_root.as_deref(),
                 eslint_private_root.as_deref(),
                 ghalint_private_root.as_deref(),
+                gofumpt_root.as_deref(),
             )?;
             if trace_program == "dclint" && argument == DCLINT_PRIVATE_CONFIG_ARGUMENT {
                 let actual = read_record(&record, &format!("argv-{index}"))?;
@@ -11070,6 +11496,15 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
+        if harness.gofumpt && matches!(trace_program, "gofumpt" | "go") {
+            let controlled = verify_gofumpt_trace_environment(&record, harness)?;
+            let environment = environment
+                .as_object_mut()
+                .expect("trace environment is a JSON object");
+            for (name, value) in controlled {
+                environment.insert(name, JsonValue::String(value));
+            }
+        }
         if trace_program == "dclint" {
             let controlled = verify_dclint_trace_environment(&record, harness)?;
             let environment = environment
@@ -11103,7 +11538,7 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        if trace_program == "go" && !harness.programs.contains_key("errcheck") {
+        if trace_program == "go" && !harness.programs.contains_key("errcheck") && !harness.gofumpt {
             let controlled =
                 verify_go_vet_trace_environment(&record, harness, &mut go_vet_private_root)?;
             let environment = environment
@@ -11161,7 +11596,14 @@ fn verify_tool_trace_invocations(
                 environment.insert(name, JsonValue::String(value));
             }
         }
-        let prerequisites = if trace_program == "vacuum" {
+        let prerequisites = if harness.gofumpt {
+            serde_json::json!({
+                "formatter": harness.programs.get("gofumpt"),
+                "go": harness.programs.get("go"),
+                "privateInputs": "owned-0600",
+                "privateRootRemoved": true,
+            })
+        } else if trace_program == "vacuum" {
             serde_json::json!({
                 "config": "owned-0600-empty-config",
                 "inputs": "owned-0600-byte-copies",
@@ -11200,7 +11642,9 @@ fn verify_tool_trace_invocations(
         } else {
             serde_json::json!({})
         };
-        let evidence_cwd = if trace_program == "node"
+        let evidence_cwd = if harness.gofumpt {
+            format!("{GOFUMPT_PRIVATE_ROOT_PLACEHOLDER}/work")
+        } else if trace_program == "node"
             && harness.contextlint
             && Path::new(&recorded_cwd)
                 .file_name()
@@ -11211,12 +11655,13 @@ fn verify_tool_trace_invocations(
         } else {
             recorded_cwd.clone()
         };
-        let evidence_arguments =
-            if trace_program == "node" && (harness.contextlint || harness.eslint) {
-                expected.arguments.clone()
-            } else {
-                recorded_arguments
-            };
+        let evidence_arguments = if harness.gofumpt
+            || trace_program == "node" && (harness.contextlint || harness.eslint)
+        {
+            expected.arguments.clone()
+        } else {
+            recorded_arguments
+        };
         let mut trace_record = serde_json::json!({
             "logicalProgram": trace_program,
             "shimProgram": program,
@@ -11447,12 +11892,49 @@ fn resolve_ghalint_private_trace_root(
     }
 }
 
+fn resolve_gofumpt_private_trace_root(
+    recorded_cwd: &str,
+    retained_root: &mut Option<String>,
+) -> Result<String, String> {
+    let cwd = Path::new(recorded_cwd);
+    if cwd.file_name() != Some(OsStr::new("work")) {
+        return Err(format!(
+            "gofumpt trace child did not run from its owned work directory: {cwd:?}"
+        ));
+    }
+    let root = cwd
+        .parent()
+        .ok_or_else(|| format!("gofumpt trace work directory has no parent: {cwd:?}"))?;
+    if !root.is_absolute()
+        || !root
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with(GOFUMPT_PRIVATE_ROOT_PREFIX))
+    {
+        return Err(format!(
+            "gofumpt trace bound an invalid private root: {root:?}"
+        ));
+    }
+    let root = root.to_string_lossy().into_owned();
+    if let Some(retained) = retained_root {
+        if retained != &root {
+            return Err(format!(
+                "gofumpt trace changed private root between children: {retained:?} then {root:?}"
+            ));
+        }
+    } else {
+        *retained_root = Some(root.clone());
+    }
+    Ok(root)
+}
+
 fn resolve_dynamic_trace_argument(
     argument: &str,
     recorded_cwd: &str,
     contextlint_private_root: Option<&str>,
     eslint_private_root: Option<&str>,
     ghalint_private_root: Option<&str>,
+    gofumpt_private_root: Option<&str>,
 ) -> Result<String, String> {
     let cwd = Path::new(recorded_cwd);
     if argument.contains(GHALINT_PRIVATE_ROOT_PLACEHOLDER) {
@@ -11495,6 +11977,17 @@ fn resolve_dynamic_trace_argument(
             ));
         }
         return Ok(argument.replacen(ESLINT_PRIVATE_ROOT_PLACEHOLDER, eslint_private_root, 1));
+    }
+    if argument.contains(GOFUMPT_PRIVATE_ROOT_PLACEHOLDER) {
+        let gofumpt_private_root = gofumpt_private_root.ok_or_else(|| {
+            format!("gofumpt dynamic trace path has no validated private root: {argument:?}")
+        })?;
+        if argument.matches(GOFUMPT_PRIVATE_ROOT_PLACEHOLDER).count() != 1 {
+            return Err(format!(
+                "gofumpt dynamic trace argument contains its private-root placeholder more than once: {argument:?}"
+            ));
+        }
+        return Ok(argument.replacen(GOFUMPT_PRIVATE_ROOT_PLACEHOLDER, gofumpt_private_root, 1));
     }
     let Some(suffix) = argument.strip_prefix(CARGO_FMT_PRIVATE_ROOT_PLACEHOLDER) else {
         return Ok(argument.to_owned());
@@ -12274,6 +12767,97 @@ fn verify_gofmt_trace_environment(
     if observed_program != expected_program {
         return Err(format!(
             "gofmt adapter escaped the managed executable: expected {expected_program:?}, got {observed_program:?}"
+        ));
+    }
+    Ok(environment)
+}
+
+fn verify_gofumpt_trace_environment(
+    record: &Path,
+    harness: &ToolTraceHarness,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = BTreeMap::new();
+    for (name, expected) in std::iter::once((PATH_ENV, GOFUMPT_CHILD_PATH))
+        .chain(std::iter::once(("TERM", "dumb")))
+        .chain(GOFUMPT_CONTROLLED_ENV.iter().copied())
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if value != expected {
+            return Err(format!(
+                "gofumpt trace expected controlled {name}={expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(name.to_owned(), value);
+    }
+    let recorded_cwd = read_record(record, "cwd")?;
+    let root = Path::new(&recorded_cwd)
+        .parent()
+        .ok_or_else(|| format!("gofumpt trace cwd has no private root: {recorded_cwd:?}"))?;
+    for (field, expected) in [
+        ("gofumpt-root-go-mod-kind", "file"),
+        ("gofumpt-root-go-mod-mode", "600"),
+        ("gofumpt-root-go-mod-size", "0"),
+        (
+            "gofumpt-root-go-mod-sha256",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+    ] {
+        assert_record(record, field, expected)?;
+    }
+    for (name, suffix) in [
+        (HOME_ENV, "home"),
+        (TMPDIR_ENV, "tmp"),
+        (XDG_CACHE_HOME_ENV, "cache"),
+    ] {
+        let value = read_record(record, &format!("env-{name}"))?;
+        let expected = root.join(suffix).to_string_lossy().into_owned();
+        if value != expected || Path::new(&value).exists() {
+            return Err(format!(
+                "gofumpt trace {name} escaped or survived its private root: expected {expected:?}, got {value:?}"
+            ));
+        }
+        environment.insert(
+            name.to_owned(),
+            format!("{GOFUMPT_PRIVATE_ROOT_PLACEHOLDER}/{suffix}"),
+        );
+    }
+    for name in GOFUMPT_SCRUBBED_ENV
+        .iter()
+        .chain(GOFUMPT_LOADER_SCRUBBED_ENV)
+    {
+        let value = read_record(record, &format!("env-{name}"))?;
+        if !value.is_empty() {
+            return Err(format!(
+                "gofumpt trace must clear inherited {name}, got {name}={value:?}"
+            ));
+        }
+        environment.insert((*name).to_owned(), value);
+    }
+    let logical = read_record(record, "logical-program")?;
+    let program = PathBuf::from(read_record(record, "program")?);
+    if logical == "gofumpt" {
+        if program != root.join("bin/gofumpt") {
+            return Err(format!(
+                "gofumpt adapter did not execute its owned formatter copy: {program:?}"
+            ));
+        }
+    } else if logical == "go" {
+        let observed = program
+            .canonicalize()
+            .map_err(|error| format!("canonicalize traced Go shim {program:?}: {error}"))?;
+        let expected = harness
+            .shim_dir
+            .join("go")
+            .canonicalize()
+            .map_err(|error| format!("canonicalize managed Go trace shim: {error}"))?;
+        if observed != expected {
+            return Err(format!(
+                "gofumpt adapter escaped the managed Go executable: expected {expected:?}, got {observed:?}"
+            ));
+        }
+    } else {
+        return Err(format!(
+            "gofumpt trace observed unexpected logical program {logical:?}"
         ));
     }
     Ok(environment)
@@ -13409,6 +13993,11 @@ fn verify_mutating_immediate_artifact(
     };
     let contents = std::fs::read_to_string(path)
         .map_err(|error| format!("read {} immediate artifact {path:?}: {error}", case.tool))?;
+    let diagnostic_contents = if case.tool == "gofumpt" {
+        gofumpt_artifact_diagnostics(&contents)?
+    } else {
+        contents.as_str()
+    };
     let classification = match mutation.immediate_outcome {
         ExpectedOutcome::Clean => unreachable!(),
         ExpectedOutcome::Issues => "classification: Some(Issues)",
@@ -13420,7 +14009,21 @@ fn verify_mutating_immediate_artifact(
             case.tool
         ));
     }
-    verify_stable_diagnostics(case, contract, &contents, "mutating immediate artifact")
+    verify_stable_diagnostics(
+        case,
+        contract,
+        diagnostic_contents,
+        "mutating immediate artifact",
+    )
+}
+
+fn gofumpt_artifact_diagnostics(contents: &str) -> Result<&str, String> {
+    let start = ["\nstdout:\n", "\nstderr:\n"]
+        .into_iter()
+        .filter_map(|marker| contents.find(marker).map(|index| index + marker.len()))
+        .min()
+        .ok_or_else(|| "gofumpt artifact lacks a native stdout/stderr section".to_owned())?;
+    Ok(&contents[start..])
 }
 
 fn verify_idempotent_immediate_output(
@@ -14138,10 +14741,15 @@ fn verify_mutating_deferred_summary(
                 contents,
             )?;
             if phase.assert_diagnostics {
+                let diagnostic_contents = if case.tool == "gofumpt" {
+                    gofumpt_artifact_diagnostics(contents)?
+                } else {
+                    contents
+                };
                 verify_stable_diagnostics(
                     case,
                     contract,
-                    contents,
+                    diagnostic_contents,
                     &format!(
                         "deferred {} artifact for {:?}",
                         phase.phase, invocation.targets
@@ -14369,10 +14977,15 @@ fn verify_deferred_summary(
                 )
             })?;
         verify_tool_output_is_canonical(&case.tool, "deferred diagnostic artifact", contents)?;
+        let diagnostic_contents = if case.tool == "gofumpt" {
+            gofumpt_artifact_diagnostics(contents)?
+        } else {
+            contents
+        };
         verify_stable_diagnostics(
             case,
             contract,
-            contents,
+            diagnostic_contents,
             &format!("deferred artifact for {:?}", invocation.targets),
         )?;
         let absolute = artifact
@@ -21373,6 +21986,1579 @@ exit 0
     }
 }
 
+fn verify_gofumpt_adapter_adversarial_lifecycle(
+    spec: &ToolSpec,
+    timeout: Duration,
+) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (spec, timeout);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let workflow = spec
+            .workflows
+            .get("format")
+            .ok_or_else(|| "gofumpt adversarial probe lacks a format workflow".to_owned())?;
+        let check = workflow
+            .check
+            .as_ref()
+            .ok_or_else(|| "gofumpt adversarial probe lacks a check command".to_owned())?;
+        let remedy = workflow
+            .remedy
+            .as_ref()
+            .ok_or_else(|| "gofumpt adversarial probe lacks a remedy command".to_owned())?;
+        let [
+            ArgvElement::Literal(isolated),
+            ArgvElement::Literal(command_flag),
+            ArgvElement::Literal(adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(go_name),
+            ArgvElement::Literal(check_mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = check.argv.as_slice()
+        else {
+            return Err(
+                "gofumpt adversarial probe could not extract the evaluated adapter".to_owned(),
+            );
+        };
+        let [
+            ArgvElement::Literal(remedy_isolated),
+            ArgvElement::Literal(remedy_command_flag),
+            ArgvElement::Literal(remedy_adapter),
+            ArgvElement::Token(ArgToken::ToolExecutable),
+            ArgvElement::Literal(remedy_go_name),
+            ArgvElement::Literal(write_mode),
+            ArgvElement::Token(ArgToken::ExtraArgs),
+            ArgvElement::Literal(remedy_marker),
+            ArgvElement::Token(ArgToken::Files),
+        ] = remedy.argv.as_slice()
+        else {
+            return Err("gofumpt adversarial probe found a malformed remedy command".to_owned());
+        };
+        if isolated != "-I"
+            || command_flag != "-c"
+            || go_name != "go"
+            || check_mode != "verify"
+            || marker != GOFUMPT_FILES_MARKER
+            || remedy_isolated != isolated
+            || remedy_command_flag != command_flag
+            || remedy_adapter != adapter
+            || remedy_go_name != go_name
+            || write_mode != "write"
+            || remedy_marker != marker
+        {
+            return Err(format!(
+                "gofumpt adversarial probe expected exact isolated check/remedy shapes, got check={:?} remedy={:?}",
+                check.argv, remedy.argv
+            ));
+        }
+        let python_program = check
+            .program
+            .as_deref()
+            .ok_or_else(|| "gofumpt adversarial probe lacks an adapter program".to_owned())?;
+        let python = resolve_program(python_program)
+            .ok_or_else(|| format!("gofumpt adversarial probe cannot resolve {python_program:?}"))?
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofumpt adversarial Python: {error}"))?;
+
+        let requested_root = unique_temp_dir("velvet-glove-gofumpt-adversarial");
+        let project = requested_root.join("project");
+        let standalone_project = requested_root.join("standalone-project");
+        let temporary = requested_root.join("private-temp");
+        let fake_bin = requested_root.join("fake-bin");
+        for directory in [&project, &standalone_project, &temporary, &fake_bin] {
+            std::fs::create_dir_all(directory).map_err(|error| {
+                format!("create gofumpt adversarial directory {directory:?}: {error}")
+            })?;
+        }
+        let project = project
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofumpt project: {error}"))?;
+        let standalone_project = standalone_project
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofumpt standalone project: {error}"))?;
+        let temporary = temporary
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofumpt temporary root: {error}"))?;
+        let fake_bin = fake_bin
+            .canonicalize()
+            .map_err(|error| format!("canonicalize gofumpt fake bin: {error}"))?;
+
+        let result = (|| {
+            let formatter = fake_bin.join("gofumpt");
+            let go = fake_bin.join("go");
+            let formatter_log = requested_root.join("formatter.argv");
+            let go_log = requested_root.join("go.argv");
+            let environment_log = requested_root.join("child.environment");
+            let signal_ready = requested_root.join("signal.ready");
+            let signal_child_pid = requested_root.join("signal-child.pid");
+            let signal_descendant_pid = requested_root.join("signal-descendant.pid");
+            let late_mutation = requested_root.join("late-mutation");
+            let hostile_parent_manifest = temporary.join("go.mod");
+            let selected = project.join("selected.go");
+            let second = project.join("second.go");
+            let invalid = project.join("invalid.go");
+            let manifest = project.join("go.mod");
+            let nearer_manifest = project.join("nested/go.mod");
+            let nested_directory = project.join("nested");
+            let nested_selected = nested_directory.join("selected.go");
+            let alias = project.join("selected-alias.go");
+            std::fs::create_dir_all(&nested_directory)
+                .map_err(|error| format!("create gofumpt nested directory: {error}"))?;
+            std::fs::write(&manifest, "module example.com/root\n\ngo 1.26\n")
+                .map_err(|error| format!("write gofumpt root module: {error}"))?;
+
+            let clean_source = b"package main\n\n// CLEAN\nfunc main() {}\n";
+            let dirty_source = b"package main\n\n// DIRTY\nfunc main( ){ }\n";
+            let formatted_source = b"package main\n\n// FORMATTED\nfunc main() {}\n";
+            let invalid_source = b"package main\n\n// INVALID\nfunc broken( {\n";
+
+            let formatter_template = r#"#!/bin/sh
+set -eu
+probe_mode='@MODE@'
+{
+  printf '%s' "$0"
+  for argument in "$@"; do printf '\t%s' "$argument"; done
+  printf '\n'
+} >> '@FORMATTER_LOG@'
+printf 'PATH=%s HOME=%s TMPDIR=%s XDG_CACHE_HOME=%s GOENV=%s GOTOOLCHAIN=%s GOWORK=%s GOPROXY=%s GOSUMDB=%s GOVCS=%s GOFUMPT_SPLIT_LONG_LINES=%s GO_VERSION_TEST=%s TIMEOUT=%s\n' \
+  "${PATH-}" "${HOME-}" "${TMPDIR-}" "${XDG_CACHE_HOME-}" "${GOENV-}" "${GOTOOLCHAIN-}" "${GOWORK-}" "${GOPROXY-}" "${GOSUMDB-}" "${GOVCS-}" "${GOFUMPT_SPLIT_LONG_LINES-}" "${GO_VERSION_TEST-}" "${VELVET_GLOVE_GOFUMPT_TIMEOUT_MS-}" >> '@ENVIRONMENT_LOG@'
+if [ "${PATH-}" != /usr/bin:/bin ] || [ "${GOENV-}" != off ] || [ "${GOTOOLCHAIN-}" != local ] || [ "${GOWORK-}" != off ] || [ "${GOPROXY-}" != off ] || [ "${GOSUMDB-}" != off ] || [ "${GOVCS-}" != '*:off' ] || [ -n "${GOFUMPT_SPLIT_LONG_LINES-}" ] || [ -n "${GO_VERSION_TEST-}" ] || [ -n "${VELVET_GLOVE_GOFUMPT_TIMEOUT_MS-}" ] || [ -n "${GOFLAGS-}" ] || [ -n "${GOROOT-}" ] || [ -n "${LD_PRELOAD-}" ]; then
+  printf 'uncontrolled gofumpt child environment\n' >&2
+  exit 93
+fi
+if [ "${1-}" = -version ]; then
+  printf 'v0.11.0 (go1.26.5)\n'
+  exit 0
+fi
+listing=false
+last=''
+for argument in "$@"; do
+  [ "$argument" = -l ] && listing=true
+  last=$argument
+done
+if [ "$probe_mode" = noop ]; then exit 0; fi
+if [ "$probe_mode" = hang ]; then
+  : > '@SIGNAL_READY@'
+  while :; do /bin/sleep 1; done
+fi
+if [ "$probe_mode" = output-cap ]; then exec /usr/bin/yes gofumpt-output-cap; fi
+if [ "$probe_mode" = signal ]; then
+  trap 'exit 0' HUP INT TERM
+  (
+    exec </dev/null >/dev/null 2>&1
+    trap '' HUP INT TERM
+    while :; do /bin/sleep 1; done
+  ) &
+  printf '%s\n' "$!" > '@SIGNAL_DESCENDANT_PID@'
+  printf '%s\n' "$$" > '@SIGNAL_CHILD_PID@'
+  : > '@SIGNAL_READY@'
+  while :; do /bin/sleep 1; done
+fi
+if [ "$probe_mode" = inherited-pipe ] || [ "$probe_mode" = closed-pipe ]; then
+  if [ "$probe_mode" = inherited-pipe ]; then
+    (
+      trap '' HUP INT TERM
+      /bin/sleep 1
+      : > '@LATE_MUTATION@'
+      while :; do /bin/sleep 1; done
+    ) &
+  else
+    (
+      exec </dev/null >/dev/null 2>&1
+      trap '' HUP INT TERM
+      /bin/sleep 1
+      : > '@LATE_MUTATION@'
+      while :; do /bin/sleep 1; done
+    ) &
+  fi
+  printf '%s\n' "$!" > '@SIGNAL_DESCENDANT_PID@'
+  printf '%s\n' "$$" > '@SIGNAL_CHILD_PID@'
+  [ "$probe_mode" = closed-pipe ] && exec >/dev/null 2>/dev/null
+  exit 0
+fi
+if [ "$listing" = true ]; then
+  contents=$(/bin/cat "$last")
+  case "$contents" in
+    *'package canary'*) printf '%s\n' "$last"; exit 0 ;;
+    *INVALID*) printf '%s:3: bad syntax\n' "$last" >&2; exit 2 ;;
+    *HOSTILE_PARENT*)
+      case "$contents" in *'func imports( )'*) printf '%s\n' "$last" ;; esac
+      ;;
+    *'func f( ){ }'*) printf '%s\n' "$last" ;;
+    *DIRTY*)
+      case "$probe_mode" in
+        malformed-list) printf '%s\n%s\n' "$last" "$last"; exit 0 ;;
+        near-module) printf 'module example.com/near\n\ngo 1.26\n' > '@NEARER_MANIFEST@' ;;
+        mutate-source) printf 'package malicious\n' > '@SELECTED@' ;;
+        nlink-source) /bin/ln '@SELECTED@' '@ALIAS@' ;;
+        replace-tool) printf '#!/bin/sh\nexit 0\n' > '@ORIGINAL_FORMATTER@' ;;
+      esac
+      printf '%s\n' "$last"
+      ;;
+  esac
+  exit 0
+fi
+input=$(/bin/cat)
+case "$input" in
+  *'package canary'*)
+    printf 'package canary\n\nimport (\n\t"fmt"\n\t"os"\n)\n\nconst mode = 0o22\n\nfunc f() { fmt.Println(os.Args) }\n'
+    ;;
+  *INVALID*) printf '<partial>' ; printf '<standard input>:3: bad syntax\n' >&2; exit 2 ;;
+  *HOSTILE_PARENT*)
+    if [ -f "$PWD/../go.mod" ] && [ ! -s "$PWD/../go.mod" ]; then
+      printf 'package standalone\n\n// HOSTILE_PARENT\nimport (\n\t"corp/pkg"\n\t"fmt"\n)\n\nfunc imports() { fmt.Println(pkg.X) }\n'
+    else
+      printf 'package standalone\n\n// HOSTILE_PARENT\nimport (\n\t"fmt"\n\n\t"corp/pkg"\n)\n\nfunc imports() { fmt.Println(pkg.X) }\n'
+    fi
+    ;;
+  *'const j = 022'*) printf 'package standalone\n\nconst j = 022\n\nfunc f() {}\n' ;;
+  *DIRTY*)
+    case "$probe_mode" in
+      echo) printf '%s\n' "$input" ;;
+      partial) printf 'package main\n' ; printf 'partial formatter failure\n' >&2; exit 2 ;;
+      nonfixed) printf 'package main\n\n// STEP1\nfunc main() {}\n' ;;
+      stderr-zero) printf 'package main\n\n// FORMATTED\nfunc main() {}\n'; printf 'unexpected stderr\n' >&2 ;;
+      *) printf 'package main\n\n// FORMATTED\nfunc main() {}\n' ;;
+    esac
+    ;;
+  *STEP1*) printf 'package main\n\n// STEP2\nfunc main() {}\n' ;;
+  *) printf '%s\n' "$input" ;;
+esac
+"#;
+            let write_formatter = |probe_mode: &str| -> Result<(), String> {
+                let source = formatter_template
+                    .replace("@MODE@", probe_mode)
+                    .replace("@FORMATTER_LOG@", &shell_probe_path(&formatter_log)?)
+                    .replace("@ENVIRONMENT_LOG@", &shell_probe_path(&environment_log)?)
+                    .replace("@SIGNAL_READY@", &shell_probe_path(&signal_ready)?)
+                    .replace("@SIGNAL_CHILD_PID@", &shell_probe_path(&signal_child_pid)?)
+                    .replace(
+                        "@SIGNAL_DESCENDANT_PID@",
+                        &shell_probe_path(&signal_descendant_pid)?,
+                    )
+                    .replace("@LATE_MUTATION@", &shell_probe_path(&late_mutation)?)
+                    .replace("@NEARER_MANIFEST@", &shell_probe_path(&nearer_manifest)?)
+                    .replace("@SELECTED@", &shell_probe_path(&selected)?)
+                    .replace("@ALIAS@", &shell_probe_path(&alias)?)
+                    .replace("@ORIGINAL_FORMATTER@", &shell_probe_path(&formatter)?);
+                write_executable_fixture(&formatter, &source, "gofumpt adversarial formatter")
+            };
+
+            let go_template = r#"#!/bin/sh
+set -eu
+probe_mode='@MODE@'
+{
+  printf '%s' "$0"
+  for argument in "$@"; do printf '\t%s' "$argument"; done
+  printf '\n'
+} >> '@GO_LOG@'
+if [ "${PATH-}" != /usr/bin:/bin ] || [ "${GOENV-}" != off ] || [ "${GOTOOLCHAIN-}" != local ] || [ "${GOWORK-}" != off ] || [ "${GOPROXY-}" != off ] || [ "${GOSUMDB-}" != off ] || [ "${GOVCS-}" != '*:off' ] || [ -n "${GOFUMPT_SPLIT_LONG_LINES-}" ] || [ -n "${GO_VERSION_TEST-}" ] || [ -n "${VELVET_GLOVE_GOFUMPT_TIMEOUT_MS-}" ] || [ -n "${GOFLAGS-}" ] || [ -n "${GOROOT-}" ] || [ -n "${LD_PRELOAD-}" ]; then
+  printf 'uncontrolled Go child environment\n' >&2
+  exit 93
+fi
+if [ "${1-}" = version ]; then printf 'go version go1.26.5 darwin/arm64\n'; exit 0; fi
+if [ "${1-}" != mod ] || [ "${2-}" != edit ] || [ "${3-}" != -json ] || [ -z "${4-}" ]; then
+  printf 'unexpected Go command\n' >&2
+  exit 2
+fi
+case "$probe_mode" in
+  normal)
+    module=$(/usr/bin/awk '$1 == "module" { print $2; exit }' "$4")
+    go_version=$(/usr/bin/awk '$1 == "go" { print $2; exit }' "$4")
+    if [ -n "$go_version" ]; then
+      printf '{"Module":{"Path":"%s"},"Go":"%s"}\n' "$module" "$go_version"
+    else
+      printf '{"Module":{"Path":"%s"}}\n' "$module"
+    fi
+    ;;
+  module-null-version) printf '{"Module":null,"Go":"1.26"}\n' ;;
+  module-null) printf '{"Module":null}\n' ;;
+  prerelease) printf '{"Module":{"Path":"example.com/root"},"Go":"1.21rc3"}\n' ;;
+  malformed) printf '{' ;;
+  multiple) printf '{} {}\n' ;;
+  duplicate) printf '{"Module":{"Path":"example"},"Module":{"Path":"forged"},"Go":"1.26"}\n' ;;
+  nonfinite) printf '{"Module":{"Path":"example"},"Go":"1.26","Bad":NaN}\n' ;;
+  wrong-shape) printf '[]\n' ;;
+  stderr-zero) printf '{"Module":{"Path":"example"},"Go":"1.26"}\n'; printf 'embedded Go error\n' >&2 ;;
+  nonzero) printf 'Go operational failure\n' >&2; exit 2 ;;
+  *) printf 'unexpected Go probe mode\n' >&2; exit 2 ;;
+esac
+"#;
+            let write_go = |probe_mode: &str| -> Result<(), String> {
+                let source = go_template
+                    .replace("@MODE@", probe_mode)
+                    .replace("@GO_LOG@", &shell_probe_path(&go_log)?);
+                write_executable_fixture(&go, &source, "gofumpt adversarial Go")
+            };
+
+            let adapter_command = |script: &str,
+                                   mode: &str,
+                                   extra_args: &[&str],
+                                   targets: &[&Path],
+                                   selected_project: &Path| {
+                let mut command = Command::new(&python);
+                command
+                    .env_clear()
+                    .args(["-I", "-c", script])
+                    .arg("gofumpt")
+                    .arg("go")
+                    .arg(mode)
+                    .args(extra_args)
+                    .arg(GOFUMPT_FILES_MARKER)
+                    .args(targets)
+                    .current_dir(selected_project)
+                    .env(PATH_ENV, &fake_bin)
+                    .env(TMPDIR_ENV, &temporary)
+                    .env(HOME_ENV, GOFUMPT_POISON_ENV_VALUE)
+                    .env(XDG_CACHE_HOME_ENV, GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOENV", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOTOOLCHAIN", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOWORK", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOPROXY", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOSUMDB", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOVCS", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOFLAGS", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOROOT", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GOFUMPT_SPLIT_LONG_LINES", GOFUMPT_POISON_ENV_VALUE)
+                    .env("GO_VERSION_TEST", GOFUMPT_POISON_ENV_VALUE)
+                    .env("VELVET_GLOVE_GOFUMPT_TIMEOUT_MS", GOFUMPT_POISON_ENV_VALUE)
+                    .env("LD_PRELOAD", GOFUMPT_POISON_ENV_VALUE);
+                command
+            };
+            let run_adapter = |script: &str,
+                               mode: &str,
+                               extra_args: &[&str],
+                               targets: &[&Path],
+                               selected_project: &Path,
+                               label: &str|
+             -> Result<BoundedOutput, String> {
+                let mut command =
+                    adapter_command(script, mode, extra_args, targets, selected_project);
+                run_with_timeout(
+                    &mut command,
+                    b"",
+                    timeout.min(Duration::from_secs(12)),
+                    &requested_root.join(format!("capture-{label}")),
+                )
+                .map_err(|error| format!("run gofumpt {label} adversarial probe: {error}"))
+            };
+            let reset_observation = || -> Result<(), String> {
+                for path in [
+                    &formatter_log,
+                    &go_log,
+                    &environment_log,
+                    &signal_ready,
+                    &signal_child_pid,
+                    &signal_descendant_pid,
+                    &late_mutation,
+                    &nearer_manifest,
+                    &alias,
+                ] {
+                    match std::fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!("reset gofumpt observation {path:?}: {error}"));
+                        }
+                    }
+                }
+                Ok(())
+            };
+            let assert_operational = |output: &BoundedOutput,
+                                      needle: &str,
+                                      label: &str|
+             -> Result<(), String> {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || !stderr.contains(needle)
+                {
+                    return Err(format!(
+                        "gofumpt {label} did not fail closed: status={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+                Ok(())
+            };
+
+            write_go("normal")?;
+            write_formatter("normal")?;
+            std::fs::write(&selected, clean_source)
+                .map_err(|error| format!("write gofumpt clean source: {error}"))?;
+            reset_observation()?;
+            let clean = run_adapter(
+                adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "clean",
+            )?;
+            if clean.status.code() != Some(0)
+                || !clean.stdout.is_empty()
+                || !clean.stderr.is_empty()
+            {
+                return Err(format!(
+                    "gofumpt clean probe mismatch: status={:?}; stdout={:?}; stderr={:?}",
+                    clean.status.code(),
+                    String::from_utf8_lossy(&clean.stdout),
+                    String::from_utf8_lossy(&clean.stderr)
+                ));
+            }
+            let environment = std::fs::read_to_string(&environment_log)
+                .map_err(|error| format!("read gofumpt environment evidence: {error}"))?;
+            if environment.contains(GOFUMPT_POISON_ENV_VALUE)
+                || !environment.contains("GOENV=off")
+                || !environment.contains("GOTOOLCHAIN=local")
+                || !environment.contains("TIMEOUT=")
+            {
+                return Err(format!(
+                    "gofumpt child environment was not exact: {environment:?}"
+                ));
+            }
+            assert_gofumpt_private_roots_removed(&temporary, "clean")?;
+
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("write gofumpt dirty source: {error}"))?;
+            let before_verify = std::fs::metadata(&selected)
+                .map_err(|error| format!("inspect gofumpt dirty source: {error}"))?;
+            reset_observation()?;
+            let dirty = run_adapter(
+                adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "dirty-verify",
+            )?;
+            let expected_dirty = format!("{}\n", selected.display());
+            let after_verify = std::fs::metadata(&selected)
+                .map_err(|error| format!("reinspect gofumpt dirty source: {error}"))?;
+            if dirty.status.code() != Some(0)
+                || dirty.stdout != expected_dirty.as_bytes()
+                || !dirty.stderr.is_empty()
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read dirty source after verify: {error}"))?
+                    != dirty_source
+                || before_verify.ino() != after_verify.ino()
+                || before_verify.mtime_nsec() != after_verify.mtime_nsec()
+                || before_verify.ctime_nsec() != after_verify.ctime_nsec()
+            {
+                return Err(format!(
+                    "gofumpt verify mutated or misclassified its dirty source: status={:?}; stdout={:?}; stderr={:?}",
+                    dirty.status.code(),
+                    String::from_utf8_lossy(&dirty.stdout),
+                    String::from_utf8_lossy(&dirty.stderr)
+                ));
+            }
+
+            reset_observation()?;
+            let write = run_adapter(
+                adapter,
+                "write",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "dirty-write",
+            )?;
+            if write.status.code() != Some(0)
+                || !write.stdout.is_empty()
+                || !write.stderr.is_empty()
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read formatted source: {error}"))?
+                    != formatted_source
+            {
+                return Err(format!(
+                    "gofumpt write did not commit exact staged bytes: status={:?}; stdout={:?}; stderr={:?}",
+                    write.status.code(),
+                    String::from_utf8_lossy(&write.stdout),
+                    String::from_utf8_lossy(&write.stderr)
+                ));
+            }
+            let clean_metadata = std::fs::metadata(&selected)
+                .map_err(|error| format!("inspect formatted source: {error}"))?;
+            reset_observation()?;
+            let idempotent = run_adapter(
+                adapter,
+                "write",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "idempotent-write",
+            )?;
+            let idempotent_metadata = std::fs::metadata(&selected)
+                .map_err(|error| format!("reinspect idempotent source: {error}"))?;
+            if idempotent.status.code() != Some(0)
+                || clean_metadata.ino() != idempotent_metadata.ino()
+                || clean_metadata.mtime_nsec() != idempotent_metadata.mtime_nsec()
+                || clean_metadata.ctime_nsec() != idempotent_metadata.ctime_nsec()
+            {
+                return Err("gofumpt idempotent write changed clean source metadata".to_owned());
+            }
+
+            let standalone = standalone_project.join("standalone.go");
+            let standalone_source = b"package standalone\n\nconst j = 022\n\nfunc f( ){ }\n";
+            let standalone_expected = b"package standalone\n\nconst j = 022\n\nfunc f() {}\n";
+            std::fs::write(&standalone, standalone_source)
+                .map_err(|error| format!("write standalone gofumpt source: {error}"))?;
+            reset_observation()?;
+            let standalone_output = run_adapter(
+                adapter,
+                "write",
+                &[],
+                &[standalone.as_path()],
+                &standalone_project,
+                "standalone-go1",
+            )?;
+            let standalone_argv = std::fs::read_to_string(&formatter_log)
+                .map_err(|error| format!("read standalone gofumpt argv: {error}"))?;
+            if standalone_output.status.code() != Some(0)
+                || std::fs::read(&standalone)
+                    .map_err(|error| format!("read formatted standalone source: {error}"))?
+                    != standalone_expected
+                || !standalone_argv.contains("\t-lang=go1\t-modpath=")
+                || std::fs::read_to_string(&go_log)
+                    .map_err(|error| format!("read standalone Go argv: {error}"))?
+                    != format!("{}\tversion\n", go.display())
+            {
+                return Err(format!(
+                    "gofumpt standalone go1/empty-module semantics mismatch: status={:?}; formatter={standalone_argv:?}",
+                    standalone_output.status.code()
+                ));
+            }
+
+            let hostile_parent_source = b"package standalone\n\n// HOSTILE_PARENT\nimport (\n\t\"corp/pkg\"\n\t\"fmt\"\n)\n\nfunc imports( ){fmt.Println(pkg.X)}\n";
+            let hostile_parent_expected = b"package standalone\n\n// HOSTILE_PARENT\nimport (\n\t\"corp/pkg\"\n\t\"fmt\"\n)\n\nfunc imports() { fmt.Println(pkg.X) }\n";
+            std::fs::write(&standalone, hostile_parent_source)
+                .map_err(|error| format!("write hostile-parent standalone source: {error}"))?;
+            std::fs::write(&hostile_parent_manifest, "module corp/project\n\ngo 1.26\n")
+                .map_err(|error| format!("write hostile parent go.mod: {error}"))?;
+            reset_observation()?;
+            let hostile_parent = run_adapter(
+                adapter,
+                "write",
+                &[],
+                &[standalone.as_path()],
+                &standalone_project,
+                "standalone-hostile-parent-module",
+            )?;
+            let hostile_parent_argv = std::fs::read_to_string(&formatter_log)
+                .map_err(|error| format!("read hostile-parent gofumpt argv: {error}"))?;
+            if hostile_parent.status.code() != Some(0)
+                || !hostile_parent.stdout.is_empty()
+                || !hostile_parent.stderr.is_empty()
+                || std::fs::read(&standalone)
+                    .map_err(|error| format!("read hostile-parent formatted source: {error}"))?
+                    != hostile_parent_expected
+                || !hostile_parent_argv.contains("\t-lang=go1\t-modpath=")
+                || std::fs::read_to_string(&hostile_parent_manifest)
+                    .map_err(|error| format!("reread hostile parent go.mod: {error}"))?
+                    != "module corp/project\n\ngo 1.26\n"
+            {
+                return Err(format!(
+                    "gofumpt standalone formatting inherited a hostile go.mod above private state: status={:?}; stderr={:?}; formatter={hostile_parent_argv:?}",
+                    hostile_parent.status.code(),
+                    String::from_utf8_lossy(&hostile_parent.stderr)
+                ));
+            }
+            std::fs::remove_file(&hostile_parent_manifest)
+                .map_err(|error| format!("remove hostile parent go.mod: {error}"))?;
+
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore dirty source: {error}"))?;
+            std::fs::write(&invalid, invalid_source)
+                .map_err(|error| format!("write invalid source: {error}"))?;
+            reset_observation()?;
+            let operational = run_adapter(
+                adapter,
+                "write",
+                &[],
+                &[selected.as_path(), invalid.as_path()],
+                &project,
+                "dirty-before-invalid",
+            )?;
+            let operational_stderr = String::from_utf8_lossy(&operational.stderr);
+            if operational.status.code() != Some(2)
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read dirty source after syntax failure: {error}"))?
+                    != dirty_source
+                || std::fs::read(&invalid)
+                    .map_err(|error| format!("read invalid source after syntax failure: {error}"))?
+                    != invalid_source
+                || !operational_stderr.contains("gofumpt syntax preflight exited 2")
+                || !operational_stderr.contains(invalid.to_string_lossy().as_ref())
+                || operational_stderr.contains("<gofumpt-private>")
+            {
+                return Err(format!(
+                    "gofumpt batch syntax failure partially mutated or leaked staging: status={:?}; stdout={:?}; stderr={operational_stderr:?}",
+                    operational.status.code(),
+                    String::from_utf8_lossy(&operational.stdout)
+                ));
+            }
+
+            for (probe_mode, diagnostic) in [
+                (
+                    "noop",
+                    "gofumpt listing canary returned unexpected evidence",
+                ),
+                ("echo", "gofumpt listing and formatting evidence disagree"),
+                (
+                    "nonfixed",
+                    "gofumpt candidate is not a validated fixed point",
+                ),
+                (
+                    "malformed-list",
+                    "gofumpt syntax preflight returned malformed evidence",
+                ),
+                ("partial", "gofumpt formatting exited 2"),
+                ("stderr-zero", "gofumpt formatting exited 0"),
+            ] {
+                std::fs::write(&selected, dirty_source)
+                    .map_err(|error| format!("restore source for {probe_mode}: {error}"))?;
+                write_formatter(probe_mode)?;
+                write_go("normal")?;
+                reset_observation()?;
+                let output = run_adapter(
+                    adapter,
+                    "write",
+                    &[],
+                    &[selected.as_path()],
+                    &project,
+                    &format!("formatter-{probe_mode}"),
+                )?;
+                assert_operational(&output, diagnostic, probe_mode)?;
+                if probe_mode == "partial" && !output.stdout.is_empty() {
+                    return Err(
+                        "gofumpt partial formatter stdout escaped as issue evidence".to_owned()
+                    );
+                }
+                if std::fs::read(&selected)
+                    .map_err(|error| format!("read source after {probe_mode}: {error}"))?
+                    != dirty_source
+                {
+                    return Err(format!("gofumpt {probe_mode} mutated the selected source"));
+                }
+                assert_gofumpt_private_roots_removed(&temporary, probe_mode)?;
+            }
+
+            write_formatter("normal")?;
+            for (go_mode, diagnostic) in [
+                ("malformed", "malformed JSON"),
+                ("multiple", "malformed JSON"),
+                ("duplicate", "duplicate JSON field"),
+                ("nonfinite", "non-finite JSON number"),
+                ("wrong-shape", "returned a non-object"),
+                ("stderr-zero", "Go module preflight failed"),
+                ("nonzero", "Go module preflight failed"),
+            ] {
+                std::fs::write(&selected, dirty_source)
+                    .map_err(|error| format!("restore source for Go {go_mode}: {error}"))?;
+                write_go(go_mode)?;
+                reset_observation()?;
+                let output = run_adapter(
+                    adapter,
+                    "write",
+                    &[],
+                    &[selected.as_path()],
+                    &project,
+                    &format!("go-{go_mode}"),
+                )?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !stderr.contains(diagnostic)
+                    || std::fs::read(&selected)
+                        .map_err(|error| format!("read source after Go {go_mode}: {error}"))?
+                        != dirty_source
+                {
+                    return Err(format!(
+                        "gofumpt Go {go_mode} evidence was accepted: status={:?}; stdout={:?}; stderr={stderr:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+            }
+
+            write_go("module-null-version")?;
+            write_formatter("normal")?;
+            std::fs::write(&manifest, "go 1.26\n")
+                .map_err(|error| format!("write module-null go.mod: {error}"))?;
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore module-null source: {error}"))?;
+            reset_observation()?;
+            let module_null_version = run_adapter(
+                adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "module-null-version",
+            )?;
+            let module_null_version_argv = std::fs::read_to_string(&formatter_log)
+                .map_err(|error| format!("read versioned module-null formatter argv: {error}"))?;
+            if module_null_version.status.code() != Some(0)
+                || module_null_version.stdout != expected_dirty.as_bytes()
+                || !module_null_version_argv.contains("\t-lang=go1.26\t-modpath=\t")
+            {
+                return Err(format!(
+                    "gofumpt optional Module:null with Go version semantics mismatch: status={:?}; formatter={module_null_version_argv:?}; stderr={:?}",
+                    module_null_version.status.code(),
+                    String::from_utf8_lossy(&module_null_version.stderr)
+                ));
+            }
+            write_go("module-null")?;
+            std::fs::write(&manifest, b"")
+                .map_err(|error| format!("write empty module-null go.mod: {error}"))?;
+            reset_observation()?;
+            let module_null_fallback = run_adapter(
+                adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "module-null-fallback",
+            )?;
+            let module_null_fallback_argv = std::fs::read_to_string(&formatter_log)
+                .map_err(|error| format!("read fallback module-null formatter argv: {error}"))?;
+            if module_null_fallback.status.code() != Some(0)
+                || module_null_fallback.stdout != expected_dirty.as_bytes()
+                || !module_null_fallback_argv.contains("\t-lang=go1.16\t-modpath=\t")
+            {
+                return Err(format!(
+                    "gofumpt missing-Go module fallback mismatch: status={:?}; formatter={module_null_fallback_argv:?}; stderr={:?}",
+                    module_null_fallback.status.code(),
+                    String::from_utf8_lossy(&module_null_fallback.stderr)
+                ));
+            }
+            write_go("prerelease")?;
+            std::fs::write(&manifest, "module example.com/root\n\ngo 1.21rc3\n")
+                .map_err(|error| format!("write prerelease module control: {error}"))?;
+            reset_observation()?;
+            let prerelease = run_adapter(
+                adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "go-prerelease-version",
+            )?;
+            let prerelease_argv = std::fs::read_to_string(&formatter_log)
+                .map_err(|error| format!("read prerelease formatter argv: {error}"))?;
+            if prerelease.status.code() != Some(0)
+                || prerelease.stdout != expected_dirty.as_bytes()
+                || !prerelease_argv.contains("\t-lang=go1.21rc3\t-modpath=example.com/root\t")
+            {
+                return Err(format!(
+                    "gofumpt Go prerelease version semantics mismatch: status={:?}; formatter={prerelease_argv:?}; stderr={:?}",
+                    prerelease.status.code(),
+                    String::from_utf8_lossy(&prerelease.stderr)
+                ));
+            }
+            std::fs::write(&manifest, "module example.com/root\n\ngo 1.26\n")
+                .map_err(|error| format!("restore root module: {error}"))?;
+            write_go("normal")?;
+
+            let rejection_marker = requested_root.join("rejection-child-ran");
+            for (label, extra_args, targets, diagnostic) in [
+                (
+                    "extra",
+                    vec!["-extra"],
+                    vec![selected.as_path()],
+                    "extra arguments are unsupported",
+                ),
+                (
+                    "duplicate",
+                    vec![],
+                    vec![selected.as_path(), selected.as_path()],
+                    "selected path is repeated or aliased",
+                ),
+            ] {
+                reset_observation()?;
+                let _ = std::fs::remove_file(&rejection_marker);
+                let output = run_adapter(
+                    adapter,
+                    "verify",
+                    &extra_args,
+                    &targets,
+                    &project,
+                    &format!("reject-{label}"),
+                )?;
+                assert_operational(&output, diagnostic, label)?;
+                if formatter_log.exists() || go_log.exists() || rejection_marker.exists() {
+                    return Err(format!("gofumpt {label} rejection launched a native child"));
+                }
+            }
+
+            let symlink = project.join("selected-symlink.go");
+            let hardlink = project.join("selected-hardlink.go");
+            let _ = std::fs::remove_file(&symlink);
+            let _ = std::fs::remove_file(&hardlink);
+            std::os::unix::fs::symlink(&selected, &symlink)
+                .map_err(|error| format!("create gofumpt source symlink: {error}"))?;
+            std::fs::hard_link(&selected, &hardlink)
+                .map_err(|error| format!("create gofumpt source hardlink: {error}"))?;
+            for (label, target, diagnostic) in [
+                (
+                    "symlink",
+                    symlink.as_path(),
+                    "canonical unique regular file",
+                ),
+                (
+                    "hardlink",
+                    hardlink.as_path(),
+                    "canonical unique regular file",
+                ),
+            ] {
+                reset_observation()?;
+                let output = run_adapter(
+                    adapter,
+                    "verify",
+                    &[],
+                    &[target],
+                    &project,
+                    &format!("reject-{label}"),
+                )?;
+                assert_operational(&output, diagnostic, label)?;
+                if formatter_log.exists() || go_log.exists() {
+                    return Err(format!("gofumpt {label} rejection launched a native child"));
+                }
+            }
+            std::fs::remove_file(&symlink)
+                .map_err(|error| format!("remove gofumpt source symlink: {error}"))?;
+            std::fs::remove_file(&hardlink)
+                .map_err(|error| format!("remove gofumpt source hardlink: {error}"))?;
+
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore source for mutation probes: {error}"))?;
+            for (probe_mode, diagnostic) in [
+                ("mutate-source", "validated path size or mtime changed"),
+                ("nlink-source", "validated path identity or mode changed"),
+                ("replace-tool", "validated path size or mtime changed"),
+            ] {
+                write_formatter(probe_mode)?;
+                reset_observation()?;
+                let output = run_adapter(
+                    adapter,
+                    "write",
+                    &[],
+                    &[selected.as_path()],
+                    &project,
+                    &format!("mutation-{probe_mode}"),
+                )?;
+                assert_operational(&output, diagnostic, probe_mode)?;
+                if probe_mode == "mutate-source" {
+                    std::fs::write(&selected, dirty_source)
+                        .map_err(|error| format!("restore child-mutated source: {error}"))?;
+                }
+                if probe_mode == "nlink-source" {
+                    std::fs::remove_file(&alias)
+                        .map_err(|error| format!("remove child-created alias: {error}"))?;
+                }
+                if probe_mode == "replace-tool" {
+                    write_formatter("normal")?;
+                }
+            }
+
+            std::fs::write(&nested_selected, dirty_source)
+                .map_err(|error| format!("write nested gofumpt source: {error}"))?;
+            write_formatter("near-module")?;
+            reset_observation()?;
+            let near_module = run_adapter(
+                adapter,
+                "write",
+                &[],
+                &[nested_selected.as_path()],
+                &project,
+                "near-module-addition",
+            )?;
+            assert_operational(
+                &near_module,
+                "nearest module control changed for selected source",
+                "near-module",
+            )?;
+            if std::fs::read(&nested_selected)
+                .map_err(|error| format!("read nested source after control race: {error}"))?
+                != dirty_source
+            {
+                return Err("gofumpt nearer-module race committed stale semantics".to_owned());
+            }
+            let _ = std::fs::remove_file(&nearer_manifest);
+
+            let control_count_anchor = "CONTROL_COUNT_LIMIT = 256\n";
+            let control_limit_anchor = "CONTROL_LIMIT = 16 * 1024 * 1024\n";
+            if adapter.matches(control_count_anchor).count() != 1
+                || adapter.matches(control_limit_anchor).count() != 1
+            {
+                return Err("gofumpt control-bound probe lost its exact anchors".to_owned());
+            }
+            write_formatter("normal")?;
+            write_go("normal")?;
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore root source for control bounds: {error}"))?;
+            std::fs::write(&nested_selected, dirty_source)
+                .map_err(|error| format!("restore nested source for control bounds: {error}"))?;
+            reset_observation()?;
+            std::fs::write(&nearer_manifest, "module example.com/nested\n\ngo 1.26\n")
+                .map_err(|error| format!("write nested control-bound go.mod: {error}"))?;
+            let count_adapter =
+                adapter.replacen(control_count_anchor, "CONTROL_COUNT_LIMIT = 1\n", 1);
+            let control_count = run_adapter(
+                &count_adapter,
+                "verify",
+                &[],
+                &[selected.as_path(), nested_selected.as_path()],
+                &project,
+                "control-count-bound",
+            )?;
+            assert_operational(
+                &control_count,
+                "more than 1 distinct module controls were selected",
+                "control-count-bound",
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("gofumpt control-count rejection launched a child".to_owned());
+            }
+            reset_observation()?;
+            let control_bytes_adapter =
+                adapter.replacen(control_limit_anchor, "CONTROL_LIMIT = 8\n", 1);
+            let control_bytes = run_adapter(
+                &control_bytes_adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "control-byte-bound",
+            )?;
+            assert_operational(
+                &control_bytes,
+                "module controls exceed the 8-byte validation limit",
+                "control-byte-bound",
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("gofumpt control-byte rejection launched a child".to_owned());
+            }
+            match std::fs::remove_file(&nearer_manifest) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!("remove nested control-bound go.mod: {error}"));
+                }
+            }
+
+            let commit_anchor = concat!(
+                "            touched.append(index)\n",
+                "            completed_metadata[index] = write_exact(record, candidate, False)\n",
+                "            completed.append(index)\n",
+                "            assert_record(record, candidate)\n",
+            );
+            if adapter.matches(commit_anchor).count() != 1 {
+                return Err("gofumpt commit-race probe lost its exact write anchor".to_owned());
+            }
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore first commit-race source: {error}"))?;
+            std::fs::write(&second, dirty_source)
+                .map_err(|error| format!("write second commit-race source: {error}"))?;
+            let between_write_adapter = adapter.replacen(
+                commit_anchor,
+                concat!(
+                    "            touched.append(index)\n",
+                    "            completed_metadata[index] = write_exact(record, candidate, False)\n",
+                    "            completed.append(index)\n",
+                    "            assert_record(record, candidate)\n",
+                    "            if len(touched) == 1:\n",
+                    "                race_path = os.environ[\"GOFUMPT_BETWEEN_WRITE_TARGET\"]\n",
+                    "                race_descriptor = os.open(race_path, os.O_WRONLY | getattr(os, \"O_NOFOLLOW\", 0))\n",
+                    "                try:\n",
+                    "                    os.ftruncate(race_descriptor, 0)\n",
+                    "                    os.write(race_descriptor, b\"package raced\\n\")\n",
+                    "                    os.fsync(race_descriptor)\n",
+                    "                finally:\n",
+                    "                    os.close(race_descriptor)\n",
+                ),
+                1,
+            );
+            reset_observation()?;
+            let mut between_write_command = adapter_command(
+                &between_write_adapter,
+                "write",
+                &[],
+                &[selected.as_path(), second.as_path()],
+                &project,
+            );
+            between_write_command.env("GOFUMPT_BETWEEN_WRITE_TARGET", &second);
+            let between_write = run_with_timeout(
+                &mut between_write_command,
+                b"",
+                timeout.min(Duration::from_secs(12)),
+                &requested_root.join("capture-between-write-race"),
+            )
+            .map_err(|error| format!("run gofumpt between-write race probe: {error}"))?;
+            let between_write_stderr = String::from_utf8_lossy(&between_write.stderr);
+            if between_write.status.code() != Some(2)
+                || !between_write_stderr.contains("validated path size or mtime changed")
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read rolled-back first source: {error}"))?
+                    != dirty_source
+                || std::fs::read(&second)
+                    .map_err(|error| format!("read raced second source: {error}"))?
+                    != b"package raced\n"
+            {
+                return Err(format!(
+                    "gofumpt between-write mutation was overwritten or first write was not rolled back: status={:?}; stderr={between_write_stderr:?}",
+                    between_write.status.code()
+                ));
+            }
+
+            let forced_commit_adapter = adapter.replacen(
+                commit_anchor,
+                concat!(
+                    "            touched.append(index)\n",
+                    "            if len(touched) == 2:\n",
+                    "                raise OSError(5, \"forced second commit failure\")\n",
+                    "            completed_metadata[index] = write_exact(record, candidate, False)\n",
+                    "            completed.append(index)\n",
+                    "            assert_record(record, candidate)\n",
+                ),
+                1,
+            );
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore first forced-commit source: {error}"))?;
+            std::fs::write(&second, dirty_source)
+                .map_err(|error| format!("restore second forced-commit source: {error}"))?;
+            reset_observation()?;
+            let forced_commit = run_adapter(
+                &forced_commit_adapter,
+                "write",
+                &[],
+                &[selected.as_path(), second.as_path()],
+                &project,
+                "forced-commit-failure",
+            )?;
+            let forced_commit_stderr = String::from_utf8_lossy(&forced_commit.stderr);
+            if forced_commit.status.code() != Some(2)
+                || !forced_commit_stderr.contains("forced second commit failure")
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read first forced-commit rollback: {error}"))?
+                    != dirty_source
+                || std::fs::read(&second)
+                    .map_err(|error| format!("read second forced-commit rollback: {error}"))?
+                    != dirty_source
+            {
+                return Err(format!(
+                    "gofumpt commit failure did not roll back exactly: status={:?}; stderr={forced_commit_stderr:?}",
+                    forced_commit.status.code()
+                ));
+            }
+
+            let rollback_anchor = concat!(
+                "            write_exact(record, record[\"snapshot\"][\"content\"], True)\n",
+                "            assert_record(record)\n",
+            );
+            if adapter.matches(rollback_anchor).count() != 1 {
+                return Err("gofumpt rollback-composition probe lost its exact anchor".to_owned());
+            }
+            let rollback_failure_adapter = forced_commit_adapter.replacen(
+                rollback_anchor,
+                concat!(
+                    "            if index == 0:\n",
+                    "                raise OSError(5, \"forced rollback failure\")\n",
+                    "            write_exact(record, record[\"snapshot\"][\"content\"], True)\n",
+                    "            assert_record(record)\n",
+                ),
+                1,
+            );
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore first rollback-composition source: {error}"))?;
+            std::fs::write(&second, dirty_source)
+                .map_err(|error| format!("restore second rollback-composition source: {error}"))?;
+            reset_observation()?;
+            let rollback_failure = run_adapter(
+                &rollback_failure_adapter,
+                "write",
+                &[],
+                &[selected.as_path(), second.as_path()],
+                &project,
+                "rollback-failure-composition",
+            )?;
+            let rollback_failure_stderr = String::from_utf8_lossy(&rollback_failure.stderr);
+            if rollback_failure.status.code() != Some(2)
+                || !rollback_failure_stderr.contains("forced second commit failure")
+                || !rollback_failure_stderr.contains("cannot safely roll back")
+                || !rollback_failure_stderr.contains("forced rollback failure")
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read rollback-failed first source: {error}"))?
+                    != formatted_source
+                || std::fs::read(&second)
+                    .map_err(|error| format!("read rollback-restored second source: {error}"))?
+                    != dirty_source
+            {
+                return Err(format!(
+                    "gofumpt rollback failure was not composed truthfully: status={:?}; stderr={rollback_failure_stderr:?}",
+                    rollback_failure.status.code()
+                ));
+            }
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore rollback-failed first source: {error}"))?;
+
+            let post_commit_anchor = concat!(
+                "        commit_targets(candidates, dirty_indices)\n",
+                "        for index, record in enumerate(targets):\n",
+            );
+            if adapter.matches(post_commit_anchor).count() != 1 {
+                return Err(
+                    "gofumpt post-commit concurrent-writer probe lost its exact anchor".to_owned(),
+                );
+            }
+            let post_commit_adapter = adapter.replacen(
+                post_commit_anchor,
+                concat!(
+                    "        commit_targets(candidates, dirty_indices)\n",
+                    "        race_path = os.environ.get(\"GOFUMPT_POST_COMMIT_TARGET\")\n",
+                    "        if race_path:\n",
+                    "            race_descriptor = os.open(race_path, os.O_WRONLY | getattr(os, \"O_NOFOLLOW\", 0) | getattr(os, \"O_NONBLOCK\", 0))\n",
+                    "            try:\n",
+                    "                os.ftruncate(race_descriptor, 0)\n",
+                    "                os.write(race_descriptor, b\"package concurrent_writer\\n\")\n",
+                    "                os.fsync(race_descriptor)\n",
+                    "            finally:\n",
+                    "                os.close(race_descriptor)\n",
+                    "            raise EvidenceError(\"forced post-commit concurrent writer\")\n",
+                    "        for index, record in enumerate(targets):\n",
+                ),
+                1,
+            );
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore post-commit race source: {error}"))?;
+            reset_observation()?;
+            let mut post_commit_command = adapter_command(
+                &post_commit_adapter,
+                "write",
+                &[],
+                &[selected.as_path()],
+                &project,
+            );
+            post_commit_command.env("GOFUMPT_POST_COMMIT_TARGET", &selected);
+            let post_commit = run_with_timeout(
+                &mut post_commit_command,
+                b"",
+                timeout.min(Duration::from_secs(12)),
+                &requested_root.join("capture-post-commit-concurrent-writer"),
+            )
+            .map_err(|error| format!("run gofumpt post-commit concurrent-writer probe: {error}"))?;
+            let post_commit_stderr = String::from_utf8_lossy(&post_commit.stderr);
+            if post_commit.status.code() != Some(2)
+                || !post_commit.stdout.is_empty()
+                || !post_commit_stderr.contains("forced post-commit concurrent writer")
+                || !post_commit_stderr.contains("cannot safely roll back")
+                || !post_commit_stderr.contains("changed after commit")
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read post-commit raced source: {error}"))?
+                    != b"package concurrent_writer\n"
+            {
+                return Err(format!(
+                    "gofumpt post-commit rollback overwrote a concurrent writer: status={:?}; stdout={:?}; stderr={post_commit_stderr:?}",
+                    post_commit.status.code(),
+                    String::from_utf8_lossy(&post_commit.stdout)
+                ));
+            }
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore source after post-commit race: {error}"))?;
+
+            let open_race_anchor = concat!("    initial = os.lstat(path)\n", "    if (\n",);
+            if adapter.matches(open_race_anchor).count() != 1 {
+                return Err("gofumpt FIFO race probe lost its exact lstat/open anchor".to_owned());
+            }
+            let fifo_race_adapter = adapter.replacen(
+                open_race_anchor,
+                concat!(
+                    "    initial = os.lstat(path)\n",
+                    "    if os.environ.get(\"GOFUMPT_FIFO_RACE_TARGET\") == path:\n",
+                    "        os.unlink(path)\n",
+                    "        os.mkfifo(path, 0o600)\n",
+                    "    if (\n",
+                ),
+                1,
+            );
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore FIFO-race source: {error}"))?;
+            reset_observation()?;
+            let mut fifo_race_command = adapter_command(
+                &fifo_race_adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+            );
+            fifo_race_command.env("GOFUMPT_FIFO_RACE_TARGET", &selected);
+            let fifo_race = run_with_timeout(
+                &mut fifo_race_command,
+                b"",
+                timeout.min(Duration::from_secs(5)),
+                &requested_root.join("capture-fifo-open-race"),
+            )
+            .map_err(|error| format!("run gofumpt FIFO open race probe: {error}"))?;
+            assert_operational(
+                &fifo_race,
+                "path changed while it was opened",
+                "FIFO-open-race",
+            )?;
+            if formatter_log.exists() || go_log.exists() {
+                return Err("gofumpt FIFO open race launched a native child".to_owned());
+            }
+            std::fs::remove_file(&selected)
+                .map_err(|error| format!("remove raced FIFO source: {error}"))?;
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("restore regular source after FIFO race: {error}"))?;
+
+            let timeout_anchor = "CHILD_TIMEOUT = 30.0\n";
+            if adapter.matches(timeout_anchor).count() != 1 {
+                return Err("gofumpt timeout probe lost its exact deadline anchor".to_owned());
+            }
+            let timeout_adapter = adapter.replacen(timeout_anchor, "CHILD_TIMEOUT = 0.2\n", 1);
+            write_formatter("hang")?;
+            reset_observation()?;
+            let timed_out = run_adapter(
+                &timeout_adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "child-timeout",
+            )?;
+            assert_operational(
+                &timed_out,
+                "native child exceeded the 0.2-second deadline",
+                "timeout",
+            )?;
+            assert_gofumpt_private_roots_removed(&temporary, "timeout")?;
+
+            let output_limit_anchor = "OUTPUT_LIMIT = 64 * 1024 * 1024\n";
+            if adapter.matches(output_limit_anchor).count() != 1 {
+                return Err("gofumpt output-cap probe lost its exact bound anchor".to_owned());
+            }
+            let output_cap_adapter =
+                adapter.replacen(output_limit_anchor, "OUTPUT_LIMIT = 1024\n", 1);
+            write_formatter("output-cap")?;
+            reset_observation()?;
+            let output_cap = run_adapter(
+                &output_cap_adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "output-cap",
+            )?;
+            assert_operational(
+                &output_cap,
+                "combined native output exceeded 1024 bytes",
+                "output-cap",
+            )?;
+            assert_gofumpt_private_roots_removed(&temporary, "output-cap")?;
+
+            let survival_anchor = concat!(
+                "        if process_group_exists():\n",
+                "            failures.append(\"native child process group survived SIGKILL\")\n",
+                "        else:\n",
+                "            contained = True\n",
+            );
+            if adapter.matches(survival_anchor).count() != 1 {
+                return Err("gofumpt PGID retry probe lost its exact containment anchor".to_owned());
+            }
+            let survival_adapter = timeout_adapter.replacen(
+                survival_anchor,
+                concat!(
+                    "        if os.environ.get(\"GOFUMPT_FORCE_FIRST_SURVIVAL\") and not globals().get(\"forced_first_survival\", False):\n",
+                    "            globals()[\"forced_first_survival\"] = True\n",
+                    "            failures.append(\"native child process group survived SIGKILL\")\n",
+                    "        elif process_group_exists():\n",
+                    "            failures.append(\"native child process group survived SIGKILL\")\n",
+                    "        else:\n",
+                    "            contained = True\n",
+                ),
+                1,
+            );
+            write_formatter("signal")?;
+            reset_observation()?;
+            let mut survival_command = adapter_command(
+                &survival_adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+            );
+            survival_command.env("GOFUMPT_FORCE_FIRST_SURVIVAL", "1");
+            let survival = run_with_timeout(
+                &mut survival_command,
+                b"",
+                timeout.min(Duration::from_secs(8)),
+                &requested_root.join("capture-forced-survival-retry"),
+            )
+            .map_err(|error| format!("run gofumpt forced PGID retry probe: {error}"))?;
+            let survival_child = read_pid_file(&signal_child_pid, "forced-survival leader")?;
+            let survival_descendant =
+                read_pid_file(&signal_descendant_pid, "forced-survival descendant")?;
+            let survival_child_alive = process_survives(survival_child, Duration::from_secs(1))?;
+            let survival_descendant_alive =
+                process_survives(survival_descendant, Duration::from_secs(1))?;
+            let survival_group_alive =
+                process_group_survives(survival_child, Duration::from_secs(1))?;
+            if survival_child_alive || survival_descendant_alive || survival_group_alive {
+                let _ = signal_process_group(survival_child, "KILL");
+            }
+            let survival_stderr = String::from_utf8_lossy(&survival.stderr);
+            if survival.status.code() != Some(2)
+                || survival_stderr
+                    .matches("native child process group survived SIGKILL")
+                    .count()
+                    != 1
+                || survival_child_alive
+                || survival_descendant_alive
+                || survival_group_alive
+            {
+                return Err(format!(
+                    "gofumpt forced first PGID confirmation was not retried: status={:?}; child={survival_child_alive}; descendant={survival_descendant_alive}; group={survival_group_alive}; stderr={survival_stderr:?}",
+                    survival.status.code()
+                ));
+            }
+            assert_gofumpt_private_roots_removed(&temporary, "forced-survival")?;
+
+            let private_cleanup_anchor = "                shutil.rmtree(private_root)\n";
+            let close_cleanup_anchor = concat!(
+                "                os.close(record[\"fd\"])\n",
+                "            except OSError as error:\n",
+            );
+            if adapter.matches(private_cleanup_anchor).count() != 1
+                || adapter.matches(close_cleanup_anchor).count() != 1
+            {
+                return Err("gofumpt cleanup-composition probe lost its exact anchors".to_owned());
+            }
+            let cleanup_composition_adapter = adapter
+                .replacen(
+                    private_cleanup_anchor,
+                    concat!(
+                        "                shutil.rmtree(private_root)\n",
+                        "                raise OSError(5, \"forced private cleanup failure\", private_root)\n",
+                    ),
+                    1,
+                )
+                .replacen(
+                    close_cleanup_anchor,
+                    concat!(
+                        "                os.close(record[\"fd\"])\n",
+                        "                raise OSError(5, \"forced retained close failure\")\n",
+                        "            except OSError as error:\n",
+                    ),
+                    1,
+                );
+            write_formatter("normal")?;
+            write_go("normal")?;
+            std::fs::write(&selected, clean_source)
+                .map_err(|error| format!("write cleanup-composition clean source: {error}"))?;
+            reset_observation()?;
+            let cleanup_composition = run_adapter(
+                &cleanup_composition_adapter,
+                "verify",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "cleanup-composition",
+            )?;
+            let cleanup_composition_stderr = String::from_utf8_lossy(&cleanup_composition.stderr);
+            if cleanup_composition.status.code() != Some(2)
+                || !cleanup_composition.stdout.is_empty()
+                || !cleanup_composition_stderr.contains("forced private cleanup failure")
+                || !cleanup_composition_stderr.contains("cannot close retained descriptor")
+                || !cleanup_composition_stderr.contains("forced retained close failure")
+                || cleanup_composition_stderr.contains(temporary.to_string_lossy().as_ref())
+            {
+                return Err(format!(
+                    "gofumpt cleanup failures did not compose and sanitize: status={:?}; stdout={:?}; stderr={cleanup_composition_stderr:?}",
+                    cleanup_composition.status.code(),
+                    String::from_utf8_lossy(&cleanup_composition.stdout)
+                ));
+            }
+            assert_gofumpt_private_roots_removed(&temporary, "cleanup-composition")?;
+
+            let close_only_adapter = adapter.replacen(
+                close_cleanup_anchor,
+                concat!(
+                    "                os.close(record[\"fd\"])\n",
+                    "                raise OSError(5, \"forced exit-only close failure\")\n",
+                    "            except OSError as error:\n",
+                ),
+                1,
+            );
+            std::fs::write(&selected, dirty_source)
+                .map_err(|error| format!("write close-invariant dirty source: {error}"))?;
+            reset_observation()?;
+            let close_only = run_adapter(
+                &close_only_adapter,
+                "write",
+                &[],
+                &[selected.as_path()],
+                &project,
+                "exit-only-close-invariant",
+            )?;
+            if close_only.status.code() != Some(0)
+                || !close_only.stdout.is_empty()
+                || !close_only.stderr.is_empty()
+                || std::fs::read(&selected)
+                    .map_err(|error| format!("read close-invariant formatted source: {error}"))?
+                    != formatted_source
+            {
+                return Err(format!(
+                    "gofumpt exit-only close invariant changed a proven outcome: status={:?}; stdout={:?}; stderr={:?}",
+                    close_only.status.code(),
+                    String::from_utf8_lossy(&close_only.stdout),
+                    String::from_utf8_lossy(&close_only.stderr)
+                ));
+            }
+            assert_gofumpt_private_roots_removed(&temporary, "exit-only-close")?;
+
+            for probe_mode in ["inherited-pipe", "closed-pipe"] {
+                write_formatter(probe_mode)?;
+                reset_observation()?;
+                let output = run_adapter(
+                    adapter,
+                    "verify",
+                    &[],
+                    &[selected.as_path()],
+                    &project,
+                    &format!("descendant-{probe_mode}"),
+                )?;
+                let child = read_pid_file(&signal_child_pid, "gofumpt descendant leader")?;
+                let descendant = read_pid_file(&signal_descendant_pid, "gofumpt descendant child")?;
+                let child_alive = process_survives(child, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(child, Duration::from_secs(1))?;
+                if child_alive || descendant_alive || group_alive {
+                    let _ = signal_process_group(child, "KILL");
+                }
+                std::thread::sleep(Duration::from_millis(1100));
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.code() != Some(2)
+                    || !stderr.contains("native child left same-group descendants after exit")
+                    || child_alive
+                    || descendant_alive
+                    || group_alive
+                    || late_mutation.exists()
+                {
+                    return Err(format!(
+                        "gofumpt {probe_mode} descendant escaped: status={:?}; child={child_alive}; descendant={descendant_alive}; group={group_alive}; late={}; stderr={stderr:?}",
+                        output.status.code(),
+                        late_mutation.exists()
+                    ));
+                }
+                assert_gofumpt_private_roots_removed(&temporary, probe_mode)?;
+            }
+
+            for (signal_name, signal_number) in [("HUP", 1), ("INT", 2), ("TERM", 15)] {
+                write_formatter("signal")?;
+                reset_observation()?;
+                let mut command =
+                    adapter_command(adapter, "verify", &[], &[selected.as_path()], &project);
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+                let mut outer = command.spawn().map_err(|error| {
+                    format!("spawn gofumpt SIG{signal_name} adversarial adapter: {error}")
+                })?;
+                let outer_pid = outer.id();
+                let deadline = std::time::Instant::now() + timeout.min(Duration::from_secs(5));
+                while !signal_ready.is_file() {
+                    if let Some(status) = outer
+                        .try_wait()
+                        .map_err(|error| format!("poll gofumpt SIG{signal_name}: {error}"))?
+                    {
+                        return Err(format!(
+                            "gofumpt SIG{signal_name} exited {status:?} before ready"
+                        ));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        let _ = signal_process(outer_pid, "KILL");
+                        let _ = outer.wait();
+                        return Err(format!("gofumpt SIG{signal_name} did not become ready"));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let child = read_pid_file(&signal_child_pid, "gofumpt signal child")?;
+                let descendant =
+                    read_pid_file(&signal_descendant_pid, "gofumpt signal descendant")?;
+                if !signal_process(outer_pid, signal_name)?.success() {
+                    let _ = signal_process_group(child, "KILL");
+                    let _ = outer.wait();
+                    return Err(format!("send SIG{signal_name} to gofumpt adapter"));
+                }
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = sender.send(outer.wait_with_output());
+                });
+                let output = receiver
+                    .recv_timeout(timeout.min(Duration::from_secs(5)))
+                    .map_err(|error| {
+                        let _ = signal_process_group(child, "KILL");
+                        format!("wait for gofumpt SIG{signal_name}: {error}")
+                    })?
+                    .map_err(|error| format!("collect gofumpt SIG{signal_name}: {error}"))?;
+                let child_alive = process_survives(child, Duration::from_secs(1))?;
+                let descendant_alive = process_survives(descendant, Duration::from_secs(1))?;
+                let group_alive = process_group_survives(child, Duration::from_secs(1))?;
+                if child_alive || descendant_alive || group_alive {
+                    let _ = signal_process_group(child, "KILL");
+                }
+                let expected_stderr =
+                    format!("velvet-glove-gofumpt: received signal {signal_number}\n");
+                if output.status.code() != Some(2)
+                    || !output.stdout.is_empty()
+                    || String::from_utf8_lossy(&output.stderr) != expected_stderr
+                    || child_alive
+                    || descendant_alive
+                    || group_alive
+                {
+                    return Err(format!(
+                        "gofumpt SIG{signal_name} lifecycle mismatch: status={:?}; child={child_alive}; descendant={descendant_alive}; group={group_alive}; stdout={:?}; stderr={:?}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                assert_gofumpt_private_roots_removed(&temporary, signal_name)?;
+            }
+
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&requested_root);
+        result
+    }
+}
+
+#[cfg(unix)]
+fn assert_gofumpt_private_roots_removed(temporary: &Path, label: &str) -> Result<(), String> {
+    let survivors = std::fs::read_dir(temporary)
+        .map_err(|error| format!("read gofumpt {label} temporary root: {error}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(GOFUMPT_PRIVATE_ROOT_PREFIX)
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    if survivors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "gofumpt {label} left private roots behind: {survivors:?}"
+        ))
+    }
+}
+
 fn verify_gofmt_adapter_lifecycle(spec: &ToolSpec, timeout: Duration) -> Result<(), String> {
     #[cfg(not(unix))]
     {
@@ -26287,6 +28473,7 @@ fn normalize_fixture_output(case: &FixtureCase, text: &str, project_aliases: &[S
     let mut output = normalize(text, project_aliases);
     let inline_marker = match case.tool.as_str() {
         "go-fmt" => Some(GOFMT_FILES_MARKER),
+        "gofumpt" => Some(GOFUMPT_FILES_MARKER),
         "dclint" => Some(DCLINT_FILES_MARKER),
         "errcheck" => Some(ERRCHECK_WORKSPACE_MARKER),
         "go-vet" => Some(GO_VET_WORKSPACE_MARKER),

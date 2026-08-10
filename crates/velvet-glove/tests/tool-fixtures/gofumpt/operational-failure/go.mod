@@ -1,3 +1,3 @@
-module example.com/failure
+module example
 
 go 1.26

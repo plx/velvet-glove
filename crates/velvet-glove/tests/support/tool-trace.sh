@@ -121,6 +121,30 @@ if [ "$logical_program" = gofmt ]; then
   printf '%s\n' "${LD_LIBRARY_PATH-}" >"$record/env-LD_LIBRARY_PATH"
   printf '%s\n' "${LD_PRELOAD-}" >"$record/env-LD_PRELOAD"
 fi
+if [ "$logical_program" = gofumpt ] || [ "$logical_program" = go ]; then
+  for name in PATH HOME TMPDIR XDG_CACHE_HOME GODEBUG GOENV GOMAXPROCS GOTELEMETRY GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOVCS GOFLAGS GOCACHE GOPATH GOROOT GOTMPDIR GOFUMPT_SPLIT_LONG_LINES GO_VERSION_TEST GO_VELVET_GLOVE_POISON DEBUG DYLD_INSERT_LIBRARIES DYLD_PRINT_LIBRARIES LD_LIBRARY_PATH LD_PRELOAD VELVET_GLOVE_GOFUMPT_TIMEOUT_MS; do
+    eval "value=\${$name-}"
+    printf '%s\n' "$value" >"$record/env-$name"
+  done
+  case $PWD in
+    */velvet-glove-gofumpt-*/work)
+      gofumpt_private_mod=${PWD%/work}/go.mod
+      if [ -f "$gofumpt_private_mod" ] && [ ! -L "$gofumpt_private_mod" ]; then
+        printf '%s\n' file >"$record/gofumpt-root-go-mod-kind"
+      else
+        printf '%s\n' unsafe >"$record/gofumpt-root-go-mod-kind"
+      fi
+      if gofumpt_private_mod_mode=$(/usr/bin/stat -f '%Lp' "$gofumpt_private_mod" 2>/dev/null); then
+        :
+      else
+        gofumpt_private_mod_mode=$(/usr/bin/stat -c '%a' "$gofumpt_private_mod")
+      fi
+      printf '%s\n' "$gofumpt_private_mod_mode" >"$record/gofumpt-root-go-mod-mode"
+      /usr/bin/wc -c <"$gofumpt_private_mod" | /usr/bin/tr -d ' ' >"$record/gofumpt-root-go-mod-size"
+      /usr/bin/shasum -a 256 "$gofumpt_private_mod" | /usr/bin/awk '{print $1}' >"$record/gofumpt-root-go-mod-sha256"
+      ;;
+  esac
+fi
 if [ "$logical_program" = dclint ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"

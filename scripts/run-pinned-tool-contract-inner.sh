@@ -240,6 +240,59 @@ if [[ $go_vet_selected == true ]]; then
     exit 1
   fi
 fi
+gofumpt_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("gofumpt") != null' >/dev/null; then
+  gofumpt_selected=true
+fi
+gofumpt_bin=
+gofumpt_go_bin=
+if [[ $gofumpt_selected == true ]]; then
+  gofumpt_bin=$(type -P gofumpt || true)
+  gofumpt_go_bin=$(type -P go || true)
+  for binding in "$gofumpt_bin" "$gofumpt_go_bin"; do
+    if [[ -z $binding || ! -f $binding || -L $binding || ! -x $binding ]]; then
+      echo "error: denied-network gofumpt lane cannot resolve its managed formatter/Go closure" >&2
+      exit 1
+    fi
+    binding_real=$(python -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$binding")
+    case $binding_real in
+      "${MISE_DATA_DIR:?}"/*) ;;
+      *)
+        echo "error: denied-network gofumpt closure resolves outside the managed mise root" >&2
+        exit 1
+        ;;
+    esac
+  done
+  read -r gofumpt_sha256 _ < <(/usr/bin/shasum -a 256 "$gofumpt_bin")
+  gofumpt_size=$(/usr/bin/stat -f '%z' "$gofumpt_bin")
+  if [[ $gofumpt_sha256 != 18936628f195369a80a129c73ee33d23e39086286dab538781ba826effc7e10b || \
+    $gofumpt_size != 3115666 || \
+    $(env -i PATH=/usr/bin:/bin "$gofumpt_bin" -version) != "v0.11.0 (go1.26.5)" || \
+    $(env -i PATH=/usr/bin:/bin GOTOOLCHAIN=local "$gofumpt_go_bin" version) != \
+      "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: denied-network gofumpt closure failed its exact binary identity" >&2
+    exit 1
+  fi
+  gofumpt_metadata=$(env -i PATH=/usr/bin:/bin "$gofumpt_go_bin" version -m "$gofumpt_bin")
+  gofumpt_dep_count=$(printf '%s\n' "$gofumpt_metadata" | /usr/bin/awk '$1 == "dep" {count++} END {print count + 0}')
+  if [[ $gofumpt_dep_count != 3 || \
+    $gofumpt_metadata != *': go1.26.5'* || \
+    $gofumpt_metadata != *$'\tpath\tmvdan.cc/gofumpt'* || \
+    $gofumpt_metadata != *$'\tmod\tmvdan.cc/gofumpt\tv0.11.0'* || \
+    $gofumpt_metadata != *$'\tdep\tgolang.org/x/mod\tv0.38.0\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk='* || \
+    $gofumpt_metadata != *$'\tdep\tgolang.org/x/sync\tv0.22.0\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek='* || \
+    $gofumpt_metadata != *$'\tdep\tgolang.org/x/tools\tv0.48.0\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE='* || \
+    $gofumpt_metadata != *$'\tbuild\t-trimpath=true'* || \
+    $gofumpt_metadata != *$'\tbuild\tCGO_ENABLED=0'* || \
+    $gofumpt_metadata != *$'\tbuild\tGOARCH=arm64'* || \
+    $gofumpt_metadata != *$'\tbuild\tGOOS=darwin'* || \
+    $gofumpt_metadata != *$'\tbuild\tvcs.revision=5dca7d819315c5c6338d290ad2e7847f07438693'* || \
+    $gofumpt_metadata != *$'\tbuild\tvcs.time=2026-07-27T08:46:00Z'* || \
+    $gofumpt_metadata != *$'\tbuild\tvcs.modified=false'* ]]; then
+    echo "error: denied-network gofumpt build metadata differs from the reviewed official asset" >&2
+    exit 1
+  fi
+fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
   [.recipes[] as $recipe
