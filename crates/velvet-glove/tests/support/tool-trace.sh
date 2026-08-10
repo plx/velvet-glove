@@ -145,6 +145,58 @@ if [ "$logical_program" = gofumpt ] || [ "$logical_program" = go ]; then
       ;;
   esac
 fi
+if [ "$logical_program" = golines ]; then
+  for name in PATH HOME TMPDIR XDG_CACHE_HOME GODEBUG GOENV GOMAXPROCS GOTELEMETRY GOTOOLCHAIN GOWORK GOPROXY GOSUMDB GOFLAGS GOCACHE GOMODCACHE GOPATH GOROOT GOTMPDIR GOLINES_MAX_LENGTH GOLINES_VELVET_GLOVE_POISON DEBUG DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_PRINT_LIBRARIES LD_LIBRARY_PATH LD_PRELOAD; do
+    eval "value=\${$name-}"
+    printf '%s\n' "$value" >"$record/env-$name"
+  done
+  case $PWD in
+    */velvet-glove-golines-*/work)
+      golines_private_root=${PWD%/work}
+      printf '%s\n' "$golines_private_root" >"$record/golines-private-root"
+      for item in \
+        "root:$golines_private_root" \
+        "work:$golines_private_root/work" \
+        "bin:$golines_private_root/bin" \
+        "home:$golines_private_root/home" \
+        "tmp:$golines_private_root/tmp" \
+        "cache:$golines_private_root/cache"
+      do
+        name=${item%%:*}
+        path=${item#*:}
+        if [ -L "$path" ]; then
+          printf '%s\n' symlink >"$record/golines-$name-kind"
+        elif [ -d "$path" ]; then
+          printf '%s\n' directory >"$record/golines-$name-kind"
+        else
+          printf '%s\n' missing >"$record/golines-$name-kind"
+        fi
+        /usr/bin/stat -f '%Lp' "$path" >"$record/golines-$name-mode"
+      done
+      for item in \
+        "shim:$0" \
+        "sidecar:$real_program_file" \
+        "native:$real_program"
+      do
+        name=${item%%:*}
+        path=${item#*:}
+        if [ -f "$path" ] && [ ! -L "$path" ]; then
+          printf '%s\n' file >"$record/golines-$name-kind"
+        else
+          printf '%s\n' unsafe >"$record/golines-$name-kind"
+        fi
+        /usr/bin/stat -f '%Lp' "$path" >"$record/golines-$name-mode"
+        /usr/bin/stat -f '%l' "$path" >"$record/golines-$name-links"
+        /usr/bin/wc -c <"$path" | /usr/bin/tr -d ' ' >"$record/golines-$name-size"
+        /usr/bin/shasum -a 256 "$path" | /usr/bin/awk '{print $1}' >"$record/golines-$name-sha256"
+      done
+      /bin/cat "$real_program_file" >"$record/golines-sidecar-content"
+      ;;
+    *)
+      printf '%s\n' missing >"$record/golines-root-kind"
+      ;;
+  esac
+fi
 if [ "$logical_program" = dclint ]; then
   printf '%s\n' "${PATH-}" >"$record/env-PATH"
   printf '%s\n' "${TMPDIR-}" >"$record/env-TMPDIR"
@@ -610,10 +662,67 @@ if [ "$eslint_private_controls" -eq 1 ]; then
   printf '%s\n' "$eslint_cache" >"$record/eslint-cache-location"
 fi
 
+if [ "$logical_program" = golines ]; then
+  /usr/bin/stat -f '%HT' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-kind"
+  /usr/bin/stat -f '%Lp' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-mode"
+  /usr/bin/stat -f '%u' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-owner"
+  /usr/bin/stat -f '%l' /dev/fd/0 >"$record/golines-wrapper-stdin-fd-links"
+  golines_native_stdin=$(/usr/bin/mktemp "${TMPDIR:?}/golines-native-stdin.XXXXXX")
+  /bin/chmod 600 "$golines_native_stdin"
+  /usr/bin/stat -f '%HT' "$golines_native_stdin" >"$record/golines-native-stdin-backing-kind"
+  /usr/bin/stat -f '%Lp' "$golines_native_stdin" >"$record/golines-native-stdin-backing-mode"
+  /usr/bin/stat -f '%u' "$golines_native_stdin" >"$record/golines-native-stdin-backing-owner"
+  /usr/bin/stat -f '%l' "$golines_native_stdin" >"$record/golines-native-stdin-backing-links"
+  /usr/bin/stat -f '%d' "$golines_native_stdin" >"$record/golines-native-stdin-backing-device"
+  /usr/bin/stat -f '%i' "$golines_native_stdin" >"$record/golines-native-stdin-backing-inode"
+  exec 4<"$golines_native_stdin"
+  exec 5<"$golines_native_stdin"
+  exec 3<>"$golines_native_stdin"
+  /bin/rm "$golines_native_stdin"
+  if [ -e "$golines_native_stdin" ]; then
+    printf '%s\n' present >"$record/golines-native-stdin-path-kind"
+    exit 96
+  fi
+  printf '%s\n' missing >"$record/golines-native-stdin-path-kind"
+  /bin/cat >&3
+  exec 3>&-
+  /usr/bin/stat -f '%HT' /dev/fd/4 >"$record/golines-native-stdin-fd-kind"
+  /usr/bin/stat -f '%Lp' /dev/fd/4 >"$record/golines-native-stdin-fd-mode"
+  /usr/bin/stat -f '%u' /dev/fd/4 >"$record/golines-native-stdin-fd-owner"
+  /usr/bin/stat -f '%l' /dev/fd/4 >"$record/golines-native-stdin-fd-links"
+  /usr/bin/stat -f '%d' /dev/fd/4 >"$record/golines-native-stdin-fd-device"
+  /usr/bin/stat -f '%i' /dev/fd/4 >"$record/golines-native-stdin-fd-inode"
+  /usr/bin/stat -f '%z' /dev/fd/4 >"$record/golines-native-stdin-fd-size"
+  /usr/bin/stat -f '%d' /dev/fd/5 >"$record/golines-capture-stdin-fd-device"
+  /usr/bin/stat -f '%i' /dev/fd/5 >"$record/golines-capture-stdin-fd-inode"
+  IFS= read -r golines_native_device <"$record/golines-native-stdin-fd-device"
+  IFS= read -r golines_native_inode <"$record/golines-native-stdin-fd-inode"
+  IFS= read -r golines_capture_device <"$record/golines-capture-stdin-fd-device"
+  IFS= read -r golines_capture_inode <"$record/golines-capture-stdin-fd-inode"
+  IFS= read -r golines_backing_inode <"$record/golines-native-stdin-backing-inode"
+  if [ "$golines_native_device" != "$golines_capture_device" ] || \
+    [ "$golines_native_inode" != "$golines_capture_inode" ] || \
+    [ "$golines_native_inode" != "$golines_backing_inode" ]; then
+    exit 97
+  fi
+  /bin/cat <&5 >"$record/golines-stdin"
+  exec 5<&-
+  /usr/bin/wc -c <"$record/golines-stdin" | /usr/bin/tr -d ' ' >"$record/golines-stdin-size"
+  /usr/bin/shasum -a 256 "$record/golines-stdin" | /usr/bin/awk '{print $1}' >"$record/golines-stdin-sha256"
+fi
+
 set +e
-"$real_program" "$@"
-status=$?
+if [ "$logical_program" = golines ]; then
+  "$real_program" "$@" <&4 4<&-
+  status=$?
+else
+  "$real_program" "$@"
+  status=$?
+fi
 set -e
+if [ "$logical_program" = golines ]; then
+  exec 4<&-
+fi
 if [ -n "$eslint_cache" ]; then
   if [ -f "$eslint_cache" ]; then
     printf '%s\n' file >"$record/eslint-cache-kind"

@@ -159,12 +159,13 @@ just tool-case go-fmt multi-file
 just tool-case go-vet test-findings
 just tool-case errcheck multi-file
 just tool-case goimports multi-file
+just tool-case golines multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 
-# Twenty-three behavior-rich contracts across eighteen environments: jq, Buf, and
+# Twenty-four behavior-rich contracts across nineteen environments: jq, Buf, and
 # Vacuum data formats; shared Node; dedicated Prettier, Contextlint, dclint,
-# ESLint, and GitHub Actions; Python, gofmt/go vet, errcheck, goimports, Rust, Cargo Clippy/Fmt,
+# ESLint, and GitHub Actions; Python, gofmt/go vet, errcheck, goimports, golines, Rust, Cargo Clippy/Fmt,
 # Ruby, security, and native macOS.
 just tool-representatives
 
@@ -335,6 +336,19 @@ then proves exact transactional diff, final verification, and idempotence.
 Exact source/build provenance, closed-module scope, rollback rules, and
 remaining resolver and process limitations are in the
 [goimports contract](docs/pinned-tool-environments.md#goimports-validation-contract).
+
+The dedicated golines lane pins an archived v0.13.0 source snapshot plus a
+checksum-locked closure patch that removes the vulnerable prefixed formatter
+graph, then reproducibly builds `0.13.0+velvet-glove.1` with Go 1.26.5. Its
+isolated adapter passes selected bytes only through fixed native stdin
+semantics, proves every candidate is a fixed point, and commits the complete
+batch through guarded retained descriptors without ever invoking native `-w`
+on project paths. The representative formats two selected dirty files while
+preserving selected-clean and unselected sentinels, then proves exact diff,
+final verification, and idempotence. Exact patch/build provenance, generated
+file behavior, rollback guards, and remaining filesystem/process limitations
+are in the
+[golines contract](docs/pinned-tool-environments.md#golines-validation-contract).
 
 The dedicated Cargo Clippy lane pins the official Rust and Cargo 1.97.1
 distribution with Clippy 0.1.97. Its isolated adapter runs frozen read-only

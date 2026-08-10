@@ -1596,6 +1596,95 @@ fn gofumpt_builtin_stages_validated_output_and_commits_transactionally() {
 }
 
 #[test]
+fn golines_builtin_stages_fixed_semantics_and_commits_transactionally() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let golines = spec(&specs, "goLines");
+
+    assert_eq!(golines.id, "golines");
+    assert_eq!(golines.executable, "golines");
+    assert_eq!(golines.workflow_order, ["format"]);
+    let workflow = golines.workflows.get("format").expect("format workflow");
+    let check = workflow.check.as_ref().expect("format check");
+    let remedy = workflow.remedy.as_ref().expect("format remedy");
+    for (command, mode) in [(check, "verify"), (remedy, "write")] {
+        assert_eq!(command.program.as_deref(), Some("python"));
+        assert_workflow_argv(
+            command,
+            vec![
+                literal("-I"),
+                literal("-c"),
+                command.argv[2].clone(),
+                token(ArgToken::ToolExecutable),
+                literal(mode),
+                token(ArgToken::ExtraArgs),
+                literal("__VELVET_GLOVE_GOLINES_FILES__"),
+                token(ArgToken::Files),
+            ],
+        );
+        assert_exit_codes(&command.exit_codes, &[0], &[], &[2]);
+        assert_eq!(command.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    }
+    assert!(check.issues_on_stdout);
+    assert_eq!(check.writes, WriteBehavior::None);
+    assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
+    assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+
+    let ArgvElement::Literal(adapter) = &check.argv[2] else {
+        panic!("golines adapter must be a literal Python program")
+    };
+    for required in [
+        "EXPECTED_PROGRAM_SIZE = 7341970",
+        "EXPECTED_PROGRAM_SHA256 = \"4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75\"",
+        "golines v0.13.0+velvet-glove.1",
+        "git commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf",
+        "FIXED_ARGUMENTS = (\"--base-formatter=gofmt\", \"--no-ignore-generated\")",
+        "generated-source formatting canary returned unexpected evidence",
+        "extra arguments are unsupported because they change formatting semantics",
+        "selected path is repeated or aliased",
+        "getattr(os, \"O_NONBLOCK\", 0)",
+        "formatted candidate batch exceeds",
+        "golines candidate is not a validated fixed point",
+        "acquire_write_descriptors(dirty_indices)",
+        "write_exact(record, candidate, False)",
+        "record[\"partial_content\"] = b\"\"",
+        "record[\"partial_metadata\"] = {",
+        "adapter-owned partial write evidence is unavailable",
+        "rollback_targets(partial, partial_candidates, partial_metadata)",
+        "cannot verify untouched",
+        "assert_record(record)\n            touched.append(index)",
+        "rollback_targets(completed, candidates, completed_metadata)",
+        "cannot safely roll back",
+        "metadata changed after commit",
+        "authoritative post-commit formatting failed",
+        "TMPDIR must be outside the selected project root",
+        "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+        "formatter_native = open_record(",
+        "signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)",
+        "native child left same-group descendants after exit",
+        "combined native output exceeded",
+        "shutil.rmtree(private_root)",
+        "time=\"<time>\"",
+        "<golines-private>",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "golines adapter omits {required:?}"
+        );
+    }
+    assert!(!adapter.contains("[private_tool, \"-w\""));
+    assert!(!adapter.contains("--dry-run"));
+
+    let immediate = golines
+        .phases
+        .get("format")
+        .expect("immediate format phase");
+    assert_eq!(immediate.program.as_deref(), Some("python"));
+    assert_eq!(immediate.argv, remedy.argv);
+}
+
+#[test]
 fn goimports_builtin_uses_a_closed_shadow_module_and_transactional_commit() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
@@ -1817,12 +1906,42 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     assert!(golines_check.issues_on_stdout);
     assert_eq!(golines_check.writes, WriteBehavior::None);
     assert_eq!(golines_remedy.writes, WriteBehavior::TargetFiles);
-    assert!(matches!(
-        golines_check.argv.first(),
-        Some(ArgvElement::Literal(value)) if value == "--dry-run"
-    ));
+    assert_eq!(golines_check.program.as_deref(), Some("python"));
+    assert_eq!(golines_remedy.program.as_deref(), Some("python"));
+    assert_workflow_argv(
+        golines_check,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            golines_check.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("verify"),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_GOLINES_FILES__"),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_workflow_argv(
+        golines_remedy,
+        vec![
+            literal("-I"),
+            literal("-c"),
+            golines_check.argv[2].clone(),
+            token(ArgToken::ToolExecutable),
+            literal("write"),
+            token(ArgToken::ExtraArgs),
+            literal("__VELVET_GLOVE_GOLINES_FILES__"),
+            token(ArgToken::Files),
+        ],
+    );
     assert_eq!(golines_workflow.check_scope, CheckScope::TargetFiles);
     assert_eq!(golines_workflow.invocation, InvocationGranularity::Batch);
+    let golines_phase = golines
+        .phases
+        .get("format")
+        .expect("golines immediate format phase");
+    assert_eq!(golines_phase.program.as_deref(), Some("python"));
+    assert_eq!(golines_phase.argv, golines_remedy.argv);
 
     let tidy = spec(&specs, "gomodTidy");
     assert_eq!(

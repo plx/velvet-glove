@@ -794,6 +794,197 @@
       ]
     },
     {
+      "id": "macos-arm64-golines",
+      "provisioningGroup": "go",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "osVersionConstraint": ">=26",
+      "sandbox": "mise-deny-net",
+      "caseNetwork": "denied",
+      "components": [
+        {
+          "id": "golines-go",
+          "version": "1.26.5",
+          "miseTool": "go@1.26.5",
+          "installationSource": "official Go 1.26.5 Darwin arm64 archive pinned at SHA-256 efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a and tag commit c19862e5f8415b4f24b189d065ed739517c548ba",
+          "integrity": {
+            "kind": "mise-lock",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/mise.lock",
+            "sha256": "efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a"
+          },
+          "probe": {
+            "argv": [
+              "go",
+              "version"
+            ],
+            "match": "exact",
+            "expected": "go version go1.26.5 darwin/arm64"
+          }
+        },
+        {
+          "id": "golines",
+          "version": "0.13.0+velvet-glove.1",
+          "installationSource": "archived segmentio/golines v0.13.0 source at commit 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf plus the checksum-pinned velvet-glove closure patch at SHA-256 356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65, reproducibly built with locked Go 1.26.5 to SHA-256 4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75; the upstream binary and superseded unpatched Go 1.26.5 build are excluded by the recorded stale-toolchain and vulnerability evidence",
+          "integrity": {
+            "kind": "go-source-build",
+            "path": "crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch",
+            "url": "https://github.com/segmentio/golines/archive/refs/tags/v0.13.0.tar.gz",
+            "sha256": "ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e",
+            "patchSha256": "356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65",
+            "archiveFormat": "tar-gz",
+            "archiveRoot": "golines-0.13.0",
+            "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/golines/go.mod",
+            "moduleManifestSha256": "8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b",
+            "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/golines/go.sum",
+            "moduleLockSha256": "21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe",
+            "builtArtifactSha256": "4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75",
+            "buildToolchainComponentId": "golines-go",
+            "buildWorkingDirectory": "{state}/golines-build-0.13.0-vg1/source",
+            "buildArgv": [
+              "go",
+              "-C",
+              "{state}/golines-build-0.13.0-vg1/source",
+              "build",
+              "-trimpath",
+              "-buildvcs=false",
+              "-ldflags",
+              "-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z",
+              "-o",
+              "{state}/golines-build-0.13.0-vg1/install/bin/golines",
+              "."
+            ],
+            "buildEnvironment": {
+              "GOTOOLCHAIN": "local",
+              "GOENV": "off",
+              "GOWORK": "off",
+              "GOFLAGS": "-mod=readonly",
+              "CGO_ENABLED": "0",
+              "GOOS": "darwin",
+              "GOARCH": "arm64",
+              "GOARM64": "v8.0",
+              "SOURCE_DATE_EPOCH": "1755811321",
+              "GOMODCACHE": "{state}/golines-go-mod-cache",
+              "GOCACHE": "{state}/golines-go-build-cache",
+              "GOPROXY": "off",
+              "GOSUMDB": "off"
+            },
+            "minOsVersion": "12.0",
+            "allowedDylibPrefixes": [
+              "/System/Library/",
+              "/usr/lib/"
+            ]
+          },
+          "probe": {
+            "argv": [
+              "golines",
+              "--version"
+            ],
+            "match": "exact",
+            "expected": "golines v0.13.0+velvet-glove.1\n\nbuild information:\n\tbuild date: 2025-08-21T21:22:01Z\n\tgit commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
+          }
+        }
+      ],
+      "auxiliaryPrograms": [],
+      "bootstrap": [
+        {
+          "id": "golines-apply-closure",
+          "argv": [
+            "/usr/bin/patch",
+            "-f",
+            "-d",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "-p1",
+            "-i",
+            "{repository}/crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch"
+          ],
+          "environment": {},
+          "workingDirectory": "{state}/golines-build-0.13.0-vg1/source",
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch"
+        },
+        {
+          "id": "golines-go-mod-download",
+          "argv": [
+            "go",
+            "-C",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "mod",
+            "download"
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOENV": "off",
+            "GOWORK": "off",
+            "GOFLAGS": "-mod=readonly",
+            "GOMODCACHE": "{state}/golines-go-mod-cache",
+            "GOCACHE": "{state}/golines-bootstrap-go-build-cache",
+            "GOPROXY": "https://proxy.golang.org",
+            "GOSUMDB": "sum.golang.org"
+          },
+          "workingDirectory": "/",
+          "network": "required",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/golines/go.sum"
+        },
+        {
+          "id": "golines-go-mod-verify",
+          "argv": [
+            "go",
+            "-C",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "mod",
+            "verify"
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOENV": "off",
+            "GOWORK": "off",
+            "GOFLAGS": "-mod=readonly",
+            "GOMODCACHE": "{state}/golines-go-mod-cache",
+            "GOCACHE": "{state}/golines-bootstrap-go-build-cache",
+            "GOPROXY": "off",
+            "GOSUMDB": "off"
+          },
+          "workingDirectory": "/",
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/golines/go.sum"
+        },
+        {
+          "id": "golines-go-build",
+          "argv": [
+            "go",
+            "-C",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags",
+            "-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z",
+            "-o",
+            "{state}/golines-build-0.13.0-vg1/install/bin/golines",
+            "."
+          ],
+          "environment": {
+            "GOTOOLCHAIN": "local",
+            "GOENV": "off",
+            "GOWORK": "off",
+            "GOFLAGS": "-mod=readonly",
+            "CGO_ENABLED": "0",
+            "GOOS": "darwin",
+            "GOARCH": "arm64",
+            "GOARM64": "v8.0",
+            "SOURCE_DATE_EPOCH": "1755811321",
+            "GOMODCACHE": "{state}/golines-go-mod-cache",
+            "GOCACHE": "{state}/golines-go-build-cache",
+            "GOPROXY": "off",
+            "GOSUMDB": "off"
+          },
+          "workingDirectory": "{state}/golines-build-0.13.0-vg1/source",
+          "network": "denied",
+          "lockfile": "crates/hookkit-pkl-config/validation/provisioning/golines/go.sum"
+        }
+      ]
+    },
+    {
       "id": "macos-arm64-rust",
       "provisioningGroup": "rust",
       "platform": "macos",
@@ -1962,6 +2153,82 @@
       },
       "caseExecutables": ["goimports", "go", "python"],
       "cases": ["clean", "missing-import", "multi-file", "operational-failure"],
+      "representativeCase": "multi-file"
+    },
+    {
+      "id": "golines-macos-arm64",
+      "toolId": "golines",
+      "environmentId": "macos-arm64-golines",
+      "version": "0.13.0+velvet-glove.1",
+      "installationSource": "archived segmentio/golines v0.13.0 source at commit 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf plus the checksum-pinned velvet-glove closure patch at SHA-256 356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65, reproducibly built with locked Go 1.26.5 to SHA-256 4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75; the upstream binary and superseded unpatched Go 1.26.5 build are excluded by the recorded stale-toolchain and vulnerability evidence",
+      "integrity": {
+        "kind": "go-source-build",
+        "path": "crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch",
+        "url": "https://github.com/segmentio/golines/archive/refs/tags/v0.13.0.tar.gz",
+        "sha256": "ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e",
+        "patchSha256": "356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65",
+        "archiveFormat": "tar-gz",
+        "archiveRoot": "golines-0.13.0",
+        "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/golines/go.mod",
+        "moduleManifestSha256": "8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b",
+        "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/golines/go.sum",
+        "moduleLockSha256": "21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe",
+        "builtArtifactSha256": "4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75",
+        "buildToolchainComponentId": "golines-go",
+        "buildWorkingDirectory": "{state}/golines-build-0.13.0-vg1/source",
+        "buildArgv": [
+          "go",
+          "-C",
+          "{state}/golines-build-0.13.0-vg1/source",
+          "build",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags",
+          "-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z",
+          "-o",
+          "{state}/golines-build-0.13.0-vg1/install/bin/golines",
+          "."
+        ],
+        "buildEnvironment": {
+          "GOTOOLCHAIN": "local",
+          "GOENV": "off",
+          "GOWORK": "off",
+          "GOFLAGS": "-mod=readonly",
+          "CGO_ENABLED": "0",
+          "GOOS": "darwin",
+          "GOARCH": "arm64",
+          "GOARM64": "v8.0",
+          "SOURCE_DATE_EPOCH": "1755811321",
+          "GOMODCACHE": "{state}/golines-go-mod-cache",
+          "GOCACHE": "{state}/golines-go-build-cache",
+          "GOPROXY": "off",
+          "GOSUMDB": "off"
+        },
+        "minOsVersion": "12.0",
+        "allowedDylibPrefixes": [
+          "/System/Library/",
+          "/usr/lib/"
+        ]
+      },
+      "probe": {
+        "argv": [
+          "golines",
+          "--version"
+        ],
+        "match": "exact",
+        "expected": "golines v0.13.0+velvet-glove.1\n\nbuild information:\n\tbuild date: 2025-08-21T21:22:01Z\n\tgit commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
+      },
+      "caseExecutables": [
+        "golines",
+        "python"
+      ],
+      "cases": [
+        "clean",
+        "generated-explicit",
+        "long-line",
+        "multi-file",
+        "operational-failure"
+      ],
       "representativeCase": "multi-file"
     },
     {

@@ -18,11 +18,12 @@ just tool-case go-fmt multi-file
 just tool-case go-vet test-findings
 just tool-case errcheck multi-file
 just tool-case goimports multi-file
+just tool-case golines multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all twenty-three behavior-rich representative contracts across eighteen environments
+Run all twenty-four behavior-rich representative contracts across nineteen environments
 with:
 
 ```sh
@@ -57,10 +58,10 @@ Before a case runs, the driver:
 2. installs only the selected mise-managed tools in `--locked` mode and verifies
    every directly managed Rust or Ruby archive, every Betterleaks or ghalint
    source, patch, module-lock, and build-artifact digest, and the errcheck and
-   goimports proxy, module-input, reproducible-artifact, and Go build-identity chains against
+   goimports and golines proxy/source, module-input, reproducible-artifact, and Go build-identity chains against
    committed values;
 3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, Betterleaks,
-   ghalint, errcheck, and goimports Go module graphs from their committed locks as
+   ghalint, errcheck, goimports, and golines Go module graphs from their committed locks as
    applicable; Cargo runs from `/`
    with an explicit manifest and controlled target root so ancestor `.cargo`
    files and host build caches cannot participate, while the patched Betterleaks
@@ -95,6 +96,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Go | Go/gofmt/go vet 1.26.5; Python 3.14.5 | official Go archive SHA-256; exact mise archive lock | `go-fmt/multi-file`, `go-vet/test-findings` |
 | Errcheck Go | Go 1.26.5; errcheck 1.20.0; Python 3.14.5 | official Go archive SHA-256; Go proxy zip SHA-256; exact module sums; reproducible binary SHA-256 and embedded build metadata | `errcheck/multi-file` |
 | Goimports Go | Go 1.26.5; goimports/x/tools 0.48.0; Python 3.14.5 | official Go archive SHA-256; four-module proxy closure; exact module sums; reproducible binary SHA-256 and embedded build metadata | `goimports/multi-file` |
+| Golines Go | Go 1.26.5; golines 0.13.0+velvet-glove.1; Python 3.14.5 | official Go archive SHA-256; archived source and proxy cross-record; exact closure patch/module inputs; 17 selected objects plus 13 graph-only `.mod` records; 12 compiled dependencies; reproducible binary SHA-256 and embedded build metadata | `golines/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Cargo Clippy/Fmt | Rust/Cargo 1.97.1; Clippy 0.1.97; cargo-fmt/rustfmt 1.9.0; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix`, `cargo-fmt/workspace-multi` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
@@ -746,6 +748,136 @@ races, aggregate bounds, partial commits, guarded rollback, signals, timeouts,
 and inherited or closed-pipe descendants. SIGKILL or power loss, failed
 rollback, the narrow final-check-to-truncate and guarded-rollback intervals,
 and descendants that deliberately escape their process group remain explicit
+operating-system limitations.
+
+### golines validation contract
+
+The dedicated Golines environment starts from the archived upstream final
+release, `segmentio/golines` v0.13.0, whose lightweight tag resolves to the
+GitHub-verified commit
+[`8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf`](https://github.com/segmentio/golines/commit/8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf).
+The generated source archive is pinned at SHA-256
+`ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e`,
+and the independent Go proxy archive cross-record is pinned at SHA-256
+`5166daf66491c02c7311e41009b6af6cafa7382a070b852171107b16567f806e`.
+The upstream license is MIT, with exact `LICENSE` SHA-256
+`d6d71a1f7dc6539e371120cc7af6e3257e55ca79634d473211f217b8965b0f16`.
+
+The official universal Darwin asset is intentionally excluded: its archive is
+pinned at SHA-256
+`82fb27c00940beade79a6bce44dcb7b60fee7fe8a9c0f933876dad74196ea6ba`,
+but the binary embeds stale Go 1.24.6 and has no retrievable artifact
+attestation. An exact unpatched Go 1.26.5 rebuild is also excluded because its
+runtime graph retains `golang.org/x/crypto` v0.41.0; binary `govulncheck`
+reported 17 called vulnerabilities. Velvet Glove instead applies the committed
+`closure.patch`, pinned at SHA-256
+`356775e8929b23f7477e38443bab2df8e156a58cdedebfc1b0b69a3e0b5d9f65`.
+That canonical labeled unified patch is based directly on the checksum-pinned
+GitHub archive bytes: the original `main.go`, `go.mod`, and `go.sum` SHA-256
+values are
+`f4b5292ae055fd299e5ea8d2b42af8b907bb9bf1002e7c5bb3796f8e1069949f`,
+`1981e8cea70c114c08916c9fc46adb810e458d8c7af057d2d437a533a77ec660`,
+and
+`f5daf220ab282cad769bf51509e86ca3c7ed3299117c00d1cab4cf54354f4f16`.
+The patch replaces the vulnerable prefixed logging formatter, removes its
+unused vulnerable and test-only closure, and updates the required Go module
+inputs. The patched `main.go`, `go.mod`, and `go.sum` are pinned at SHA-256
+`a600f1ece4dde5b86707b52bc157378f50889f69f780442abe18577e0cf895c0`,
+`8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b`,
+and
+`21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe`.
+Both the patched source and the resulting binary scan clean with the pinned
+`govulncheck` evidence.
+
+Provisioning runs no-argument `go mod download`, never `go mod download all`.
+It records and validates all 17 selected module zip/`.mod` pairs and the 13
+additional graph-only `.mod` records that pinned Go 1.26.5 needs to load this
+module graph. The separately recorded `go version -m` closure contains exactly
+12 compiled dependencies. Two independent fresh caches each materialized
+exactly 17 zips and 30 `.mod` files, passed denied-network `go mod verify`, and
+produced the byte-identical pinned executable; this distinction avoids
+mislabeling test-side verification inputs as runtime dependencies. Every
+bootstrap and build step fixes `GOENV=off`, `GOWORK=off`,
+`GOTOOLCHAIN=local`, disabled CGO, and the Darwin arm64 v8.0 target. The
+checksum-locked Go 1.26.5 compiler runs this deterministic build:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z" -o golines .
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The resulting 7,341,970-byte executable is pinned at SHA-256
+`4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75`.
+Its exact `--version` output and Go build metadata bind the patched product
+version, source commit/date, Go 1.26.5, trimpath, disabled CGO, target, and all
+12 embedded dependencies. Go is a build toolchain component only; runtime case
+execution exposes Golines and pinned Python, not the compiler.
+
+The evaluated immediate phase and explicit deferred workflow use pinned Python
+3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> golines verify|write {extra-args} __VELVET_GLOVE_GOLINES_FILES__ {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The adapter rejects every extra argument, duplicate or noncanonical path,
+symlink, linked ancestor, hard-link alias, and non-regular source. It accepts a
+bounded batch of explicit `.go` files only. Native project `-w` is never
+invoked. Instead, every selected source is read from a retained descriptor and
+sent to a private checksum-validated child on owned mode-0600 stdin with the
+fixed arguments `--base-formatter=gofmt --no-ignore-generated`. A pinned
+generated-source canary binds those semantics, including the deliberate
+formatting of explicitly selected generated-marker and `generated_*` files.
+Every candidate must pass an exact second formatter fixed point, and the whole
+candidate batch is precomputed before any project write.
+
+Verify emits only validated dirty paths in selected order. Write acquires
+writable descriptors for the complete dirty subset before the first mutation,
+revalidates each target immediately before truncation, and performs a pinned
+formatter check after every completed write. Clean files retain validated
+bytes, identity, link count, mode, size, and mtime; atime may change and
+clean-file ctime is not promised. Rollback of partial and completed writes is
+guarded by the exact adapter-owned candidate or partial bytes plus captured
+metadata, identity, link count, and mode. A concurrent edit that no longer
+matches that retained state is preserved and reported unsafe to overwrite.
+Native status, stderr, malformed output, output overflow, mutation, and cleanup
+failure dominate findings and are normalized to operational status two. Native
+failure evidence is reduced to a fixture-locked sanitized two-line diagnostic
+that cannot expose private paths or partial source bytes.
+
+The five-case matrix covers clean input, one long-line rewrite, a three-file
+batch with a clean selected source and unselected sentinel, a dirty-before-
+syntax-error operational batch, and an explicitly selected generated file.
+Claude and Codex goldens cover immediate behavior plus explicit deferred check,
+remedy, independent final check, exact diff, and idempotence. Exact tool traces
+bind two setup children plus two native calls per selected source for verify,
+and one additional post-commit call per source for write. They bind the
+adapter-to-shim stdin state separately from the shim-to-native state: the shim
+copies the exact bytes through independently positioned descriptors for one
+private mode-0600 backing file, unlinks that file before populating it, closes
+the sole writable descriptor, and gives the native child a read-only descriptor
+for the same device and inode that the trace records. Thus every native call is
+proven to receive an unlinked regular file with the exact expected size, bytes,
+and SHA-256; the no-stdin version probe's inherited `/dev/null` remains visible
+only in the separate wrapper-input evidence. Traces also bind the private
+executable identity.
+
+The evaluated adversarial lifecycle covers extra arguments, malformed paths,
+aliases and topology races, hostile environments, executable/sidecar/native
+mutation, false-clean and non-fixed formatters, aggregate and output bounds,
+read-only targets, between-write and partial-write concurrency, guarded and
+failed rollback, HUP/INT/TERM, timeouts, and inherited or closed-pipe
+descendants. Unselected files and project/module resolution are outside this
+stdin-only contract. SIGKILL or power loss, exhausted storage, the narrow
+per-target validation-to-truncate interval, external concurrent actors, and
+descendants that deliberately escape their process group remain explicit
 operating-system limitations.
 
 ### Betterleaks validation contract
