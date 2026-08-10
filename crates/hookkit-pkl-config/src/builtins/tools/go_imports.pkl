@@ -1858,7 +1858,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         }
         writes = "target-files"
       }
-      checkScope = "target-files"
+      checkScope = "workspace"
       invocation = "batch"
     }
   }

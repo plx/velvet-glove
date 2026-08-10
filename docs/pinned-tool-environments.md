@@ -720,6 +720,11 @@ siblings. That sibling rule can mirror an externally named path, but external
 dependency fetching, resolution, validity, compilation, and type correctness
 are not claimed.
 
+Because resolution consumes the full inventoried module, the deferred check
+scope is workspace-wide. A later workflow write anywhere under that module
+invalidates and reruns an earlier goimports check, including a write to an
+unselected same-directory sibling.
+
 Verify emits only validated dirty paths in selected order. Write opens retained
 descriptors only for proven-dirty files, revalidates each immediately before
 truncation, and performs an authoritative post-commit shadow check. A partial

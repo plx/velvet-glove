@@ -15654,7 +15654,7 @@
               "kind": "explicit-workflow",
               "order": 0,
               "invocation": "batch",
-              "checkScope": "target-files",
+              "checkScope": "workspace",
               "workingDirectory": "workspace",
               "workspaceIndicator": "go.mod",
               "fileIncludes": [
@@ -15856,7 +15856,8 @@
           ],
           "references": [
             "cargo:test/run_all_tool_fixtures[goimports/immediate-contract]",
-            "cargo:test/goimports_evaluated_adapter_adversarial_lifecycle"
+            "cargo:test/goimports_evaluated_adapter_adversarial_lifecycle",
+            "cargo:test/workspace_check_is_invalidated_by_later_unselected_target_write"
           ],
           "reason": null,
           "trackingIssue": null

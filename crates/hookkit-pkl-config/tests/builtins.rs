@@ -1631,7 +1631,7 @@ fn goimports_builtin_uses_a_closed_shadow_module_and_transactional_commit() {
     assert!(check.issues_on_stdout);
     assert_eq!(check.writes, WriteBehavior::None);
     assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
-    assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(workflow.check_scope, CheckScope::Workspace);
     assert_eq!(workflow.invocation, InvocationGranularity::Batch);
 
     let ArgvElement::Literal(adapter) = &check.argv[2] else {
