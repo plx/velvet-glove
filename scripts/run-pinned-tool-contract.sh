@@ -305,8 +305,12 @@ fi
 
 groups=$("$jq_bin" -r --arg selection "$selection" \
   '($selection | split(",") | map(split("/")[0])) as $tools
-   | [.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId] as $environmentIds
-   | [.environments[] | select(.id as $id | $environmentIds | index($id)) | .provisioningGroup]
+   | [.recipes[] as $recipe
+      | select(any($tools[]; . == $recipe.toolId))
+      | $recipe.environmentId] as $environmentIds
+   | [.environments[] as $environment
+      | select(any($environmentIds[]; . == $environment.id))
+      | $environment.provisioningGroup]
    | unique | join(",")' "$registry")
 
 vacuum_selected=false
@@ -327,12 +331,14 @@ while IFS= read -r tool_spec; do
   tool_specs+=("$tool_spec")
 done < <("$jq_bin" -r --arg selection "$selection" '
   ($selection | split(",") | map(split("/")[0])) as $tools
-  | ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
+  | ([.recipes[] as $recipe
+      | select(any($tools[]; . == $recipe.toolId))
+      | $recipe.environmentId]
      | unique) as $environmentIds
   | (.sharedComponents
-     + [.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | .components[]])
+     + [.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | $environment.components[]])
   | map(select(.miseTool != null) | .miseTool)
   | unique[]' "$registry")
 if [[ ${#tool_specs[@]} -eq 0 ]]; then

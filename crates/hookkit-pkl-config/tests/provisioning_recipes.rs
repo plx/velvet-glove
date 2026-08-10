@@ -1139,6 +1139,143 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
 }
 
 #[test]
+fn pinned_runner_registry_selection_is_exact_and_parser_stable() {
+    let registry: Registry = serde_json::from_str(RECIPES_JSON).expect("strict recipe registry");
+    let plan = |selected_tools: &BTreeSet<&str>| {
+        let environment_ids = registry
+            .recipes
+            .iter()
+            .filter(|recipe| selected_tools.contains(recipe.tool_id.as_str()))
+            .map(|recipe| recipe.environment_id.clone())
+            .collect::<BTreeSet<_>>();
+        let selected_environments = registry
+            .environments
+            .iter()
+            .filter(|environment| environment_ids.contains(&environment.id))
+            .collect::<Vec<_>>();
+        let groups = selected_environments
+            .iter()
+            .map(|environment| environment.provisioning_group.clone())
+            .collect::<BTreeSet<_>>();
+        let mise_tools = registry
+            .shared_components
+            .iter()
+            .chain(
+                selected_environments
+                    .iter()
+                    .flat_map(|environment| environment.components.iter()),
+            )
+            .filter_map(|component| component.mise_tool.clone())
+            .collect::<BTreeSet<_>>();
+        (environment_ids, groups, mise_tools)
+    };
+
+    let errcheck_tools = BTreeSet::from(["errcheck"]);
+    let (environment_ids, groups, mise_tools) = plan(&errcheck_tools);
+    assert_eq!(
+        environment_ids,
+        BTreeSet::from(["macos-arm64-errcheck".to_owned()])
+    );
+    assert_eq!(groups, BTreeSet::from(["go".to_owned()]));
+    assert_eq!(
+        mise_tools,
+        BTreeSet::from([
+            "go@1.26.5".to_owned(),
+            "jq@1.8.2".to_owned(),
+            "pkl@0.31.1".to_owned(),
+            "python@3.14.5".to_owned(),
+        ])
+    );
+
+    let representative_tools = registry
+        .recipes
+        .iter()
+        .map(|recipe| recipe.tool_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let (environment_ids, groups, mise_tools) = plan(&representative_tools);
+    assert_eq!(
+        environment_ids,
+        [
+            "macos-arm64-buf",
+            "macos-arm64-cargo-clippy",
+            "macos-arm64-contextlint",
+            "macos-arm64-data-formats",
+            "macos-arm64-dclint",
+            "macos-arm64-errcheck",
+            "macos-arm64-eslint",
+            "macos-arm64-github-actions",
+            "macos-arm64-go",
+            "macos-arm64-node",
+            "macos-arm64-prettier",
+            "macos-arm64-python",
+            "macos-arm64-ruby",
+            "macos-arm64-rust",
+            "macos-arm64-security",
+            "macos-arm64-swift",
+            "macos-arm64-vacuum",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert_eq!(
+        groups,
+        [
+            "cargo-clippy",
+            "contextlint",
+            "data-formats",
+            "dclint",
+            "eslint",
+            "github-actions",
+            "go",
+            "node",
+            "prettier",
+            "python",
+            "ruby",
+            "rust",
+            "security",
+            "swift",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert_eq!(
+        mise_tools,
+        [
+            "buf@1.72.0",
+            "go@1.26.5",
+            "jq@1.8.2",
+            "node@24.18.0",
+            "pkl@0.31.1",
+            "python@3.14.5",
+            "swiftlint@0.65.0",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+    for (name, runner) in [("outer", outer.as_str()), ("inner", inner.as_str())] {
+        assert!(
+            !runner.contains("select(.toolId as $tool | $tools | index($tool))"),
+            "{name} must bind the recipe outside its membership predicate"
+        );
+        assert!(
+            !runner.contains("select(.id as $id | $environmentIds | index($id))"),
+            "{name} must bind the environment outside its membership predicate"
+        );
+    }
+    assert!(!inner.contains("any(.recipes[] as"));
+    assert!(inner.contains(". as $registry\n  | ([.recipes[] as $recipe"));
+}
+
+#[test]
 #[cfg(unix)]
 fn ghalint_source_provenance_and_runner_binding_are_exact() {
     let root = repository_root();

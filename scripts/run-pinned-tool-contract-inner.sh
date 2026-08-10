@@ -215,9 +215,10 @@ if [[ $errcheck_selected == true ]]; then
 fi
 shared_node_selected=false
 if jq -e --argjson tools "$tool_ids" '
-  any(.recipes[];
-      (.toolId as $tool | $tools | index($tool)) != null
-      and .environmentId == "macos-arm64-node")' "$registry" >/dev/null; then
+  [.recipes[] as $recipe
+   | select(any($tools[]; . == $recipe.toolId))
+   | select($recipe.environmentId == "macos-arm64-node")]
+  | length > 0' "$registry" >/dev/null; then
   shared_node_selected=true
 fi
 prettier_node="$VELVET_GLOVE_FIXTURE_PRETTIER_ROOT/node/bin/node"
@@ -336,12 +337,14 @@ while IFS= read -r program; do
     *)
       if jq -e --arg path "$resolved_real" \
         --argjson tools "$tool_ids" \
-        '([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
+        '([.recipes[] as $recipe
+           | select(any($tools[]; . == $recipe.toolId))
+           | $recipe.environmentId]
           | unique) as $environmentIds
          | [(.sharedComponents[],
-              (.environments[]
-               | select(.id as $id | $environmentIds | index($id))
-               | .components[]))
+              (.environments[] as $environment
+               | select(any($environmentIds[]; . == $environment.id))
+               | $environment.components[]))
             | select(.integrity.kind == "host-program")
             | .integrity.path]
          | index($path) != null' "$registry" >/dev/null; then
@@ -359,19 +362,21 @@ while IFS= read -r program; do
     --arg kind "$resolution_kind" \
     '{program: $program, path: $path, realPath: $realPath, kind: $kind}' >>"$resolved_file"
 done < <(jq -r --argjson tools "$tool_ids" '
-  ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
+  ([.recipes[] as $recipe
+    | select(any($tools[]; . == $recipe.toolId))
+    | $recipe.environmentId]
    | unique) as $environmentIds
   | (["cargo"]
      + [.sharedComponents[].probe.argv[0]]
-     + [.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | .components[].probe.argv[0]]
-     + [.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | .auxiliaryPrograms[]]
-     + [.recipes[]
-        | select(.toolId as $tool | $tools | index($tool))
-        | .caseExecutables[]])
+     + [.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | $environment.components[].probe.argv[0]]
+     + [.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | $environment.auxiliaryPrograms[]]
+     + [.recipes[] as $recipe
+        | select(any($tools[]; . == $recipe.toolId))
+        | $recipe.caseExecutables[]])
   | unique[]' "$registry")
 
 while IFS= read -r probe; do
@@ -553,14 +558,16 @@ while IFS= read -r probe; do
     '{owner: $owner, argv: $argv, observed: $observed}' >>"$observed_file"
 done < <(jq -c --argjson tools "$tool_ids" '
   [.sharedComponents[] | {owner: .id, probe: .probe}]
-  + ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId] as $environmentIds
-     | [.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | .components[]
+  + ([.recipes[] as $recipe
+      | select(any($tools[]; . == $recipe.toolId))
+      | $recipe.environmentId] as $environmentIds
+     | [.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | $environment.components[]
         | {owner: .id, probe: .probe}])
-  + [.recipes[]
-     | select(.toolId as $tool | $tools | index($tool))
-     | {owner: .toolId, probe: .probe}]
+  + [.recipes[] as $recipe
+     | select(any($tools[]; . == $recipe.toolId))
+     | {owner: $recipe.toolId, probe: $recipe.probe}]
   | unique_by([.owner, .probe.argv])[]' "$registry")
 
 export VELVET_GLOVE_FIXTURE_SELECTION="$selection"
@@ -582,7 +589,9 @@ lock_sha256=$(shasum -a 256 "$provisioning_dir/mise.lock" | awk '{print $1}')
 generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 os_version=$(sw_vers -productVersion)
 recipe_ids=$(jq -c --argjson tools "$tool_ids" \
-  '[.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .id]' "$registry")
+  '[.recipes[] as $recipe
+    | select(any($tools[]; . == $recipe.toolId))
+    | $recipe.id]' "$registry")
 while IFS= read -r lock_path; do
   case $lock_path in
     /* | *..*)
@@ -598,22 +607,26 @@ while IFS= read -r lock_path; do
   jq -cn --arg path "$lock_path" --arg sha256 "$lock_digest" \
     '{path: $path, sha256: $sha256}' >>"$lock_digest_file"
 done < <(jq -r --argjson tools "$tool_ids" '
-  ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
+  ([.recipes[] as $recipe
+    | select(any($tools[]; . == $recipe.toolId))
+    | $recipe.environmentId]
    | unique) as $environmentIds
   | ([.mise.lock]
      + [.sharedBootstrap[].lockfile]
      + [.sharedComponents[]
         | select(.integrity.kind != "host-program")
         | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)]
-     + [.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | (.components[]
+     + [.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | ($environment.components[]
            | select(.integrity.kind != "host-program")
            | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)),
-          .bootstrap[].lockfile]
-     + [.recipes[]
-        | select(.toolId as $tool | $tools | index($tool))
-        | (.integrity.path, .integrity.moduleManifestPath, .integrity.moduleLockPath)])
+          $environment.bootstrap[].lockfile]
+     + [.recipes[] as $recipe
+        | select(any($tools[]; . == $recipe.toolId))
+        | ($recipe.integrity.path,
+           $recipe.integrity.moduleManifestPath,
+           $recipe.integrity.moduleLockPath)])
   | map(select(. != null))
   | unique[]' "$registry")
 if printf '%s\n' "$tool_ids" | jq -e 'index("vacuum") != null' >/dev/null; then
@@ -625,16 +638,19 @@ if printf '%s\n' "$tool_ids" | jq -e 'index("vacuum") != null' >/dev/null; then
 fi
 artifact_digests=$(jq -c --argjson tools "$tool_ids" '
   . as $registry
-  ([.recipes[] | select(.toolId as $tool | $tools | index($tool)) | .environmentId]
-   | unique) as $environmentIds
+  | ([.recipes[] as $recipe
+      | select(any($tools[]; . == $recipe.toolId))
+      | $recipe.environmentId]
+     | unique) as $environmentIds
   | [(
        .sharedComponents[],
-       (.environments[]
-        | select(.id as $id | $environmentIds | index($id))
-        | .components[]),
-       (.recipes[]
-        | select(.toolId as $tool | $tools | index($tool))
-        | select(.integrity.kind == "go-module-build"))
+       (.environments[] as $environment
+        | select(any($environmentIds[]; . == $environment.id))
+        | $environment.components[]),
+       (.recipes[] as $recipe
+        | select(any($tools[]; . == $recipe.toolId))
+        | select($recipe.integrity.kind == "go-module-build")
+        | $recipe)
      )
      | select(
          .integrity.kind == "sha256-archive"
