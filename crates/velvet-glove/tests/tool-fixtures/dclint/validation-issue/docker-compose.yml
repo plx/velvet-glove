@@ -1,5 +1,0 @@
-name: fixture-validation-issue
-services:
-  web:
-    image: nginx:1.27.0
-  invalid: [

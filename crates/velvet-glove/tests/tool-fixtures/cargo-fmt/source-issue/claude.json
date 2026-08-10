@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "additionalContext": "cargo fmt changed src/example.rs; re-read changed files before editing further.",
-    "hookEventName": "PostToolUse"
-  }
-}

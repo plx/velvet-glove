@@ -1,9 +1,0 @@
-warning: ghalint (workflow): issues remain; diagnostics: <workspace>/.velvet-glove/ghalint-workflow-agent-hook/test-session_test-turn_ghalint-workflow-tool_ghalint-workflow-tool-issues.txt
-ghalint (workflow) diagnostics:
-[verify] command: python -I -c <inline-script> ghalint <workspace> __VELVET_GLOVE_GHALINT_WORKFLOW_FILES__ <workspace>/.github/workflows/example.yml <workspace>/.github/workflows/selected.yaml
-status: Some(1)
-classification: Some(Issues)
-stdout:
-{"issues":[{"error":"job should have permissions","file":".github/workflows/example.yml","job":"selected","kind":"policy","message":"the job violates policies","policy":"job_permissions","step":null},{"error":"job's timeout-minutes is required","file":".github/workflows/example.yml","job":"selected","kind":"policy","message":"the job violates policies","policy":"job_timeout_minutes_is_required","step":null}],"status":"issues"}
-artifact: <workspace>/.velvet-glove/ghalint-workflow-agent-hook/test-session_test-turn_ghalint-workflow-tool_ghalint-workflow-tool-issues.txt
-hookkit: redirected user notices and diagnostics to protocol stderr

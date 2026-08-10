@@ -1,3 +1,0 @@
-= Operational failure fixture
-
-This document is valid; the fixture injects an invalid backend through `extraArgs`.

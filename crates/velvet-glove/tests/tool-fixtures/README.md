@@ -4,23 +4,9 @@ Each fixture exercises one builtin tool against a small on-disk example and
 verifies the runner's harness-specific output. Fixtures are auto-discovered by
 the `tool_fixtures.rs` integration test.
 
-Every `<tool-id>/<example-name>` directory is also declared in the catalog
-[`manifest.json`](../../../hookkit-pkl-config/validation/manifest.json).
-A nonignored manifest test rejects undeclared or missing fixture tools and
-cases. Fixture presence is inventory only: by itself it does not count as
-rendered-command or pinned-real-tool evidence in the generated validation
-coverage report.
-
-The ordinary test lane validates the complete inventory and sends canonical,
-typed Claude, Codex, and Antigravity inputs through the real `velvet-glove`
-binary to a probe executable. The probe asserts the program, exact argv, cwd,
-sentinel environment, and one invocation per protocol surface. The ignored
-real-tool lane keeps the full golden matrix on Claude and Codex; Antigravity's
-native lowering is covered by the probe without duplicating the full catalog.
-
 ## Directory layout
 
-```text
+```
 tests/tool-fixtures/<tool-id>/<example-name>/
   example.<ext>                # the input file (required)
   <supporting files>           # optional sibling files copied as-is
@@ -31,17 +17,11 @@ tests/tool-fixtures/<tool-id>/<example-name>/
   codex.json codex.stderr.txt codex.exit
 ```
 
-- `<tool-id>` matches the tool's `id` field in
-  `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl` (for example,
-  `ruff` or `cargo-fmt`).
+- `<tool-id>` matches the tool's `id` field in `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl` (e.g. `ruff`, `cargo-fmt`).
 - The harness picks the entry file (the one cited in the synthesized
-  `PostToolUse` event) by first looking for a top-level file whose name starts
-  with `example.`. This preserves the established multi-file fixtures. If no
-  top-level marker exists, it recursively requires exactly one nested
-  `example.*` file so project-shaped fixtures can use conventional source
-  directories such as `src/pages/`. Ambiguous nested markers fail closed. If
-  there is no marker at either depth, the first non-golden,
-  non-`expected/` file at the fixture root is used.
+  `PostToolUse` event) by looking for a top-level file whose name starts with
+  `example.`. If none exists, the first non-golden, non-`expected/` file at
+  the fixture root is used.
 - Every non-golden, non-`expected/` file (including subdirectory contents like
   `src/main.rs` or `Cargo.toml`) is copied into the test's temp workspace at
   the same relative path.
@@ -57,28 +37,15 @@ comparison). Absent means stderr is expected to be empty.
 
 `<harness>.exit` is a single line with the expected exit code. Absent means 0.
 
-If `<harness>.json` is missing, the harness expects the native no-op response
-`{}`. This makes a newly supported structured response fail visibly until its
-golden is reviewed.
+If `<harness>.json` is missing, the harness asserts stdout is empty for that
+harness — useful when a harness can't represent a scenario (e.g. Codex has no
+post-tool additional-context surface).
 
 ## `expected/` post-state mirror
 
 Any files inside `expected/<rel-path>` are compared against the post-run
 content of `<rel-path>` in the temp workspace. Use this when the tool rewrites
 a file (autofix, formatting) and you want to assert the result.
-
-For retained mutating contracts, the mirror is also the exact changed-file
-allowlist: every mirrored path must change, no unmirrored source path may
-change, and the second immediate/deferred run must produce an empty diff. This
-lets a multi-file fixture retain clean or intentionally dirty unselected
-sentinels without weakening the complete-workspace-diff assertion.
-
-The mirror may include files outside the event's candidate set when an
-evaluated remedy declares `matching-globs` or `workspace` writes. The retained
-deferred evidence must then report those snapshot-discovered files in
-`changedFiles` and in the file-result union while preserving the original
-candidate list. Remedies declared `target-files` remain restricted to event
-candidates.
 
 ## Normalization placeholders
 
@@ -89,276 +56,8 @@ golden files should use `<workspace>` for anything under the test project.
 The session id is fixed at `test-session`, so golden files can reference it
 directly without normalization.
 
-When `NODE_PATH` supplies a controlled pinned package graph, its raw and
-canonical roots are normalized to `<node_modules>`. This keeps operational
-stack paths reproducible without hiding which package-relative module emitted a
-diagnostic.
+## Skip behavior
 
-## Running the lanes
-
-Pkl 0.31.1 is a required prerequisite for both lanes. Run the hermetic
-inventory and probe gates with:
-
-```sh
-cargo test -p velvet-glove --test tool_fixtures
-```
-
-Run the host-tool compatibility matrix explicitly with:
-
-```sh
-cargo test -p velvet-glove --test tool_fixtures \
-  run_all_tool_fixtures -- --ignored --exact --nocapture
-```
-
-Run one selected case in its pinned, controlled macOS environment with:
-
-```sh
-just tool-case jq multi-file-fragments
-```
-
-Run the twenty pinned representative contracts across sixteen controlled
-environments with `just tool-representatives`. See the
-[pinned environment guide](../../../../docs/pinned-tool-environments.md) for
-versions, integrity locks, platform constraints, bootstrap steps, active network
-denial, and evidence output.
-
-Discovery fails on a missing or empty root, zero tools, zero cases, filesystem
-errors, empty tool directories, and fixture directories without an enabled
-builtin owner. Missing host tool programs remain structured skips until the
-pinned provisioning lane supplies them. Set
-`VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS=all` (or a comma-separated tool-id list)
-to promote unavailable selected programs to failures. Unknown or fixture-less
-tool ids are configuration errors rather than silent no-ops.
-
-`VELVET_GLOVE_FIXTURE_SELECTION` accepts a comma-separated list of `tool-id` or
-`tool-id/case-id` selectors. It rejects unknown and redundant selectors, filters
-the discovered catalog before execution, and automatically makes every selected
-tool required. The pinned driver sets this variable; direct use remains useful
-when debugging an already controlled environment.
-
-Those skips describe only the ignored host-tool compatibility lane. The
-validation manifest records unmet supported-catalog requirements as explicit
-gaps; a skip here never promotes a coverage tier to covered.
-
-Every subprocess is bounded to 60 seconds. Override that positive whole-second
-limit with `VELVET_GLOVE_FIXTURE_TIMEOUT_SECS`.
-
-Every run prints versioned JSON after the
-`VELVET_GLOVE_FIXTURE_JSON=` prefix, including tool, case, surface,
-pass/skip/fail, structured skip-reason, and probe-command totals. To retain a
-failed case's workspace, generated config, native input, stdout, stderr, exit
-status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
-directory. Probe and fixture-setup failures are retained there too. A complete
-run report is written to the stable `report.json` path, with a timestamped copy
-alongside it. Successful jq, Vacuum, Asciidoctor, Astro, Betterleaks, Biome,
-Prettier, Contextlint, dclint, ESLint, ghalint Workflow, Buf Format, gofmt,
-Cargo Clippy, and Cargo Fmt contract cases are retained too.
-Their evidence includes
-exact pass-through program/argv/cwd/environment traces (including
-Asciidoctor's nested FATAL preflight and WARNING validation, Astro's single
-nested project check, and
-Betterleaks' marker-delimited batch adapter with locked redaction and finding
-status plus inherited-config scrubbing, and its distinct status-1 missing-config
-failure with the adapter's production-canonicalized `<time> FTL` diagnostic,
-plus Biome's isolated mode-and-files adapter, locked JSON-report suffix, and
-fully scrubbed child control/log environment),
-complete workspace snapshots and diffs for repeated immediate runs,
-and two independent deferred
-summaries plus their semantic idempotence comparison. Biome mutating cases
-retain independent pristine baselines for the immediate `fix` → `verify`
-pipeline and compatibility-deferred `initial-check` → `remedy` →
-`final-check` lifecycle. They bind exact post-remedy bytes and changed paths,
-then prove either a verify-only clean fixed-state rerun or an unchanged full
-rerun for persistent source issues. Astro traces additionally
-bind `NODE_PATH` to the same controlled `node_modules` graph as the pinned
-Astro executable, verify all three required package manifests, and record
-disabled telemetry, non-interactive CI mode, and a cleared debug channel. Other
-successful case workspaces are removed.
-
-Prettier traces bind a dedicated Node 24.19.0 executable and Prettier 3.9.6 CLI
-from one case-only root rather than the shared Node graph. Every native child
-receives the controlled config (`/dev/null` or a validated private JSON copy),
-fixed no-discovery controls, a minimal locale/color environment, and either one
-read-only `--list-different` batch or one write batch after a successful
-read-only format preflight. The four cases distinguish clean completion, stable
-dirty attribution, invalid configuration as operational failure, and exact
-two-file batch selection with
-an untouched sentinel. The hostile lifecycle probe proves raw private paths
-are normalized, private config is removed across child failure and active or
-cleanup-window signals, normally exiting same-process-group descendants are
-swept and rejected, and a mixed dirty-valid/parse-invalid format attempt never
-reaches the write command. It does not claim protection from concurrent target
-replacement after validation, a target change after format preflight, an
-escaped process group, or partial writes after a late native failure.
-
-Contextlint traces bind a separate dedicated Node 24.19.0 executable and the
-exact `@contextlint/cli` plus `@contextlint/core` 1.1.1 graph. Every adapter
-invocation first runs the exact private SEC-001 completion probe, then passes
-the complete physical Markdown inventory to the project invocation with the
-controlled config copied into the private root. Both children receive fixed
-permission flags, exact read roots, a minimal environment, and no filesystem
-writes, child processes, workers, or native addons. The four cases distinguish
-clean completion, a warning-only source issue, project and unselected-file
-diagnostics in a multi-file workspace, and a permission failure that must map
-to operational status two. A mixed-case-only clean target and the runner's
-FileMatcher regression prove `.Md`, `.mD`, and mixed `.markdown` suffixes are
-selected while root and nested `.git`, `node_modules`, and `.velvet-glove`
-subtrees are excluded. The hostile lifecycle/no-op probes cover config-source
-replacement, active and cleanup-window signals, guarded spawn, output bounds,
-closed-stdio and inherited-pipe descendants, ancestor indicator symlinks,
-every exact Contextlint glob-magic character in a Markdown or ancestor path,
-excluded-root symlinks, and invalid or unwritable temporary roots. Every
-symlink encountered outside physically skipped directories is rejected;
-nested symlinks inside real skipped trees are unwalked and outside inventory.
-Node receives the lexical workspace read root, so built-in existence checks
-targeting skipped content can follow such a nested symlink. Concurrent
-workspace topology, referenced-target, Markdown, config, or executable
-replacement cannot be eliminated, and a descendant that deliberately escapes
-the owned session/process group is outside containment. Node permissions are
-not the OS network sandbox, so pinned evidence also requires active deny-net.
-
-dclint traces bind a dedicated Node 24.19.0 executable and the exact dclint
-3.1.0 CLI from a case-only, integrity-locked npm root. Every native child gets
-the validated private mode-0600 JSON config, fixed JSON/color/warning options,
-a canonical temporary root, and a scrubbed Node, loader, debug, locale, and
-color environment. Fix mode first traces a read-only batch over every selected
-file, sends only files with proven fixable diagnostics to `--fix`, then repeats
-the authoritative read-only batch. The five cases distinguish clean
-completion, a persistent nonfixable source rule, invalid YAML, exact two-file
-selection with one-file mutation and an untouched unselected sentinel, and an
-unsafe executable-loading config rejected before native spawn. Immediate and
-explicit deferred runs use independent pristine baselines and prove exact
-changed bytes, complete candidate attribution, authoritative post-remedy
-verification, and clean or persistent-issue idempotence.
-
-The evaluated lifecycle probe additionally covers selected and config
-symlinks/hard links, out-of-project and control-character paths, source-config
-replacement, topology/metadata/out-of-subset mutation rollback, rollback and
-private-cleanup failure composition, guarded spawn, active and cleanup-window
-signals, inherited-pipe descendants, bounded output, unwritable temporary
-roots, and symlink/trailing-slash `TMPDIR` canonicalization. Its config cases
-prove the native default and numeric top-level-order settings are replaced by
-the complete extension/`models`-preserving order, a complete explicit user
-order and severity survive unchanged, incomplete orders and cross-group
-service-key duplication reject at zero children, and the unsafe native
-`no-version-field` rule is forced off while every explicit enable rejects at
-zero children. The destructive fake and real pinned case both prove a nested
-extension `version:` hidden by `disable-line` survives an unrelated fix. Fixed
-skipped subtrees, concurrent replacement races, an unsuccessful rollback, and
-descendants that deliberately escape the owned session/process group remain
-outside the claim.
-
-ESLint traces bind the dedicated Node 24.19.0 executable and exact ESLint
-10.8.1 JavaScript CLI from one integrity-locked npm root. Every native child
-uses a private mode-0600 built-in-rule CJS config and suppressions document, a
-distinct private content-cache path, fixed no-discovery controls, and a
-minimal environment with ambient Node, npm, ESLint, loader, home, and cache
-channels cleared. The five cases distinguish clean completion, a persistent
-source diagnostic, configuration rejected before native spawn, exact autofix,
-and a two-file mixed batch with an untouched unselected sentinel. Immediate
-and compatibility-deferred mutations start from independent pristine
-baselines and prove read-only preflight, exact `--fix-dry-run` prediction,
-changed-file bytes, authoritative final verification, and idempotence.
-
-The evaluated adversarial lifecycle additionally proves strict data-only
-configuration, link and alias rejection, bounded UTF-8 inputs/output, private
-root modes and cleanup, unique cache state per native child, fully normalized
-evidence paths, guarded spawn, active and cleanup-window signals, and
-same-group descendant sweeping. Project config, plugins, parsers, processors,
-ignores, inline directives, and suppressions never become authority. JSX and
-TypeScript are deliberately outside the supported file set. Concurrent
-selected-file or executable replacement, late partial native writes, and a
-descendant that deliberately escapes the owned session/process group remain
-outside the claim; the adapter does not attempt an unsafe rollback.
-
-ghalint Workflow traces bind the reproducibly built
-`ghalint 1.5.6+velvet-glove.1` executable and pinned Python 3.14.5 adapter.
-Every validation inventories the complete physical top-level
-`.github/workflows/*.yml`-then-`*.yaml` set, validates the marker-delimited
-nonempty selected candidate subset, and records the exact version probe plus
-one native workspace-wide `ghalint run` child. The source, module closure patch,
-patched `go.mod`/`go.sum`, locked Go 1.26.5 build, arm64 artifact digest, embedded
-module metadata, and system-only Mach-O closure are bound by the dedicated
-pinned environment.
-
-The six cases distinguish clean completion, ordinary policy findings, native
-action/GitHub-App/direct-workflow-secret policy field shapes, two structured
-workflow YAML parse shapes, invalid configuration, and complete multi-workflow
-scope, including a finding in an unselected top-level sibling. Status one is
-accepted as a source issue only when every timestamped
-native line matches the closed v1.5.6 policy or parse grammar; configuration
-records and every unknown or contradictory shape remain operational failures.
-Immediate and explicit deferred runs use independent pristine baselines, prove
-no retained-project mutation, and conservatively attribute workspace findings
-to every selected workflow. The evaluated lifecycle probe additionally covers
-the alternate configuration policy-name record, config and target aliases,
-zero or out-of-inventory candidates, executable/config/source replacement,
-unexpected-exception normalization, output bounds and per-child buffer reset,
-unwritable temporary roots without a child, private-path redaction, composed
-cleanup failures, signals before cleanup and after the blocked cutoff, and
-bounded inherited-pipe and closed-stdio same-group descendant cleanup. Physical
-fixed skipped subtrees, nested workflows, concurrent replacement races, and a
-descendant that deliberately escapes the owned session/process group remain
-outside the claim.
-
-gofmt traces bind the pinned executable behind an isolated Python adapter and
-record its fully scrubbed Go, loader, debug, locale, telemetry, and toolchain
-environment. Verify commands contain one native `-l`; write commands must
-trace a read-only `-l` preflight immediately before `-w`, while a status-two
-preflight must never reach `-w`. Immediate runs and explicit deferred
-`initial-check` → `remedy` → `final-check` attempts use independent pristine
-baselines. The four cases bind clean stdout, stdout-signaled dirty paths,
-failure dominance when a dirty filename precedes a parse diagnostic, exact
-multi-file mutation, an untouched unselected sentinel, the deferred
-authoritative final check, and semantic idempotence on both surfaces.
-
-Buf Format traces bind its isolated workspace adapter, absolute managed Buf
-executable, a `buf config ls-modules --log-format=text --format=json` scope
-preflight before every native format attempt, fixed formatter flags, Apple
-`diff` prerequisite, sanitized child `PATH`, scrubbed
-`BUF_*`/`DIFF_OPTIONS`/`DEBUG`, and a fixture-private `BUF_CACHE_DIR`. Dirty
-diagnostics must contain complete, sorted unified-diff blocks whose dynamic
-header mtimes were replaced with `<mtime>`. The multi-file case selects two
-candidates while also changing a workspace file outside that candidate set, so
-retained reports prove workspace write scope, conservative workspace attribution,
-and the full candidate-plus-changed file union.
-
-Cargo Clippy traces bind two distinct launchers from one case-only Rust 1.97.1
-toolchain: `cargo metadata` preflights the selected `Cargo.toml`, then the
-paired `cargo-clippy` performs a read-only, frozen JSON coverage probe with
-lint levels capped, followed by the authoritative `-Dwarnings` check. Fix and
-verify modes use those same native probes; mutation is adapter-internal. The
-adapter runs all children from a private target
-directory, preserves only a config-free controlled `CARGO_HOME`, binds the
-paired `cargo`/`rustc`/`rustdoc` executables, supplies an empty private Clippy
-configuration when the workspace has none, and scrubs Cargo, Rust, Clippy,
-cache-wrapper, loader, and debug overrides. The four-case matrix distinguishes
-clean completion, a persistent non-machine-applicable source lint, a semantic
-Clippy configuration failure, and a workspace-scoped autofix. The autofix case
-selects one dirty and one clean source while also repairing an unselected
-compiled source; its hostile `.cargo/config.toml` proves that ambient
-`rustflags` and forced tool/config variables cannot bypass the isolated check.
-The expected mirror is the complete two-file change allowlist, and the normal
-mutating lifecycle proves authoritative post-remedy verification plus
-immediate and compatibility-deferred idempotence.
-
-Cargo Fmt traces bind Cargo, cargo-fmt, rustfmt, and rustc from the same pinned
-Rust 1.97.1 component-set-qualified root. Each completed invocation records
-the adapter's root metadata and coverage-copy metadata/format preflights, plus
-cargo-fmt's nested metadata and rustfmt children. The five-case matrix covers
-clean and dirty packages, invalid rustfmt configuration, a fail-closed dormant
-`autobins = false` source, and workspace-wide multi-member mutation. The
-evaluated lifecycle probe additionally binds process-group cleanup, bounded
-output, alias and extra-argument rejection, byte-plus-mode and mtime-only
-mutation rejection, retained-directory add/remove/mode rejection, normalized
-unwritable-TMPDIR diagnostics, deterministic initialization and post-cleanup
-signal cutoffs, and private-root cleanup under repeated TERM. It proves exact
-file content/mode/mtime plus retained-directory topology/mode rollback and
-deterministic reporting when that best-effort rollback fails. Every normally
-completed child is checked for and sweeps remaining same-process-group
-descendants; a closed-stdio delayed-mutation orphan is rejected, while a child
-that deliberately escapes into a new session or process group remains outside
-the adapter's containment guarantee. File and directory inode identities and
-directory mtimes are not rollback fields, and subtrees named `.git`,
-`.velvet-glove`, `node_modules`, or `target` remain deliberately outside the
-retained topology and file snapshot scope.
+- If `pkl` isn't on PATH, the whole test prints "skipping" and returns.
+- If a tool's executable isn't on PATH, all that tool's fixtures are skipped.
+- Fixtures referencing a tool with no builtin spec are skipped with a notice.

@@ -1,9 +1,12 @@
-warning: jq: issues remain; diagnostics: <workspace>/.velvet-glove/jq-agent-hook/test-session_test-turn_jq-tool_jq-tool-issues.txt
+warning: jq: issues remain; diagnostics: <workspace>/.velvet-glove/jq-agent-hook/test-session_jq-tool-issues.txt
 jq diagnostics:
-[verify] command: jq empty <workspace>/example.json
+[verify] command: jq -e empty <workspace>/example.json
 status: Some(5)
 classification: Some(Issues)
 stderr:
 jq: parse error: Invalid numeric literal at line 1, column 5
-artifact: <workspace>/.velvet-glove/jq-agent-hook/test-session_test-turn_jq-tool_jq-tool-issues.txt
-hookkit: redirected user notices and diagnostics to protocol stderr
+artifact: <workspace>/.velvet-glove/jq-agent-hook/test-session_jq-tool-issues.txt (text/plain)
+project-relative artifact: .velvet-glove/jq-agent-hook/test-session_jq-tool-issues.txt
+summary: jq diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped

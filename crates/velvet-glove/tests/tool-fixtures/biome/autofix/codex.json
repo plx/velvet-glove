@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "Biome changed src/example.js; re-read changed files before editing further."
-  }
-}

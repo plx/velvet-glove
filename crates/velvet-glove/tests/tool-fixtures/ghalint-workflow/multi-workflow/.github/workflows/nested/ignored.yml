@@ -1,8 +1,0 @@
-name: ignored nested workflow
-on:
-  push:
-jobs:
-  ignored:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo ignored

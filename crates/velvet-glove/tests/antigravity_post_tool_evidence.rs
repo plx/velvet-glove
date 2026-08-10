@@ -1,24 +1,29 @@
 //! Antigravity's refreshed PostToolUse payload retains typed originating args.
 
-mod support;
-
-use support::native_events::{PostToolUseBuilder, ProtocolSurface};
-
 #[test]
 fn antigravity_post_tool_produces_direct_file_activity() {
-    let input = PostToolUseBuilder::new(ProtocolSurface::Antigravity, "/repo", "src/generated.rs")
-        .identity("conversation-1", "turn-1", "tool-1")
-        .build()
-        .expect("canonical Antigravity PostToolUse fixture");
-    let variables = input.environment_variables();
+    let input = br#"{
+      "conversationId": "conversation-1",
+      "workspacePaths": ["/repo"],
+      "transcriptPath": "/tmp/transcript.jsonl",
+      "artifactDirectoryPath": "/tmp/artifacts",
+      "toolCall": {
+        "name": "run_command",
+        "args": {
+          "CommandLine": "printf ok > src/generated.rs",
+          "Cwd": "/repo"
+        }
+      },
+      "stepIdx": 2
+    }"#;
 
     let emission = hookkit_runtime::aligned::execute_aligned_event::<
         hookkit_runtime::aligned::PostToolUse,
         _,
     >(
         hookkit_core::HarnessId::ANTIGRAVITY,
-        input.bytes(),
-        &variables,
+        input,
+        &hookkit_core::EnvironmentVariables::new(),
         |input, _environment, context| {
             let report = hookkit_file_activity::observe_post_tool(&input, context);
             assert!(report.evidence().any(|evidence| {

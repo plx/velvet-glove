@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "ESLint reports issues; inspect diagnostics at <workspace>/.velvet-glove/eslint-agent-hook/test-session_eslint-tool_eslint-tool-issues.txt."
-  }
-}

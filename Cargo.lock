@@ -1044,9 +1044,6 @@ name = "velvet-glove"
 version = "0.1.0"
 dependencies = [
  "clap",
- "hookkit-antigravity",
- "hookkit-claude",
- "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
  "hookkit-file-activity",
@@ -1055,7 +1052,6 @@ dependencies = [
  "hookkit-session-state",
  "hookkit-tool-runner",
  "serde_json",
- "wait-timeout",
 ]
 
 [[package]]

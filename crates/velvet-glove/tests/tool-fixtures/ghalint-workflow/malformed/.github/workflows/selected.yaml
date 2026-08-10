@@ -1,8 +1,0 @@
-name: malformed reusable-job secrets
-on:
-  workflow_call:
-permissions: {}
-jobs:
-  call:
-    uses: example/reusable/.github/workflows/check.yml@0123456789012345678901234567890123456789
-    secrets: everything

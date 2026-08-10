@@ -1,1 +1,0 @@
-The scanner must reject the deliberately unknown option before scanning this file.

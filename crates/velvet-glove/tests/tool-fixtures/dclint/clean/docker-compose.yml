@@ -1,4 +1,0 @@
-name: fixture-clean
-services:
-  web:
-    image: nginx:1.27.0

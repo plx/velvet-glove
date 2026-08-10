@@ -1,8 +1,0 @@
-name: selected source issue
-on:
-  push:
-jobs:
-  selected:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo issue

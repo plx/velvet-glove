@@ -3,12 +3,9 @@
 //! These tests pipe native hook JSON through the unified executable and verify
 //! stdout, stderr, exit codes, artifacts, and durable state behavior.
 
-mod support;
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use support::native_events::{PostToolUseBuilder, ProtocolSurface};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -539,21 +536,57 @@ run = new Listing {{ {run} }}
 }
 
 fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u8> {
-    let surface = ProtocolSurface::parse(harness).unwrap_or_else(|error| panic!("{error}"));
-    let identity_prefix = match surface {
-        ProtocolSurface::Claude => "claude-ruff",
-        ProtocolSurface::Codex => "codex-ruff",
-        ProtocolSurface::Antigravity => "antigravity-ruff",
+    let fixture = match harness {
+        "claude" => serde_json::json!({
+            "session_id": "claude-ruff-test",
+            "transcript_path": "/tmp/claude-ruff-test.jsonl",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": rel_path,
+                "content": "test fixture"
+            },
+            "tool_use_id": "claude-ruff-tool",
+            "tool_response": {
+                "filePath": project.join(rel_path).to_string_lossy()
+            }
+        }),
+        "codex" => serde_json::json!({
+            "session_id": "codex-ruff-test",
+            "transcript_path": "/tmp/codex-ruff-test.jsonl",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "PostToolUse",
+            "model": "gpt-test",
+            "turn_id": "codex-ruff-turn",
+            "permission_mode": "default",
+            "tool_name": "Write",
+            "tool_use_id": "codex-ruff-tool",
+            "tool_input": {
+                "file_path": rel_path,
+                "content": "test fixture"
+            },
+            "tool_response": {
+                "filePath": project.join(rel_path).to_string_lossy()
+            }
+        }),
+        "antigravity" => serde_json::json!({
+            "conversationId": "antigravity-ruff-test",
+            "workspacePaths": [project.to_string_lossy()],
+            "transcriptPath": "/tmp/antigravity-ruff-test.jsonl",
+            "artifactDirectoryPath": "/tmp/antigravity-ruff-artifacts",
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": format!("printf fixture > {rel_path}"),
+                    "Cwd": project.to_string_lossy()
+                }
+            },
+            "stepIdx": 2
+        }),
+        _ => panic!("unknown harness {harness}"),
     };
-    PostToolUseBuilder::new(surface, project, rel_path)
-        .identity(
-            format!("{identity_prefix}-test"),
-            format!("{identity_prefix}-turn"),
-            format!("{identity_prefix}-tool"),
-        )
-        .build()
-        .unwrap_or_else(|error| panic!("failed to build {surface} fixture: {error}"))
-        .into_bytes()
+    serde_json::to_vec(&fixture).unwrap()
 }
 
 fn codex_post_tool_case(
@@ -562,12 +595,20 @@ fn codex_post_tool_case(
     tool_use_id: &str,
     tool_input: serde_json::Value,
 ) -> Vec<u8> {
-    PostToolUseBuilder::new(ProtocolSurface::Codex, project, "src/codex-tool-call")
-        .identity("codex-ruff-test", "codex-ruff-turn", tool_use_id)
-        .tool(tool_name, tool_input, serde_json::json!({"exit_code": 0}))
-        .build()
-        .unwrap_or_else(|error| panic!("failed to build Codex tool fixture: {error}"))
-        .into_bytes()
+    serde_json::to_vec(&serde_json::json!({
+        "session_id": "codex-ruff-test",
+        "transcript_path": "/tmp/codex-ruff-test.jsonl",
+        "cwd": project.to_string_lossy(),
+        "hook_event_name": "PostToolUse",
+        "model": "gpt-test",
+        "turn_id": "codex-ruff-turn",
+        "permission_mode": "default",
+        "tool_name": tool_name,
+        "tool_use_id": tool_use_id,
+        "tool_input": tool_input,
+        "tool_response": {"exit_code": 0}
+    }))
+    .unwrap()
 }
 
 fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {

@@ -70,9 +70,7 @@ case "$action" in
     done
     ;;
   check-workspace)
-    for file in "$1"/*.go; do
-      if [ -f "$file" ] && grep -q 'BAD_A' "$file"; then exit 1; fi
-    done
+    if grep -R -q 'BAD_A' "$1"; then exit 1; fi
     ;;
   fix)
     for file in "$@"; do
@@ -146,7 +144,6 @@ fn command(
     workspace_arg: bool,
 ) -> ToolPhase {
     let mut args = vec![
-        CommandArgTemplate::literal(fixture.executable.to_string_lossy()),
         CommandArgTemplate::literal(fixture.trace.to_string_lossy()),
         CommandArgTemplate::literal(action),
     ];
@@ -162,7 +159,7 @@ fn command(
         } else {
             PhaseMode::Fix
         },
-        program: Some("/bin/sh".into()),
+        program: Some(fixture.executable.to_string_lossy().into_owned()),
         args,
         exit_codes: ExitCodePolicy {
             clean: vec![0],
@@ -541,36 +538,30 @@ fn later_write_invalidates_prior_check_but_unrelated_write_does_not() {
 }
 
 #[test]
-fn workspace_check_is_invalidated_by_later_unselected_target_write() {
-    let fixture = Fixture::new("workspace-unselected-sibling");
-    let selected = fixture.file("selected.go", "CLEAN\n");
-    let unselected_sibling = fixture.file("unselected-sibling.go", "BAD_B\n");
+fn workspace_check_is_conservatively_invalidated() {
+    let fixture = Fixture::new("workspace");
+    let workspace_candidate = fixture.file("workspace.rs", "CLEAN\n");
+    let dirty = fixture.file("dirty.rs", "BAD_B\n");
     let plan = vec![
         scheduled_with_scope(
             &fixture,
             0,
-            vec![selected.clone()],
+            vec![workspace_candidate.clone()],
             "check-workspace",
             None,
             CheckScope::Workspace,
             true,
         ),
-        scheduled(
-            &fixture,
-            1,
-            unselected_sibling.clone(),
-            "check-b",
-            Some("fix-b"),
-        ),
+        {
+            let mut workflow = scheduled(&fixture, 1, dirty, "check-b", Some("fix-b"));
+            workflow.remedy.as_mut().expect("remedy").writes = WriteBehavior::Workspace;
+            workflow
+        },
     ];
     let execution = execute_deferred_workflows(&plan, 2, true);
     assert_eq!(
-        only_status(&execution, &selected),
+        only_status(&execution, &workspace_candidate),
         Some(FileStatus::ManualFixesNeeded)
-    );
-    assert_eq!(
-        std::fs::read_to_string(&unselected_sibling).expect("read repaired sibling"),
-        "BAD_A\n"
     );
     assert_eq!(
         fixture
@@ -578,8 +569,7 @@ fn workspace_check_is_invalidated_by_later_unselected_target_write() {
             .iter()
             .filter(|line| *line == "check-workspace")
             .count(),
-        2,
-        "a target-file remedy outside the earlier selection must rerun the workspace-scoped check"
+        2
     );
 }
 

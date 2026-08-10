@@ -1,4 +1,0 @@
-name: fixture-operational-failure
-services:
-  web:
-    image: nginx:1.27.0

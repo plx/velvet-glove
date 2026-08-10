@@ -1,3 +1,0 @@
-package operational
-
-func invalid( {
