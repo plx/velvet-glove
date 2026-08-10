@@ -69,12 +69,12 @@ fn validation_manifest_matches_catalog_and_fixtures() {
     assert_eq!(summary.enabled_tools, 122);
     assert_eq!(summary.disabled_tools, 12);
     assert_eq!(summary.fixture_tools, 117);
-    assert_eq!(summary.fixture_cases, 250);
+    assert_eq!(summary.fixture_cases, 254);
     assert_eq!(summary.layers[&EvidenceTier::Schema].covered, 134);
-    assert_eq!(summary.layers[&EvidenceTier::RenderedCommand].covered, 19);
-    assert_eq!(summary.layers[&EvidenceTier::RenderedCommand].gap, 103);
-    assert_eq!(summary.layers[&EvidenceTier::PinnedRealTool].covered, 19);
-    assert_eq!(summary.layers[&EvidenceTier::PinnedRealTool].gap, 103);
+    assert_eq!(summary.layers[&EvidenceTier::RenderedCommand].covered, 20);
+    assert_eq!(summary.layers[&EvidenceTier::RenderedCommand].gap, 102);
+    assert_eq!(summary.layers[&EvidenceTier::PinnedRealTool].covered, 20);
+    assert_eq!(summary.layers[&EvidenceTier::PinnedRealTool].gap, 102);
     assert_eq!(
         summary.tools[0].surface_layers[&EvidenceSurface::Immediate]
             [&EvidenceTier::RenderedCommand],
