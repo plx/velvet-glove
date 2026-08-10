@@ -1596,6 +1596,103 @@ fn gofumpt_builtin_stages_validated_output_and_commits_transactionally() {
 }
 
 #[test]
+fn goimports_builtin_uses_a_closed_shadow_module_and_transactional_commit() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let goimports = spec(&specs, "goImports");
+
+    assert_eq!(goimports.id, "goimports");
+    assert_eq!(goimports.executable, "goimports");
+    assert_eq!(goimports.workspace_indicator.as_deref(), Some("go.mod"));
+    assert_eq!(goimports.workflow_order, ["format"]);
+    let workflow = goimports.workflows.get("format").expect("format workflow");
+    let check = workflow.check.as_ref().expect("format check");
+    let remedy = workflow.remedy.as_ref().expect("format remedy");
+    for (command, mode) in [(check, "verify"), (remedy, "write")] {
+        assert_eq!(command.program.as_deref(), Some("python"));
+        assert_workflow_argv(
+            command,
+            vec![
+                literal("-I"),
+                literal("-c"),
+                command.argv[2].clone(),
+                token(ArgToken::ToolExecutable),
+                literal("go"),
+                literal(mode),
+                token(ArgToken::ExtraArgs),
+                literal("__VELVET_GLOVE_GOIMPORTS_FILES__"),
+                token(ArgToken::WorkspaceIndicator),
+                token(ArgToken::Files),
+            ],
+        );
+        assert_exit_codes(&command.exit_codes, &[0], &[], &[2]);
+        assert_eq!(command.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    }
+    assert!(check.issues_on_stdout);
+    assert_eq!(check.writes, WriteBehavior::None);
+    assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
+    assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+
+    let ArgvElement::Literal(adapter) = &check.argv[2] else {
+        panic!("goimports adapter must be a literal Python program")
+    };
+    for required in [
+        "EXPECTED_TOOL_SHA256 = \"2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27\"",
+        "EXPECTED_GO_VERSION = b\"go version go1.26.5 darwin/arm64\\n\"",
+        "golang.org/x/tools/cmd/goimports",
+        "golang.org/x/telemetry",
+        "project contains more than {ENTRY_COUNT_LIMIT} physical entries",
+        "project contains a linked source, control, or directory",
+        "nested Go modules are unsupported",
+        "vendor directories are unsupported",
+        "module control field {field} must be null",
+        "go list -m did not bind the controlled shadow module",
+        "GONOPROXY\": \"none",
+        "GONOSUMDB\": \"*",
+        "GOAUTH\": \"off",
+        "retain_private_file(os.path.join(telemetry_root, \"mode\"), b\"off\")",
+        "private_go_root = os.path.join(private_root, \"goroot\")",
+        "private_go_src = os.path.join(private_go_root, \"src\")",
+        "retain_semantic_tree(private_go_root, \"minimal GOROOT\")",
+        "retain_semantic_tree(private_paths[\"GOMODCACHE\"], \"empty module cache\")",
+        "retain_semantic_tree(private_paths[\"GOPATH\"], \"empty GOPATH\")",
+        "retain_private_file(os.path.join(import_cache_root, \"goimports\"), b\"\")",
+        "retain_semantic_tree(import_cache_root, \"disabled goimports module index\")",
+        "assert_semantic_roots()",
+        "materialize_shadow(\"baseline\", {})",
+        "materialize_shadow(\"final\", replacements)",
+        "[\"-srcdir=\" + private_input]",
+        "verify_shadow_fixed_point",
+        "write_exact(record, candidate, False)",
+        "rollback_targets(completed, candidates, completed_metadata)",
+        "cannot safely roll back",
+        "metadata changed after commit",
+        "acquire_write_descriptors(dirty_indices)",
+        "getattr(os, \"O_NONBLOCK\", 0)",
+        "native child left same-group descendants after exit",
+        "combined native output exceeded",
+        "TMPDIR must be outside the selected project root",
+        "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+        "<goimports-private>",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "goimports adapter omits {required:?}"
+        );
+    }
+    assert!(!adapter.contains("[private_tool, \"-w\""));
+    assert!(!adapter.contains("new Config.ExtraArgs {}\n          new Config.Files {}"));
+
+    let immediate = goimports
+        .phases
+        .get("format")
+        .expect("immediate format phase");
+    assert_eq!(immediate.program.as_deref(), Some("python"));
+    assert_eq!(immediate.argv, remedy.argv);
+}
+
+#[test]
 fn catalog_validator_rejects_unchecked_remedies_unless_fallback_is_explicit() {
     let mut legacy = ToolSpec {
         id: "legacy".into(),
@@ -1704,20 +1801,28 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     assert_eq!(gofmt_phase.program.as_deref(), Some("python"));
     assert_eq!(gofmt_phase.argv, gofmt_remedy.argv);
 
-    for (key, check_prefix) in [("goImports", "-l"), ("goLines", "--dry-run")] {
-        let tool = spec(&specs, key);
-        let workflow = tool.workflows.get("format").expect("format workflow");
-        let check = workflow.check.as_ref().expect("format check");
-        let remedy = workflow.remedy.as_ref().expect("format remedy");
-        assert!(check.issues_on_stdout, "{key} stdout issue adapter");
-        assert_eq!(check.writes, WriteBehavior::None);
-        assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
-        assert!(
-            matches!(check.argv.first(), Some(ArgvElement::Literal(value)) if value == check_prefix)
-        );
-        assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
-        assert_eq!(workflow.invocation, InvocationGranularity::Batch);
-    }
+    let golines = spec(&specs, "goLines");
+    let golines_workflow = golines
+        .workflows
+        .get("format")
+        .expect("golines format workflow");
+    let golines_check = golines_workflow
+        .check
+        .as_ref()
+        .expect("golines format check");
+    let golines_remedy = golines_workflow
+        .remedy
+        .as_ref()
+        .expect("golines format remedy");
+    assert!(golines_check.issues_on_stdout);
+    assert_eq!(golines_check.writes, WriteBehavior::None);
+    assert_eq!(golines_remedy.writes, WriteBehavior::TargetFiles);
+    assert!(matches!(
+        golines_check.argv.first(),
+        Some(ArgvElement::Literal(value)) if value == "--dry-run"
+    ));
+    assert_eq!(golines_workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(golines_workflow.invocation, InvocationGranularity::Batch);
 
     let tidy = spec(&specs, "gomodTidy");
     assert_eq!(

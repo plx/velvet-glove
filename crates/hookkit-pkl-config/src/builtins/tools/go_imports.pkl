@@ -1,17 +1,1814 @@
-/// goimports — gofmt plus automatic import management.
+/// goimports — gofmt plus deterministic import management.
 ///
-/// `goimports -l` is non-mutating and lists unformatted files on stdout while
-/// retaining exit status zero; the deferred workflow classifies that output.
+/// Native `-l` reports differences with status zero, while its resolver reads
+/// ambient Go, workspace, module-cache, and sibling-source state. Native `-w`
+/// also follows aliases and can partially mutate a batch. The isolated adapter
+/// therefore validates the pinned binaries, reconstructs one closed module in
+/// private state, proves a whole-batch fixed point, and commits only validated
+/// candidates through retained descriptors.
 
 module velvet_glove.builtins.tools.GoImports
 
 import "../Config.pkl" as Config
 
+goImportsAdapter: String = #"""
+  import hashlib
+  import json
+  import os
+  import re
+  import selectors
+  import shutil
+  import signal
+  import stat
+  import subprocess
+  import sys
+  import tempfile
+  import time
+
+  MARKER = "__VELVET_GLOVE_GOIMPORTS_FILES__"
+  OUTPUT_LIMIT = 64 * 1024 * 1024
+  SOURCE_LIMIT = 64 * 1024 * 1024
+  SOURCE_COUNT_LIMIT = 4096
+  ENTRY_COUNT_LIMIT = 65536
+  CONTROL_LIMIT = 1024 * 1024
+  PROGRAM_LIMIT = 128 * 1024 * 1024
+  CHILD_TIMEOUT = 30.0
+  CLEANUP_TIMEOUT = 2.0
+  EXPECTED_GO_VERSION = b"go version go1.26.5 darwin/arm64\n"
+  EXPECTED_TOOL_SHA256 = "2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27"
+  EXPECTED_TOOL_SIZE = 5814322
+  EXPECTED_GO_SHA256 = "3925fc3221ac440ebf7c35361ff663bed0c7bdb2e0a157b75fe993607ffe0a19"
+  EXPECTED_GO_SIZE = 14500160
+  EXPECTED_TOOL_METADATA = b'''go1.26.5
+  \tpath\tgolang.org/x/tools/cmd/goimports
+  \tmod\tgolang.org/x/tools\tv0.48.0\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=
+  \tdep\tgolang.org/x/mod\tv0.38.0\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=
+  \tdep\tgolang.org/x/sync\tv0.22.0\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
+  \tdep\tgolang.org/x/telemetry\tv0.0.0-20260708182218-49f421fb7959\th1:RJhm5l6Fo4rmEIcndxDllNhhf/fAx8qIm4t6A7vpm2A=
+  \tbuild\t-buildmode=exe
+  \tbuild\t-compiler=gc
+  \tbuild\t-trimpath=true
+  \tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0
+  \tbuild\tCGO_ENABLED=0
+  \tbuild\tGOARCH=arm64
+  \tbuild\tGOOS=darwin
+  \tbuild\tGOARM64=v8.0
+  '''
+  CANARY_INPUT = b'package main\n\nfunc main() {\n\tfmt.Println(helper.Value)\n}\n'
+  CANARY_OUTPUT = b'package main\n\nimport (\n\t"fmt"\n\n\t"velvet.invalid/canary/helper"\n)\n\nfunc main() {\n\tfmt.Println(helper.Value)\n}\n'
+  PRIVATE_PREFIX = "velvet-glove-goimports-"
+  handled_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+
+
+  def safe_text(value, label):
+      if not isinstance(value, str) or not value:
+          raise ValueError(f"{label} is empty or not text")
+      for character in value:
+          codepoint = ord(character)
+          if codepoint < 32 or codepoint == 127 or 0xD800 <= codepoint <= 0xDFFF:
+              raise ValueError(f"{label} contains a control or surrogate character")
+      return value
+
+
+  class AdapterSignal(BaseException):
+      def __init__(self, signum):
+          super().__init__(f"received signal {signum}")
+          self.signum = signum
+
+
+  class EvidenceError(Exception):
+      pass
+
+
+  def fail(message):
+      print(f"velvet-glove-goimports: {message}", file=sys.stderr)
+      raise SystemExit(2)
+
+
+  if len(sys.argv) < 6 or sys.argv[4:].count(MARKER) != 1:
+      fail("invalid adapter arguments")
+  requested_tool = sys.argv[1]
+  requested_go = sys.argv[2]
+  mode = sys.argv[3]
+  payload = sys.argv[4:]
+  marker_index = payload.index(MARKER)
+  extra_args = payload[:marker_index]
+  scope_arguments = payload[marker_index + 1 :]
+  if requested_tool != "goimports" or requested_go != "go":
+      fail("the formatter and Go executables must be goimports and go")
+  if mode not in ("verify", "write") or len(scope_arguments) < 2:
+      fail("invalid mode or empty file selection")
+  if extra_args:
+      fail("extra arguments are unsupported because they change formatting semantics")
+
+  project_root = os.path.realpath(os.path.abspath(os.getcwd()))
+  try:
+      safe_text(project_root, "canonical project root")
+  except ValueError as error:
+      fail(str(error))
+  try:
+      root_info = os.lstat(project_root)
+  except OSError as error:
+      fail(f"cannot inspect project root: {error}")
+  if (
+      os.path.realpath(project_root) != project_root
+      or stat.S_ISLNK(root_info.st_mode)
+      or not stat.S_ISDIR(root_info.st_mode)
+  ):
+      fail("project root must be a canonical real directory")
+
+  requested_manifest = scope_arguments[0]
+  selected_arguments = scope_arguments[1:]
+  try:
+      safe_text(requested_manifest, "workspace indicator")
+  except ValueError as error:
+      fail(str(error))
+  if (
+      not os.path.isabs(requested_manifest)
+      or os.path.normpath(requested_manifest) != requested_manifest
+      or requested_manifest != os.path.join(project_root, "go.mod")
+  ):
+      fail("workspace indicator must be the canonical root go.mod")
+
+
+  def reject_linked_ancestors(path):
+      parent = os.path.dirname(path)
+      try:
+          if os.path.commonpath((project_root, path)) != project_root:
+              raise ValueError(f"selected path escapes the project root: {path}")
+      except ValueError:
+          raise ValueError(f"selected path escapes the project root: {path}") from None
+      relative = os.path.relpath(parent, project_root)
+      cursor = project_root
+      if relative != ".":
+          for component in relative.split(os.sep):
+              cursor = os.path.join(cursor, component)
+              info = os.lstat(cursor)
+              if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                  raise ValueError(f"selected path traverses a linked or non-directory ancestor: {path}")
+
+
+  def read_descriptor(descriptor, limit):
+      chunks = []
+      offset = 0
+      while True:
+          chunk = os.pread(descriptor, min(65536, limit + 1 - offset), offset)
+          if not chunk:
+              break
+          chunks.append(chunk)
+          offset += len(chunk)
+          if offset > limit:
+              raise ValueError(f"file exceeds the {limit}-byte validation limit")
+      return b"".join(chunks)
+
+
+  def open_record(path, writable, limit, project_scoped=True):
+      if project_scoped:
+          reject_linked_ancestors(path)
+      initial = os.lstat(path)
+      if (
+          os.path.realpath(path) != path
+          or stat.S_ISLNK(initial.st_mode)
+          or not stat.S_ISREG(initial.st_mode)
+          or initial.st_nlink != 1
+      ):
+          raise ValueError(f"path is not a canonical unique regular file: {path}")
+      flags = (
+          (os.O_RDWR if writable else os.O_RDONLY)
+          | getattr(os, "O_NOFOLLOW", 0)
+          | getattr(os, "O_NONBLOCK", 0)
+      )
+      descriptor = os.open(path, flags)
+      try:
+          opened = os.fstat(descriptor)
+          if (
+              not stat.S_ISREG(opened.st_mode)
+              or opened.st_nlink != 1
+              or opened.st_dev != initial.st_dev
+              or opened.st_ino != initial.st_ino
+          ):
+              raise ValueError(f"path changed while it was opened: {path}")
+          content = read_descriptor(descriptor, limit)
+          snapshot = {
+              "device": opened.st_dev,
+              "inode": opened.st_ino,
+              "mode": stat.S_IMODE(opened.st_mode),
+              "nlink": opened.st_nlink,
+              "size": opened.st_size,
+              "atime": initial.st_atime_ns,
+              "mtime": initial.st_mtime_ns,
+              "sha256": hashlib.sha256(content).hexdigest(),
+              "content": content,
+          }
+          return {
+              "path": path,
+              "fd": descriptor,
+              "snapshot": snapshot,
+              "project_scoped": project_scoped,
+              "limit": limit,
+          }
+      except BaseException:
+          os.close(descriptor)
+          raise
+
+
+  def assert_record_identity(record, expect_original_metadata=True):
+      path = record["path"]
+      snapshot = record["snapshot"]
+      if record["project_scoped"]:
+          reject_linked_ancestors(path)
+      path_info = os.lstat(path)
+      descriptor_info = os.fstat(record["fd"])
+      for current in (path_info, descriptor_info):
+          if (
+              not stat.S_ISREG(current.st_mode)
+              or current.st_nlink != 1
+              or current.st_dev != snapshot["device"]
+              or current.st_ino != snapshot["inode"]
+              or stat.S_IMODE(current.st_mode) != snapshot["mode"]
+          ):
+              raise EvidenceError(f"validated path identity or mode changed: {path}")
+      if os.path.realpath(path) != path:
+          raise EvidenceError(f"validated path became linked: {path}")
+      if expect_original_metadata and (
+          descriptor_info.st_size != snapshot["size"]
+          or descriptor_info.st_mtime_ns != snapshot["mtime"]
+      ):
+          raise EvidenceError(f"validated path size or mtime changed: {path}")
+      return descriptor_info
+
+
+  def assert_record(record, expected_content=None):
+      descriptor_info = assert_record_identity(
+          record, expect_original_metadata=expected_content is None
+      )
+      snapshot = record["snapshot"]
+      path = record["path"]
+      expected = snapshot["content"] if expected_content is None else expected_content
+      content = read_descriptor(record["fd"], record["limit"])
+      if content != expected:
+          raise EvidenceError(f"validated path content changed: {path}")
+
+
+  manifest_path = os.path.join(project_root, "go.mod")
+  go_sum_path = os.path.join(project_root, "go.sum")
+
+
+  def scan_project(open_records):
+      sources = {}
+      controls = {}
+      identities = set()
+      source_total = 0
+      entry_total = 0
+      stack = [project_root]
+      try:
+          while stack:
+              directory = stack.pop()
+              reject_linked_ancestors(os.path.join(directory, ".inventory"))
+              directory_info = os.lstat(directory)
+              if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(directory_info.st_mode):
+                  raise ValueError(f"project traversal reached a linked or non-directory path: {directory}")
+              with os.scandir(directory) as entries:
+                  ordered = sorted(entries, key=lambda entry: entry.name)
+              for entry in ordered:
+                  entry_total += 1
+                  if entry_total > ENTRY_COUNT_LIMIT:
+                      raise ValueError(
+                          f"project contains more than {ENTRY_COUNT_LIMIT} physical entries"
+                      )
+                  path = os.path.join(directory, entry.name)
+                  safe_text(path, "project path")
+                  try:
+                      path.encode("utf-8")
+                  except UnicodeError as error:
+                      raise ValueError(f"project path is not UTF-8: {error}") from None
+                  info = entry.stat(follow_symlinks=False)
+                  if stat.S_ISLNK(info.st_mode):
+                      if (
+                          entry.name.endswith(".go")
+                          or entry.name in {"go.mod", "go.sum", "go.work"}
+                          or os.path.isdir(path)
+                      ):
+                          raise ValueError(f"project contains a linked source, control, or directory: {path}")
+                      continue
+                  if stat.S_ISDIR(info.st_mode):
+                      if entry.name == "vendor":
+                          raise ValueError(f"vendor directories are unsupported: {path}")
+                      stack.append(path)
+                      continue
+                  if entry.name == "go.work":
+                      raise ValueError(f"Go workspaces are unsupported: {path}")
+                  if entry.name == "go.mod":
+                      if path != manifest_path:
+                          raise ValueError(f"nested Go modules are unsupported: {path}")
+                      if open_records:
+                          record = open_record(path, False, CONTROL_LIMIT)
+                          identity = (record["snapshot"]["device"], record["snapshot"]["inode"])
+                          if identity in identities:
+                              os.close(record["fd"])
+                              raise ValueError(f"project control aliases another validated file: {path}")
+                          identities.add(identity)
+                          controls[path] = record
+                      else:
+                          controls[path] = info
+                      continue
+                  if path == go_sum_path:
+                      if open_records:
+                          record = open_record(path, False, CONTROL_LIMIT)
+                          identity = (record["snapshot"]["device"], record["snapshot"]["inode"])
+                          if identity in identities:
+                              os.close(record["fd"])
+                              raise ValueError(f"project control aliases another validated file: {path}")
+                          identities.add(identity)
+                          controls[path] = record
+                      else:
+                          controls[path] = info
+                      continue
+                  if not entry.name.endswith(".go"):
+                      continue
+                  if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                      raise ValueError(f"project Go source is not a unique regular file: {path}")
+                  relative = os.path.relpath(path, project_root)
+                  if len(sources) >= SOURCE_COUNT_LIMIT:
+                      raise ValueError(
+                          f"project contains more than {SOURCE_COUNT_LIMIT} Go source files"
+                      )
+                  if open_records:
+                      record = open_record(path, False, SOURCE_LIMIT)
+                      source_total += len(record["snapshot"]["content"])
+                      if source_total > SOURCE_LIMIT:
+                          os.close(record["fd"])
+                          raise ValueError(
+                              f"project Go sources exceed the {SOURCE_LIMIT}-byte validation limit"
+                          )
+                      identity = (record["snapshot"]["device"], record["snapshot"]["inode"])
+                      if identity in identities:
+                          os.close(record["fd"])
+                          raise ValueError(f"project source aliases another validated file: {path}")
+                      identities.add(identity)
+                      record["relative"] = relative
+                      sources[relative] = record
+                  else:
+                      source_total += info.st_size
+                      if source_total > SOURCE_LIMIT:
+                          raise ValueError(
+                              f"project Go sources exceed the {SOURCE_LIMIT}-byte validation limit"
+                          )
+                      sources[relative] = info
+          if manifest_path not in controls:
+              raise ValueError("project root must contain one physical go.mod")
+          return sources, controls
+      except BaseException:
+          if open_records:
+              for record in sources.values():
+                  os.close(record["fd"])
+              for record in controls.values():
+                  os.close(record["fd"])
+          raise
+
+
+  sources = {}
+  controls = {}
+  targets = []
+  try:
+      sources, controls = scan_project(True)
+      if not sources:
+          raise ValueError("project contains no physical Go source files")
+      if len(selected_arguments) > SOURCE_COUNT_LIMIT:
+          raise ValueError(f"more than {SOURCE_COUNT_LIMIT} files were selected")
+      selected_paths = set()
+      selected_identities = set()
+      for argument in selected_arguments:
+          safe_text(argument, "selected path")
+          try:
+              argument.encode("utf-8")
+          except UnicodeError as error:
+              raise ValueError(f"selected path is not UTF-8: {error}") from None
+          if (
+              not os.path.isabs(argument)
+              or os.path.normpath(argument) != argument
+              or not argument.endswith(".go")
+          ):
+              raise ValueError(f"selected path is not one normalized absolute .go file: {argument}")
+          try:
+              if os.path.commonpath((project_root, argument)) != project_root:
+                  raise ValueError
+          except ValueError:
+              raise ValueError(f"selected path escapes the project root: {argument}") from None
+          relative = os.path.relpath(argument, project_root)
+          record = sources.get(relative)
+          if record is None or record["path"] != argument:
+              raise ValueError(f"selected path is not an inventoried project Go source: {argument}")
+          identity = (record["snapshot"]["device"], record["snapshot"]["inode"])
+          if argument in selected_paths or identity in selected_identities:
+              raise ValueError(f"selected path is repeated or aliased: {argument}")
+          selected_paths.add(argument)
+          selected_identities.add(identity)
+          targets.append(record)
+  except (OSError, ValueError) as error:
+      for record in sources.values():
+          os.close(record["fd"])
+      for record in controls.values():
+          os.close(record["fd"])
+      fail(str(error))
+
+
+  def resolve_program(name):
+      safe_text(name, "required executable name")
+      resolved = shutil.which(name)
+      if resolved is None:
+          raise ValueError(f"cannot resolve required executable {name!r}")
+      resolved = os.path.abspath(resolved)
+      safe_text(resolved, "resolved executable path")
+      if os.path.realpath(resolved) != resolved or not os.access(resolved, os.X_OK):
+          raise ValueError(f"required executable traverses a symlink: {resolved}")
+      record = open_record(resolved, False, PROGRAM_LIMIT, project_scoped=False)
+      if record["snapshot"]["mode"] & 0o111 == 0:
+          os.close(record["fd"])
+          raise ValueError(f"required executable is not executable: {resolved}")
+      return record
+
+
+  def resolve_trace_target(sidecar, label):
+      try:
+          binding = sidecar["snapshot"]["content"].decode("utf-8")
+      except UnicodeError as error:
+          raise ValueError(f"tool-trace {label} binding is not UTF-8: {error}") from None
+      if (
+          not binding.endswith("\n")
+          or binding.count("\n") != 1
+          or not os.path.isabs(binding[:-1])
+          or os.path.normpath(binding[:-1]) != binding[:-1]
+      ):
+          raise ValueError(f"tool-trace {label} binding is not one normalized absolute path")
+      safe_text(binding[:-1], f"tool-trace {label} binding")
+      target = open_record(binding[:-1], False, PROGRAM_LIMIT, project_scoped=False)
+      if target["snapshot"]["mode"] & 0o111 == 0:
+          os.close(target["fd"])
+          raise ValueError(f"tool-trace {label} target is not executable")
+      return target
+
+
+  program_records = []
+  try:
+      formatter_launcher = resolve_program(requested_tool)
+      go_launcher = resolve_program(requested_go)
+      program_records.extend((formatter_launcher, go_launcher))
+      trace_enabled = any(
+          name in os.environ
+          for name in (
+              "VELVET_GLOVE_TOOL_TRACE_DIR",
+              "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+          )
+      )
+      if trace_enabled and not all(
+          name in os.environ
+          for name in (
+              "VELVET_GLOVE_TOOL_TRACE_DIR",
+              "VELVET_GLOVE_TOOL_TRACE_SENTINEL",
+          )
+      ):
+          raise ValueError("tool-trace instrumentation is incomplete")
+      formatter_sidecar = None
+      go_sidecar = None
+      if trace_enabled:
+          formatter_sidecar = open_record(
+              formatter_launcher["path"] + ".real-program",
+              False,
+              4096,
+              project_scoped=False,
+          )
+          go_sidecar = open_record(
+              go_launcher["path"] + ".real-program",
+              False,
+              4096,
+              project_scoped=False,
+          )
+          formatter_record = resolve_trace_target(formatter_sidecar, "formatter")
+          go_record = resolve_trace_target(go_sidecar, "Go")
+          program_records.extend(
+              (formatter_sidecar, go_sidecar, formatter_record, go_record)
+          )
+      else:
+          formatter_record = formatter_launcher
+          go_record = go_launcher
+      formatter_snapshot = formatter_record["snapshot"]
+      go_snapshot = go_record["snapshot"]
+      if (
+          formatter_snapshot["size"] != EXPECTED_TOOL_SIZE
+          or formatter_snapshot["sha256"] != EXPECTED_TOOL_SHA256
+      ):
+          raise ValueError("goimports executable does not match the pinned binary")
+      if (
+          go_snapshot["size"] != EXPECTED_GO_SIZE
+          or go_snapshot["sha256"] != EXPECTED_GO_SHA256
+      ):
+          raise ValueError("Go executable does not match the pinned binary")
+      identities = {
+          (formatter_snapshot["device"], formatter_snapshot["inode"]),
+          (go_snapshot["device"], go_snapshot["inode"]),
+      }
+      if len(identities) != 2:
+          raise ValueError("formatter and Go executables are aliased")
+      managed_go_root = os.path.dirname(os.path.dirname(go_record["path"]))
+      safe_text(managed_go_root, "managed GOROOT")
+      if (
+          os.path.realpath(managed_go_root) != managed_go_root
+          or os.path.join(managed_go_root, "bin", "go") != go_record["path"]
+      ):
+          raise ValueError("pinned Go executable is not in one canonical managed GOROOT")
+      managed_go_root_info = os.lstat(managed_go_root)
+      if (
+          stat.S_ISLNK(managed_go_root_info.st_mode)
+          or not stat.S_ISDIR(managed_go_root_info.st_mode)
+      ):
+          raise ValueError("managed GOROOT is not a real directory")
+  except (OSError, ValueError) as error:
+      for record in sources.values():
+          os.close(record["fd"])
+      for record in controls.values():
+          os.close(record["fd"])
+      seen_descriptors = set()
+      for record in program_records:
+          if record["fd"] not in seen_descriptors:
+              seen_descriptors.add(record["fd"])
+              os.close(record["fd"])
+      fail(str(error))
+
+  temporary_parent = os.environ.get("TMPDIR", "")
+  try:
+      safe_text(temporary_parent, "TMPDIR")
+  except ValueError as error:
+      fail(str(error))
+  if not os.path.isabs(temporary_parent):
+      fail("TMPDIR must be an absolute path")
+  temporary_parent = os.path.realpath(temporary_parent)
+  try:
+      safe_text(temporary_parent, "canonical TMPDIR")
+  except ValueError as error:
+      fail(str(error))
+  if not os.path.isdir(temporary_parent):
+      fail("TMPDIR must identify an existing directory")
+  try:
+      if os.path.commonpath((project_root, temporary_parent)) == project_root:
+          fail("TMPDIR must be outside the selected project root")
+  except ValueError:
+      pass
+
+  private_root = None
+  process = None
+  process_group = None
+  pending_signal = None
+  reported_signal = None
+  cleaning = False
+  stdout_bytes = b""
+  stderr_bytes = b""
+  emit_stdout_bytes = False
+  emit_stderr_bytes = False
+  private_records = []
+  semantic_root_records = []
+
+
+  def signal_group(signum):
+      if process_group is None:
+          return None
+      try:
+          os.killpg(process_group, signum)
+      except ProcessLookupError:
+          return None
+      except (OSError, ValueError) as error:
+          return EvidenceError(f"cannot signal native child process group: {error}")
+      return None
+
+
+  def process_group_exists():
+      if process_group is None:
+          return False
+      try:
+          os.killpg(process_group, 0)
+          return True
+      except ProcessLookupError:
+          return False
+      except PermissionError:
+          return True
+
+
+  def sweep_process_group():
+      if not process_group_exists():
+          return False
+      failure = signal_group(signal.SIGKILL)
+      if failure is not None:
+          raise failure
+      deadline = time.monotonic() + CLEANUP_TIMEOUT
+      while process_group_exists() and time.monotonic() < deadline:
+          time.sleep(0.01)
+      if process_group_exists():
+          raise EvidenceError("native child process group survived SIGKILL")
+      return True
+
+
+  def stop_child(initial_signal=None):
+      global process, process_group, cleaning
+      child = process
+      if child is None and process_group is None:
+          return None
+      failures = []
+      contained = False
+      prior_cleaning = cleaning
+      cleaning = True
+      try:
+          if child is not None:
+              try:
+                  running = child.poll() is None
+              except (OSError, ValueError) as error:
+                  failures.append(f"cannot poll native child: {error}")
+                  running = True
+              if running:
+                  failure = signal_group(initial_signal or signal.SIGTERM)
+                  if failure is not None:
+                      failures.append(str(failure))
+                  try:
+                      child.wait(timeout=1)
+                  except (OSError, ValueError, subprocess.TimeoutExpired):
+                      pass
+          failure = signal_group(signal.SIGKILL)
+          if failure is not None:
+              failures.append(str(failure))
+          if child is not None:
+              try:
+                  child.wait(timeout=1)
+              except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                  failures.append(f"cannot reap native child: {error}")
+          deadline = time.monotonic() + CLEANUP_TIMEOUT
+          while process_group_exists() and time.monotonic() < deadline:
+              time.sleep(0.01)
+          if process_group_exists():
+              failures.append("native child process group survived SIGKILL")
+          else:
+              contained = True
+      finally:
+          if contained:
+              process = None
+              process_group = None
+          cleaning = prior_cleaning
+      return EvidenceError("; ".join(failures)) if failures else None
+
+
+  def forward_signal(signum, _frame):
+      global pending_signal
+      if pending_signal is None:
+          pending_signal = signum
+      if cleaning:
+          return
+      if process is not None:
+          signal_group(signum)
+      raise AdapterSignal(pending_signal)
+
+
+  def append_error(primary, secondary):
+      if secondary is None:
+          return primary
+      if primary is None:
+          return secondary
+      return EvidenceError(f"{primary}; {secondary}")
+
+
+  def run_child(arguments, environment, input_bytes=None, working_directory=None):
+      global process, process_group, cleaning, reported_signal, pending_signal
+      global stdout_bytes, stderr_bytes
+      stdout_chunks = []
+      stderr_chunks = []
+      total = 0
+      child = None
+      input_file = None
+      selector = selectors.DefaultSelector()
+      try:
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          if working_directory is None:
+              working_directory = os.path.join(private_root, "work")
+          if (
+              not os.path.isabs(working_directory)
+              or os.path.realpath(working_directory) != working_directory
+              or os.path.commonpath((private_root, working_directory)) != private_root
+              or not os.path.isdir(working_directory)
+          ):
+              raise EvidenceError("native child cwd is not one controlled private directory")
+          if input_bytes is not None:
+              input_file = tempfile.TemporaryFile(dir=private_root)
+              os.fchmod(input_file.fileno(), 0o600)
+              input_info = os.fstat(input_file.fileno())
+              if (
+                  not stat.S_ISREG(input_info.st_mode)
+                  or stat.S_IMODE(input_info.st_mode) != 0o600
+                  or input_info.st_uid != os.geteuid()
+              ):
+                  raise EvidenceError("controlled native stdin is not a private mode-0600 file")
+              input_file.write(input_bytes)
+              input_file.seek(0)
+          spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+          try:
+              queued = sorted(
+                  signal.sigpending().intersection(handled_signals), key=int
+              )
+              if queued:
+                  received = int(signal.sigwait({queued[0]}))
+                  if pending_signal is None:
+                      pending_signal = received
+                  raise AdapterSignal(pending_signal)
+              child = subprocess.Popen(
+                  arguments,
+                  stdin=input_file if input_file is not None else subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  cwd=working_directory,
+                  env=environment,
+                  start_new_session=True,
+              )
+              process = child
+              process_group = child.pid
+          finally:
+              signal.pthread_sigmask(signal.SIG_SETMASK, spawn_mask)
+          for stream, target in ((child.stdout, stdout_chunks), (child.stderr, stderr_chunks)):
+              if stream is None:
+                  raise OSError("failed to capture native output")
+              os.set_blocking(stream.fileno(), False)
+              selector.register(stream, selectors.EVENT_READ, target)
+          leader_status = None
+          exit_deadline = None
+          child_deadline = time.monotonic() + CHILD_TIMEOUT
+          while selector.get_map():
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
+              if time.monotonic() >= child_deadline:
+                  raise EvidenceError(
+                      f"native child exceeded the {CHILD_TIMEOUT:g}-second deadline"
+                  )
+              for key, _ in selector.select(timeout=0.1):
+                  chunk = os.read(key.fileobj.fileno(), 65536)
+                  if chunk:
+                      total += len(chunk)
+                      if total > OUTPUT_LIMIT:
+                          raise BufferError(f"combined native output exceeded {OUTPUT_LIMIT} bytes")
+                      key.data.append(chunk)
+                  else:
+                      selector.unregister(key.fileobj)
+                      key.fileobj.close()
+              if leader_status is None:
+                  leader_status = child.poll()
+                  if leader_status is not None:
+                      exit_deadline = time.monotonic() + 0.25
+              if leader_status is not None and selector.get_map() and time.monotonic() >= exit_deadline:
+                  prior_cleaning = cleaning
+                  cleaning = True
+                  try:
+                      descendants = sweep_process_group()
+                  finally:
+                      cleaning = prior_cleaning
+                  if descendants:
+                      raise EvidenceError("native child left same-group descendants after exit")
+                  raise EvidenceError("native child exited without closing output pipes")
+          while leader_status is None:
+              if pending_signal is not None:
+                  raise AdapterSignal(pending_signal)
+              if time.monotonic() >= child_deadline:
+                  raise EvidenceError(
+                      f"native child exceeded the {CHILD_TIMEOUT:g}-second deadline"
+                  )
+              leader_status = child.poll()
+              if leader_status is None:
+                  time.sleep(0.01)
+          prior_cleaning = cleaning
+          cleaning = True
+          try:
+              descendants = sweep_process_group()
+          finally:
+              cleaning = prior_cleaning
+          if descendants:
+              raise EvidenceError("native child left same-group descendants after exit")
+          process = None
+          process_group = None
+          if pending_signal is not None:
+              raise AdapterSignal(pending_signal)
+          return leader_status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+      except AdapterSignal as error:
+          reported_signal = error.signum
+          raise append_error(error, stop_child(error.signum))
+      except BaseException as error:
+          raise append_error(error, stop_child())
+      finally:
+          selector.close()
+          if input_file is not None:
+              input_file.close()
+          if child is not None:
+              for stream in (child.stdout, child.stderr):
+                  if stream is not None:
+                      try:
+                          stream.close()
+                      except OSError:
+                          pass
+          stdout_bytes = b"".join(stdout_chunks)
+          stderr_bytes = b"".join(stderr_chunks)
+
+
+  target_positions = {id(record): index for index, record in enumerate(targets)}
+
+
+  def assert_project_inventory():
+      observed_sources, observed_controls = scan_project(False)
+      if set(observed_sources) != set(sources):
+          raise EvidenceError("project Go source inventory changed")
+      if set(observed_controls) != set(controls):
+          raise EvidenceError("project Go control inventory changed")
+
+
+  def assert_managed_go_root():
+      current = os.lstat(managed_go_root)
+      if (
+          stat.S_ISLNK(current.st_mode)
+          or not stat.S_ISDIR(current.st_mode)
+          or current.st_dev != managed_go_root_info.st_dev
+          or current.st_ino != managed_go_root_info.st_ino
+          or stat.S_IMODE(current.st_mode) != stat.S_IMODE(managed_go_root_info.st_mode)
+      ):
+          raise EvidenceError("managed GOROOT identity or mode changed")
+
+
+  def assert_semantic_roots():
+      for label, root, expected in semantic_root_records:
+          observed = snapshot_semantic_tree(root, False)
+          if observed != expected:
+              raise EvidenceError(
+                  f"controlled {label} semantic inventory changed unexpectedly"
+              )
+
+
+  def unseal_semantic_roots():
+      assert_semantic_roots()
+      directories = []
+      for _label, root, expected in semantic_root_records:
+          for entry in expected:
+              if entry[1] == "directory":
+                  relative = entry[0]
+                  path = root if not relative else os.path.join(root, relative)
+                  directories.append((path.count(os.sep), path, entry))
+      for _depth, path, entry in sorted(directories, reverse=True):
+          current = os.lstat(path)
+          if (
+              stat.S_ISLNK(current.st_mode)
+              or not stat.S_ISDIR(current.st_mode)
+              or current.st_dev != entry[2]
+              or current.st_ino != entry[3]
+              or stat.S_IMODE(current.st_mode) != entry[4]
+              or current.st_uid != entry[5]
+          ):
+              raise EvidenceError(
+                  f"cannot safely unseal controlled semantic directory: {path}"
+              )
+          os.chmod(path, 0o700)
+
+
+  def best_effort_unseal_private_tree():
+      failures = []
+      for directory, child_directories, _files in os.walk(
+          private_root, topdown=True, followlinks=False
+      ):
+          try:
+              info = os.lstat(directory)
+              if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                  child_directories.clear()
+                  continue
+              os.chmod(directory, 0o700)
+          except OSError as error:
+              failures.append(f"cannot unseal {directory}: {error}")
+              child_directories.clear()
+              continue
+          retained_children = []
+          for name in child_directories:
+              path = os.path.join(directory, name)
+              try:
+                  child = os.lstat(path)
+                  if stat.S_ISDIR(child.st_mode) and not stat.S_ISLNK(child.st_mode):
+                      retained_children.append(name)
+              except OSError as error:
+                  failures.append(f"cannot inspect {path} during cleanup: {error}")
+          child_directories[:] = retained_children
+      return EvidenceError("; ".join(failures)) if failures else None
+
+
+  def assert_all_originals():
+      assert_project_inventory()
+      for record in sources.values():
+          index = target_positions.get(id(record))
+          if index is not None and index in committed_indices:
+              assert_record(record, candidates[index])
+          else:
+              assert_record(record)
+      for record in controls.values():
+          assert_record(record)
+      seen_descriptors = set()
+      for record in program_records:
+          if record["fd"] not in seen_descriptors:
+              seen_descriptors.add(record["fd"])
+              assert_record(record)
+      assert_managed_go_root()
+      for record in private_records:
+          assert_record(record)
+      assert_semantic_roots()
+
+
+  def run_go(arguments, environment, working_directory):
+      assert_all_originals()
+      result = run_child(
+          [private_go, *arguments],
+          environment,
+          working_directory=working_directory,
+      )
+      assert_all_originals()
+      return result
+
+
+  def run_tool(arguments, environment, working_directory, input_bytes=None):
+      assert_all_originals()
+      result = run_child(
+          [private_tool, *arguments],
+          environment,
+          input_bytes,
+          working_directory,
+      )
+      assert_all_originals()
+      return result
+
+
+  committed_indices = []
+  committed_metadata = {}
+
+
+  def write_exact(record, content, restore_metadata):
+      descriptor = record["fd"]
+      os.lseek(descriptor, 0, os.SEEK_SET)
+      os.ftruncate(descriptor, 0)
+      offset = 0
+      while offset < len(content):
+          written = os.write(descriptor, content[offset:])
+          if written <= 0:
+              raise OSError("short write while committing formatter output")
+          offset += written
+      if restore_metadata:
+          os.fchmod(descriptor, record["snapshot"]["mode"])
+          os.utime(
+              descriptor,
+              ns=(
+                  record["snapshot"]["atime"],
+                  record["snapshot"]["mtime"],
+              ),
+          )
+      os.fsync(descriptor)
+      info = os.fstat(descriptor)
+      return {
+          "size": info.st_size,
+          "mtime": info.st_mtime_ns,
+          "ctime": info.st_ctime_ns,
+      }
+
+
+  def acquire_write_descriptors(indices):
+      opened = []
+      try:
+          for index in indices:
+              record = targets[index]
+              assert_record(record)
+              flags = (
+                  os.O_RDWR
+                  | getattr(os, "O_NOFOLLOW", 0)
+                  | getattr(os, "O_NONBLOCK", 0)
+              )
+              descriptor = os.open(record["path"], flags)
+              info = os.fstat(descriptor)
+              snapshot = record["snapshot"]
+              if (
+                  not stat.S_ISREG(info.st_mode)
+                  or info.st_nlink != 1
+                  or info.st_dev != snapshot["device"]
+                  or info.st_ino != snapshot["inode"]
+                  or stat.S_IMODE(info.st_mode) != snapshot["mode"]
+                  or info.st_size != snapshot["size"]
+                  or info.st_mtime_ns != snapshot["mtime"]
+              ):
+                  os.close(descriptor)
+                  raise EvidenceError(
+                      f"selected path changed before write access was acquired: {record['path']}"
+                  )
+              opened.append((record, descriptor))
+          for record, descriptor in opened:
+              os.close(record["fd"])
+              record["fd"] = descriptor
+      except BaseException:
+          for record, descriptor in opened:
+              if record["fd"] != descriptor:
+                  try:
+                      os.close(descriptor)
+                  except OSError:
+                      pass
+          raise
+
+
+  def rollback_targets(indices, expected_candidates=None, expected_metadata=None):
+      failures = []
+      for index in indices:
+          record = targets[index]
+          try:
+              if expected_candidates is not None:
+                  candidate = expected_candidates[index]
+                  metadata = expected_metadata[index]
+                  current = assert_record_identity(
+                      record, expect_original_metadata=False
+                  )
+                  observed_metadata = {
+                      "size": current.st_size,
+                      "mtime": current.st_mtime_ns,
+                      "ctime": current.st_ctime_ns,
+                  }
+                  if observed_metadata != metadata:
+                      raise EvidenceError("metadata changed after commit")
+                  content = read_descriptor(record["fd"], record["limit"])
+                  if content != candidate:
+                      raise EvidenceError("content changed after commit")
+              write_exact(record, record["snapshot"]["content"], True)
+              assert_record(record)
+          except BaseException as error:
+              if expected_candidates is None:
+                  failures.append(f"cannot roll back {record['path']}: {error}")
+              else:
+                  failures.append(
+                      f"cannot safely roll back {record['path']}: changed after commit: {error}"
+                  )
+      if failures:
+          return EvidenceError("; ".join(failures))
+      return None
+
+
+  def commit_targets(candidates, dirty_indices):
+      global pending_signal, committed_indices, committed_metadata
+      original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+      touched = []
+      completed = []
+      completed_metadata = {}
+      try:
+          assert_all_originals()
+          for index in dirty_indices:
+              record = targets[index]
+              candidate = candidates[index]
+              if signal.sigpending().intersection(handled_signals):
+                  raise AdapterSignal(min(signal.sigpending().intersection(handled_signals)))
+              assert_record(record)
+              touched.append(index)
+              completed_metadata[index] = write_exact(record, candidate, False)
+              completed.append(index)
+              assert_record(record, candidate)
+          for index, (record, candidate) in enumerate(zip(targets, candidates)):
+              assert_record(
+                  record,
+                  candidate if index in dirty_indices else None,
+              )
+          for record in controls.values():
+              assert_record(record)
+          queued = sorted(signal.sigpending().intersection(handled_signals), key=int)
+          if queued:
+              received = int(signal.sigwait({queued[0]}))
+              if pending_signal is None:
+                  pending_signal = received
+              raise AdapterSignal(pending_signal)
+          committed_indices = list(dirty_indices)
+          committed_metadata = dict(completed_metadata)
+      except BaseException as error:
+          partial = [index for index in touched if index not in completed]
+          rollback_error = rollback_targets(partial)
+          rollback_error = append_error(
+              rollback_error,
+              rollback_targets(completed, candidates, completed_metadata),
+          )
+          committed_indices = []
+          committed_metadata = {}
+          raise append_error(error, rollback_error)
+      finally:
+          signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+
+
+  def sanitize(value):
+      if isinstance(value, bytes):
+          message = value
+          if private_root is not None:
+              message = message.replace(os.fsencode(private_root), b"<goimports-private>")
+          prefix = os.fsencode(os.path.join(temporary_parent, PRIVATE_PREFIX))
+          return re.sub(re.escape(prefix) + rb"[A-Za-z0-9._-]*", b"<goimports-private>", message)
+      message = str(value)
+      if private_root is not None:
+          message = message.replace(private_root, "<goimports-private>")
+      prefix = os.path.join(temporary_parent, PRIVATE_PREFIX)
+      return re.sub(re.escape(prefix) + r"[A-Za-z0-9._-]*", "<goimports-private>", message)
+
+
+  def parse_json_object(raw, label):
+      def object_from_pairs(pairs):
+          result = {}
+          for key, item in pairs:
+              if key in result:
+                  raise ValueError(f"duplicate JSON field {key!r}")
+              result[key] = item
+          return result
+
+      def reject_constant(value):
+          raise ValueError(f"non-finite JSON number {value}")
+
+      try:
+          value = json.loads(
+              raw.decode("utf-8"),
+              object_pairs_hook=object_from_pairs,
+              parse_constant=reject_constant,
+          )
+      except (UnicodeError, json.JSONDecodeError, ValueError) as error:
+          raise EvidenceError(f"{label} returned malformed JSON: {error}")
+      if not isinstance(value, dict):
+          raise EvidenceError(f"{label} returned a non-object")
+      return value
+
+
+  def parse_module(raw, manifest):
+      value = parse_json_object(raw, "go mod edit")
+      expected_fields = {
+          "Module", "Go", "Require", "Exclude", "Replace", "Retract",
+          "Tool", "Ignore",
+      }
+      if set(value) != expected_fields:
+          raise EvidenceError(
+              f"module control has an unexpected JSON field set: {manifest}"
+          )
+      module = value.get("Module")
+      if not isinstance(module, dict) or set(module) - {"Path", "Deprecated"}:
+          raise EvidenceError(f"module control has an invalid Module object: {manifest}")
+      module_path = module.get("Path")
+      if not isinstance(module_path, str) or not module_path or len(module_path) > 1024:
+          raise EvidenceError(f"module control has an invalid module path: {manifest}")
+      try:
+          safe_text(module_path, "module path")
+      except ValueError as error:
+          raise EvidenceError(f"module control has an invalid module path: {manifest}: {error}") from None
+      deprecated = module.get("Deprecated")
+      if deprecated is not None:
+          if not isinstance(deprecated, str) or len(deprecated) > 4096:
+              raise EvidenceError(f"module control has invalid deprecation text: {manifest}")
+          try:
+              safe_text(deprecated, "module deprecation text")
+          except ValueError as error:
+              raise EvidenceError(f"module control has invalid deprecation text: {manifest}: {error}") from None
+      go_version = value.get("Go")
+      if not isinstance(go_version, str) or len(go_version) > 64:
+          raise EvidenceError(f"module control has an invalid Go version: {manifest}")
+      match = re.fullmatch(r"1\.([0-9]+)(?:\.([0-9]+))?", go_version)
+      if match is None:
+          raise EvidenceError(f"module control has an unsupported Go release: {manifest}")
+      release = (1, int(match.group(1)), int(match.group(2) or 0))
+      if release > (1, 26, 5):
+          raise EvidenceError(f"module control requires a future Go release: {manifest}")
+      for field in ("Require", "Exclude", "Replace", "Retract", "Tool", "Ignore"):
+          if value[field] is not None:
+              raise EvidenceError(f"module control field {field} must be null: {manifest}")
+      return module_path, go_version
+
+
+  def parse_main_module(raw, shadow, module_path, go_version):
+      value = parse_json_object(raw, "go list -m")
+      expected_keys = {"Path", "Main", "Dir", "GoMod", "GoVersion"}
+      if set(value) != expected_keys:
+          raise EvidenceError("go list -m returned an unexpected field set")
+      expected = {
+          "Path": module_path,
+          "Main": True,
+          "Dir": shadow,
+          "GoMod": os.path.join(shadow, "go.mod"),
+          "GoVersion": go_version,
+      }
+      if value != expected:
+          raise EvidenceError("go list -m did not bind the controlled shadow module")
+
+
+  def require_private_directory(path):
+      os.chmod(path, 0o700)
+      info = os.lstat(path)
+      if (
+          stat.S_ISLNK(info.st_mode)
+          or not stat.S_ISDIR(info.st_mode)
+          or stat.S_IMODE(info.st_mode) != 0o700
+          or info.st_uid != os.geteuid()
+      ):
+          raise EvidenceError(f"controlled private directory is not mode 0700: {path}")
+
+
+  def write_private_file(path, content, mode=0o600):
+      flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+      descriptor = os.open(path, flags, mode)
+      try:
+          os.fchmod(descriptor, mode)
+          offset = 0
+          while offset < len(content):
+              written = os.write(descriptor, content[offset:])
+              if written <= 0:
+                  raise OSError("short write to controlled private file")
+              offset += written
+          os.fsync(descriptor)
+          info = os.fstat(descriptor)
+          if (
+              not stat.S_ISREG(info.st_mode)
+              or info.st_nlink != 1
+              or stat.S_IMODE(info.st_mode) != mode
+              or info.st_uid != os.geteuid()
+          ):
+              raise EvidenceError(f"controlled private file has unexpected metadata: {path}")
+      finally:
+          os.close(descriptor)
+
+
+  def make_private_directory(path):
+      os.mkdir(path, mode=0o700)
+      require_private_directory(path)
+
+
+  def snapshot_semantic_tree(root, seal):
+      entries = []
+      directories = []
+
+      def visit(path, relative):
+          info = os.lstat(path)
+          if (
+              stat.S_ISLNK(info.st_mode)
+              or not stat.S_ISDIR(info.st_mode)
+              or info.st_uid != os.geteuid()
+          ):
+              raise EvidenceError(
+                  f"controlled semantic path is not an owned real directory: {path}"
+              )
+          directories.append(path)
+          names = tuple(sorted(os.listdir(path)))
+          entries.append(
+              (
+                  relative,
+                  "directory",
+                  info.st_dev,
+                  info.st_ino,
+                  stat.S_IMODE(info.st_mode),
+                  info.st_uid,
+                  info.st_nlink,
+                  info.st_size,
+                  info.st_mtime_ns,
+                  info.st_ctime_ns,
+                  names,
+              )
+          )
+          for name in names:
+              child = os.path.join(path, name)
+              child_relative = name if not relative else os.path.join(relative, name)
+              child_info = os.lstat(child)
+              if stat.S_ISDIR(child_info.st_mode) and not stat.S_ISLNK(child_info.st_mode):
+                  visit(child, child_relative)
+                  continue
+              if (
+                  stat.S_ISLNK(child_info.st_mode)
+                  or not stat.S_ISREG(child_info.st_mode)
+                  or child_info.st_uid != os.geteuid()
+                  or child_info.st_nlink != 1
+              ):
+                  raise EvidenceError(
+                      f"controlled semantic path is not an owned unique regular file: {child}"
+                  )
+              entries.append(
+                  (
+                      child_relative,
+                      "file",
+                      child_info.st_dev,
+                      child_info.st_ino,
+                      stat.S_IMODE(child_info.st_mode),
+                      child_info.st_uid,
+                      child_info.st_nlink,
+                      child_info.st_size,
+                      child_info.st_mtime_ns,
+                      child_info.st_ctime_ns,
+                      (),
+                  )
+              )
+
+      visit(root, "")
+      if seal:
+          for directory in reversed(directories):
+              os.chmod(directory, 0o500)
+          return snapshot_semantic_tree(root, False)
+      return tuple(entries)
+
+
+  def retain_semantic_tree(root, label):
+      expected = snapshot_semantic_tree(root, True)
+      semantic_root_records.append((label, root, expected))
+
+
+  def make_private_parents(root, relative):
+      parent = os.path.dirname(relative)
+      cursor = root
+      if parent and parent != ".":
+          for component in parent.split(os.sep):
+              cursor = os.path.join(cursor, component)
+              if not os.path.exists(cursor):
+                  make_private_directory(cursor)
+              else:
+                  require_private_directory(cursor)
+
+
+  def retain_private_file(path, content, mode=0o400):
+      write_private_file(path, content, mode)
+      record = open_record(path, False, max(len(content), 1), project_scoped=False)
+      private_records.append(record)
+      return record
+
+
+  def materialize_shadow(name, replacements):
+      shadow = os.path.join(private_root, name)
+      make_private_directory(shadow)
+      shadow_paths = {}
+      for relative, record in sorted(sources.items()):
+          make_private_parents(shadow, relative)
+          path = os.path.join(shadow, relative)
+          content = replacements.get(relative, record["snapshot"]["content"])
+          retain_private_file(path, content)
+          shadow_paths[relative] = path
+      retain_private_file(
+          os.path.join(shadow, "go.mod"),
+          controls[manifest_path]["snapshot"]["content"],
+      )
+      if go_sum_path in controls:
+          retain_private_file(
+              os.path.join(shadow, "go.sum"),
+              controls[go_sum_path]["snapshot"]["content"],
+          )
+      retain_semantic_tree(shadow, f"{name} shadow")
+      return shadow, shadow_paths
+
+
+  def parse_go_environment(raw, environment):
+      value = parse_json_object(raw, "Go environment preflight")
+      expected = {
+          "GOARCH": "arm64",
+          "GOARM64": "v8.0",
+          "GOCACHE": environment["GOCACHE"],
+          "GOMODCACHE": environment["GOMODCACHE"],
+          "GOOS": "darwin",
+          "GOPATH": environment["GOPATH"],
+          "GOROOT": environment["GOROOT"],
+          "GOTELEMETRY": "off",
+          "GOVERSION": "go1.26.5",
+      }
+      if value != expected:
+          raise EvidenceError("Go environment preflight ignored controlled bindings")
+
+
+  def verify_shadow_fixed_point(shadow, shadow_paths, environment, label):
+      global stderr_bytes, emit_stderr_bytes
+      for index, record in enumerate(targets):
+          private_path = shadow_paths[record["relative"]]
+          expected = candidates[index]
+          status, listed, errors = run_tool(
+              ["-l", private_path], environment, shadow
+          )
+          if status != 0 or listed or errors:
+              emit = errors.replace(
+                  os.fsencode(private_path), os.fsencode(record["path"])
+              )
+              if emit:
+                  stderr_bytes = emit
+                  emit_stderr_bytes = True
+              raise EvidenceError(
+                  f"{label} goimports listing failed for {record['path']}"
+              )
+          status, repeated, errors = run_tool(
+              ["-srcdir=" + private_path],
+              environment,
+              shadow,
+              expected,
+          )
+          if status != 0 or errors or repeated != expected:
+              if errors:
+                  stderr_bytes = errors.replace(
+                      b"<standard input>", os.fsencode(record["path"])
+                  )
+                  emit_stderr_bytes = True
+              raise EvidenceError(
+                  f"{label} goimports formatting failed for {record['path']}"
+              )
+
+
+  previous_handlers = {}
+  adapter_error = None
+  result_status = 2
+  result_stdout = b""
+  result_stderr = b""
+  candidates = []
+  try:
+      for signum in handled_signals:
+          previous_handlers[signum] = signal.signal(signum, forward_signal)
+      allocation_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+      try:
+          private_root = tempfile.mkdtemp(prefix=PRIVATE_PREFIX, dir=temporary_parent)
+      finally:
+          signal.pthread_sigmask(signal.SIG_SETMASK, allocation_mask)
+      require_private_directory(private_root)
+      private_paths = {
+          "HOME": os.path.join(private_root, "home"),
+          "TMPDIR": os.path.join(private_root, "tmp"),
+          "XDG_CACHE_HOME": os.path.join(private_root, "xdg-cache"),
+          "GOCACHE": os.path.join(private_root, "go-build"),
+          "GOMODCACHE": os.path.join(private_root, "go-mod"),
+          "GOPATH": os.path.join(private_root, "gopath"),
+          "GOTMPDIR": os.path.join(private_root, "go-tmp"),
+      }
+      work = os.path.join(private_root, "work")
+      private_go_root = os.path.join(private_root, "goroot")
+      private_bin = os.path.join(private_go_root, "bin")
+      private_go_src = os.path.join(private_go_root, "src")
+      for path in (*private_paths.values(), work, private_go_root, private_bin, private_go_src):
+          make_private_directory(path)
+      private_trace_bin = None
+      if trace_enabled:
+          private_trace_bin = os.path.join(private_root, "trace-bin")
+          make_private_directory(private_trace_bin)
+      # Every child remains below a controlled module boundary. The real
+      # project is reconstructed separately under the baseline/final shadows.
+      retain_private_file(
+          os.path.join(private_root, "go.mod"),
+          b"module velvet.invalid/boundary\n\ngo 1.26.5\n",
+      )
+      telemetry_root = os.path.join(
+          private_paths["HOME"], "Library", "Application Support", "go", "telemetry"
+      )
+      cursor = private_paths["HOME"]
+      for component in ("Library", "Application Support", "go", "telemetry"):
+          cursor = os.path.join(cursor, component)
+          make_private_directory(cursor)
+      retain_private_file(os.path.join(telemetry_root, "mode"), b"off")
+      import_cache_root = os.path.join(private_paths["HOME"], "Library", "Caches")
+      make_private_directory(import_cache_root)
+      # x/tools otherwise creates and consumes a mutable on-disk module index.
+      # A retained regular file at its directory path disables that cache.
+      retain_private_file(os.path.join(import_cache_root, "goimports"), b"")
+
+      private_tool = os.path.join(private_bin, "goimports")
+      private_go = os.path.join(private_bin, "go")
+      if trace_enabled:
+          retain_private_file(
+              private_tool, formatter_launcher["snapshot"]["content"], 0o500
+          )
+          private_native_tool = os.path.join(private_bin, "goimports.real-native")
+          retain_private_file(
+              private_native_tool, formatter_record["snapshot"]["content"], 0o500
+          )
+          retain_private_file(
+              private_tool + ".real-program",
+              os.fsencode(private_native_tool) + b"\n",
+              0o400,
+          )
+          # The adapter's explicit Go probes remain traced, but goimports
+          # resolves `go` through PATH internally. Give that resolver the
+          # independently validated native bytes so its private subprocesses
+          # cannot create unmodeled trace records or escape the minimal GOROOT.
+          private_native_go = private_go
+          retain_private_file(
+              private_native_go, go_record["snapshot"]["content"], 0o500
+          )
+          private_go = os.path.join(private_trace_bin, "go")
+          retain_private_file(private_go, go_launcher["snapshot"]["content"], 0o500)
+          retain_private_file(
+              private_go + ".real-program",
+              os.fsencode(private_native_go) + b"\n",
+              0o400,
+          )
+      else:
+          private_native_tool = private_tool
+          private_native_go = private_go
+          retain_private_file(
+              private_tool, formatter_record["snapshot"]["content"], 0o500
+          )
+          retain_private_file(private_go, go_record["snapshot"]["content"], 0o500)
+
+      retain_semantic_tree(private_go_root, "minimal GOROOT")
+      if private_trace_bin is not None:
+          retain_semantic_tree(private_trace_bin, "explicit Go trace launcher")
+      retain_semantic_tree(private_paths["GOMODCACHE"], "empty module cache")
+      retain_semantic_tree(private_paths["GOPATH"], "empty GOPATH")
+      retain_semantic_tree(import_cache_root, "disabled goimports module index")
+
+      environment = {
+          "PATH": private_bin,
+          "HOME": private_paths["HOME"],
+          "TMPDIR": private_paths["TMPDIR"],
+          "XDG_CACHE_HOME": private_paths["XDG_CACHE_HOME"],
+          "GOCACHE": private_paths["GOCACHE"],
+          "GOMODCACHE": private_paths["GOMODCACHE"],
+          "GOPATH": private_paths["GOPATH"],
+          "GOTMPDIR": private_paths["GOTMPDIR"],
+          "LANG": "C",
+          "LC_ALL": "C",
+          "TZ": "UTC",
+          "TERM": "dumb",
+          "NO_COLOR": "1",
+          "CLICOLOR": "0",
+          "FORCE_COLOR": "0",
+          "CGO_ENABLED": "0",
+          "GO111MODULE": "on",
+          "GOARCH": "arm64",
+          "GOARM64": "v8.0",
+          "GOAUTH": "off",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "-mod=readonly",
+          "GOINSECURE": "",
+          "GOMAXPROCS": "1",
+          "GONOPROXY": "none",
+          "GONOSUMDB": "*",
+          "GOOS": "darwin",
+          "GOPRIVATE": "",
+          "GOTELEMETRY": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOVCS": "*:off",
+          # A validated copy of Go runs from an adapter-owned minimal GOROOT.
+          # Its empty, retained src directory prevents ambient or concurrently
+          # added standard-library packages from entering goimports resolution.
+          "GOROOT": private_go_root,
+      }
+      for name in ("VELVET_GLOVE_TOOL_TRACE_DIR", "VELVET_GLOVE_TOOL_TRACE_SENTINEL"):
+          if name in os.environ:
+              environment[name] = safe_text(os.environ[name], name)
+      assert_all_originals()
+
+      status, output, errors = run_go(["version"], environment, work)
+      if status != 0 or output != EXPECTED_GO_VERSION or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("Go version preflight returned unexpected evidence")
+      status, output, errors = run_go(
+          [
+              "env", "-json", "GOARCH", "GOARM64", "GOCACHE", "GOMODCACHE", "GOOS",
+              "GOPATH", "GOROOT", "GOTELEMETRY", "GOVERSION",
+          ],
+          environment,
+          work,
+      )
+      if status != 0 or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("Go environment preflight returned unexpected evidence")
+      parse_go_environment(output, environment)
+      status, output, errors = run_go(
+          ["version", "-m", private_native_tool], environment, work
+      )
+      expected_metadata = os.fsencode(private_native_tool) + b": " + EXPECTED_TOOL_METADATA
+      if status != 0 or output != expected_metadata or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("goimports build metadata preflight returned unexpected evidence")
+
+      baseline_shadow, baseline_paths = materialize_shadow("baseline", {})
+      status, output, errors = run_go(
+          ["mod", "edit", "-json", os.path.join(baseline_shadow, "go.mod")],
+          environment,
+          baseline_shadow,
+      )
+      if status != 0 or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("Go module preflight returned unexpected evidence")
+      module_path, go_version = parse_module(output, manifest_path)
+      status, output, errors = run_go(
+          ["list", "-m", "-json"], environment, baseline_shadow
+      )
+      if status != 0 or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("Go module-scope preflight returned unexpected evidence")
+      parse_main_module(output, baseline_shadow, module_path, go_version)
+
+      canary = os.path.join(private_root, "canary")
+      make_private_directory(canary)
+      canary_app = os.path.join(canary, "app")
+      canary_helper = os.path.join(canary, "helper")
+      make_private_directory(canary_app)
+      make_private_directory(canary_helper)
+      retain_private_file(
+          os.path.join(canary, "go.mod"),
+          b"module velvet.invalid/canary\n\ngo 1.26.5\n",
+      )
+      retain_private_file(
+          os.path.join(canary_helper, "helper.go"),
+          b"package helper\n\nconst Value = 1\n",
+      )
+      canary_path = os.path.join(canary_app, "main.go")
+      retain_private_file(canary_path, CANARY_INPUT)
+      retain_semantic_tree(canary, "resolver canary")
+      status, listed, errors = run_tool(["-l", canary_path], environment, canary)
+      if (
+          status != 0
+          or listed != os.fsencode(canary_path) + b"\n"
+          or errors
+      ):
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("goimports listing canary returned unexpected evidence")
+      status, output, errors = run_tool(
+          ["-srcdir=" + canary_path], environment, canary, CANARY_INPUT
+      )
+      if status != 0 or output != CANARY_OUTPUT or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("goimports resolver canary returned unexpected evidence")
+      status, repeated, errors = run_tool(
+          ["-srcdir=" + canary_path], environment, canary, CANARY_OUTPUT
+      )
+      if status != 0 or repeated != CANARY_OUTPUT or errors:
+          emit_stderr_bytes = bool(errors)
+          raise EvidenceError("goimports resolver canary is not a fixed point")
+
+      dirty_paths = []
+      dirty_indices = []
+      candidate_total = 0
+      for index, record in enumerate(targets):
+          private_input = baseline_paths[record["relative"]]
+          status, listed, errors = run_tool(
+              ["-l", private_input], environment, baseline_shadow
+          )
+          if status != 0 or errors:
+              stderr_bytes = errors.replace(
+                  os.fsencode(private_input), os.fsencode(record["path"])
+              )
+              if errors:
+                  emit_stderr_bytes = True
+              raise EvidenceError(f"goimports syntax preflight exited {status} for {record['path']}")
+          if listed not in (b"", os.fsencode(private_input) + b"\n"):
+              raise EvidenceError(f"goimports syntax preflight returned malformed evidence for {record['path']}")
+          status, formatted, errors = run_tool(
+              ["-srcdir=" + private_input],
+              environment,
+              baseline_shadow,
+              record["snapshot"]["content"],
+          )
+          if status != 0 or errors:
+              stderr_bytes = errors.replace(
+                  b"<standard input>", os.fsencode(record["path"])
+              )
+              emit_stderr_bytes = bool(errors)
+              raise EvidenceError(f"goimports formatting exited {status} for {record['path']}")
+          candidate_total += len(formatted)
+          if candidate_total > SOURCE_LIMIT:
+              raise EvidenceError(
+                  f"formatted candidate batch exceeds the {SOURCE_LIMIT}-byte validation limit"
+              )
+          status, repeated, errors = run_tool(
+              ["-srcdir=" + private_input],
+              environment,
+              baseline_shadow,
+              formatted,
+          )
+          if status != 0 or errors or repeated != formatted:
+              emit_stderr_bytes = bool(errors)
+              raise EvidenceError(
+                  f"goimports candidate is not a validated fixed point for {record['path']}"
+              )
+          is_dirty = formatted != record["snapshot"]["content"]
+          if (listed != b"") != is_dirty:
+              raise EvidenceError(f"goimports listing and formatting evidence disagree for {record['path']}")
+          if is_dirty:
+              dirty_paths.append(record["path"])
+              dirty_indices.append(index)
+          candidates.append(formatted)
+
+      assert_all_originals()
+      replacements = {
+          record["relative"]: candidates[index]
+          for index, record in enumerate(targets)
+      }
+      final_shadow, final_paths = materialize_shadow("final", replacements)
+      verify_shadow_fixed_point(
+          final_shadow, final_paths, environment, "whole-batch"
+      )
+
+      if mode == "verify":
+          result_stdout = b"".join(os.fsencode(path) + b"\n" for path in dirty_paths)
+          result_status = 0
+      else:
+          acquire_write_descriptors(dirty_indices)
+          commit_targets(candidates, dirty_indices)
+          verify_shadow_fixed_point(
+              final_shadow, final_paths, environment, "post-commit"
+          )
+          assert_all_originals()
+          result_status = 0
+  except AdapterSignal as error:
+      reported_signal = error.signum
+      adapter_error = append_error(error, stop_child(error.signum))
+  except BaseException as error:
+      adapter_error = append_error(error, stop_child())
+  finally:
+      cleaning = True
+      signals_blocked = False
+      try:
+          adapter_error = append_error(adapter_error, stop_child())
+          if adapter_error is not None and committed_indices:
+              adapter_error = append_error(
+                  adapter_error,
+                  rollback_targets(
+                      committed_indices, candidates, committed_metadata
+                  ),
+              )
+              committed_indices.clear()
+              committed_metadata.clear()
+          if private_root is not None:
+              try:
+                  unseal_semantic_roots()
+              except BaseException as error:
+                  adapter_error = append_error(adapter_error, error)
+                  adapter_error = append_error(
+                      adapter_error, best_effort_unseal_private_tree()
+                  )
+              try:
+                  shutil.rmtree(private_root)
+              except FileNotFoundError:
+                  pass
+              except OSError as error:
+                  adapter_error = append_error(adapter_error, EvidenceError(f"cannot remove controlled temporary directory: {error}"))
+          try:
+              signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
+              signals_blocked = True
+          except (AttributeError, OSError, ValueError) as error:
+              adapter_error = append_error(adapter_error, EvidenceError(f"cannot block cleanup signals: {error}"))
+          if pending_signal is not None and pending_signal != reported_signal:
+              adapter_error = append_error(adapter_error, AdapterSignal(pending_signal))
+          if signals_blocked:
+              queued = sorted(signal.sigpending().intersection(handled_signals), key=int)
+              if queued:
+                  received = int(signal.sigwait({queued[0]}))
+                  if pending_signal is None:
+                      pending_signal = received
+                  adapter_error = append_error(adapter_error, AdapterSignal(pending_signal))
+          if adapter_error is not None and committed_indices:
+              adapter_error = append_error(
+                  adapter_error,
+                  rollback_targets(
+                      committed_indices, candidates, committed_metadata
+                  ),
+              )
+              committed_indices.clear()
+              committed_metadata.clear()
+      finally:
+          retained_records = [
+              *sources.values(),
+              *controls.values(),
+              *program_records,
+              *private_records,
+          ]
+          closed_descriptors = set()
+          for record in retained_records:
+              if record["fd"] in closed_descriptors:
+                  continue
+              closed_descriptors.add(record["fd"])
+              try:
+                  os.close(record["fd"])
+              except OSError as error:
+                  # Every writable descriptor was fsynced and revalidated before
+                  # this exit-only close.  A close error cannot safely be retried,
+                  # and does not change the already-proven project outcome.
+                  if adapter_error is not None:
+                      adapter_error = append_error(adapter_error, EvidenceError(f"cannot close retained descriptor: {error}"))
+          for signum, handler in previous_handlers.items():
+              try:
+                  signal.signal(signum, handler)
+              except (OSError, ValueError) as error:
+                  # The isolated interpreter exits immediately after this block;
+                  # handler restoration cannot alter committed project bytes.
+                  if adapter_error is not None:
+                      adapter_error = append_error(adapter_error, EvidenceError(f"cannot restore signal handler {signum}: {error}"))
+          cleaning = False
+
+  if adapter_error is not None:
+      if emit_stdout_bytes and stdout_bytes:
+          sys.stdout.buffer.write(sanitize(stdout_bytes))
+      if emit_stderr_bytes and stderr_bytes:
+          sys.stderr.buffer.write(sanitize(stderr_bytes))
+      fail(sanitize(adapter_error))
+  if result_stdout:
+      sys.stdout.buffer.write(result_stdout)
+  if result_stderr:
+      sys.stderr.buffer.write(result_stderr)
+  raise SystemExit(result_status)
+  """#
+
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "goimports"
   displayName = "goimports"
   executable = "goimports"
-  installHint = "install goimports with `go install golang.org/x/tools/cmd/goimports@latest`"
+  installHint = "install golang.org/x/tools/cmd/goimports v0.48.0 with the checksum-locked Go 1.26.5 toolchain and a Python 3 interpreter with isolated-mode support"
+  workspaceIndicator = "go.mod"
+  phaseInvocation = "batch"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*.go"; "**/*.go" }
@@ -20,26 +1817,44 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   workflows = new Mapping<String, Config.Workflow> {
     ["format"] = new Config.Workflow {
       check = new Config.WorkflowCommand {
+        program = "python"
         argv = new Listing<String | Config.ArgToken> {
-          "-l"
+          "-I"
+          "-c"
+          goImportsAdapter
+          new Config.ToolExecutable {}
+          "go"
+          "verify"
           new Config.ExtraArgs {}
+          "__VELVET_GLOVE_GOIMPORTS_FILES__"
+          new Config.WorkspaceIndicator {}
           new Config.Files {}
         }
         exitCodes = new Config.ExitCodes {
           clean = new Listing<Int> { 0 }
           failure = new Listing<Int> { 2 }
+          unexpected = "failure"
         }
         issuesOnStdout = true
       }
       remedy = new Config.WorkflowCommand {
+        program = "python"
         argv = new Listing<String | Config.ArgToken> {
-          "-w"
+          "-I"
+          "-c"
+          goImportsAdapter
+          new Config.ToolExecutable {}
+          "go"
+          "write"
           new Config.ExtraArgs {}
+          "__VELVET_GLOVE_GOIMPORTS_FILES__"
+          new Config.WorkspaceIndicator {}
           new Config.Files {}
         }
         exitCodes = new Config.ExitCodes {
           clean = new Listing<Int> { 0 }
           failure = new Listing<Int> { 2 }
+          unexpected = "failure"
         }
         writes = "target-files"
       }
@@ -52,14 +1867,23 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["format"] = new Config.Phase {
       mode = "format"
+      program = "python"
       argv = new Listing<String | Config.ArgToken> {
-        "-w"
+        "-I"
+        "-c"
+        goImportsAdapter
+        new Config.ToolExecutable {}
+        "go"
+        "write"
         new Config.ExtraArgs {}
+        "__VELVET_GLOVE_GOIMPORTS_FILES__"
+        new Config.WorkspaceIndicator {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         failure = new Listing<Int> { 2 }
+        unexpected = "failure"
       }
       writes = "target-files"
     }

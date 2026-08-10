@@ -1,0 +1,11 @@
+error: goimports: phase `format` failed; diagnostics: <workspace>/.velvet-glove/goimports-agent-hook/test-session_goimports-tool_goimports-tool-failure.txt
+goimports failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: python -I -c <inline-script> goimports go write __VELVET_GLOVE_GOIMPORTS_FILES__ <workspace>/go.mod <workspace>/example.go <workspace>/invalid.go
+status: Some(2)
+classification: Some(Failure)
+stderr:
+<workspace>/invalid.go:3:15: expected ')', found '{'
+velvet-glove-goimports: goimports syntax preflight exited 2 for <workspace>/invalid.go
+artifact: <workspace>/.velvet-glove/goimports-agent-hook/test-session_goimports-tool_goimports-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
