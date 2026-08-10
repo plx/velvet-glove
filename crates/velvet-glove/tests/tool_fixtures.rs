@@ -5350,6 +5350,7 @@ fn tool_trace_shim_dispatches_distinct_program_bindings() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn tool_trace_shim_records_the_actual_native_golines_stdin() {
     let root = unique_temp_dir("velvet-glove-golines-native-stdin-trace-test");
     let shim_dir = root.join("shims");
