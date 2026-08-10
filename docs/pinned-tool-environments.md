@@ -17,11 +17,12 @@ just tool-case ghalint-workflow multi-workflow
 just tool-case go-fmt multi-file
 just tool-case go-vet test-findings
 just tool-case errcheck multi-file
+just tool-case goimports multi-file
 just tool-case cargo-clippy workspace-autofix
 just tool-case cargo-fmt workspace-multi
 ```
 
-Run all twenty-two behavior-rich representative contracts across seventeen environments
+Run all twenty-three behavior-rich representative contracts across eighteen environments
 with:
 
 ```sh
@@ -55,11 +56,11 @@ Before a case runs, the driver:
    pass;
 2. installs only the selected mise-managed tools in `--locked` mode and verifies
    every directly managed Rust or Ruby archive, every Betterleaks or ghalint
-   source, patch, module-lock, and build-artifact digest, and the errcheck proxy,
-   module-input, reproducible-artifact, and Go build-identity chain against
+   source, patch, module-lock, and build-artifact digest, and the errcheck and
+   goimports proxy, module-input, reproducible-artifact, and Go build-identity chains against
    committed values;
 3. bootstraps Cargo, npm, Python-wheel, pure-Ruby Bundler, Betterleaks,
-   ghalint, and errcheck Go module graphs from their committed locks as
+   ghalint, errcheck, and goimports Go module graphs from their committed locks as
    applicable; Cargo runs from `/`
    with an explicit manifest and controlled target root so ancestor `.cargo`
    files and host build caches cannot participate, while the patched Betterleaks
@@ -93,6 +94,7 @@ network-denial probe, or fixture contract differs from the declaration.
 | Python | Python 3.14.5; embedded pip 26.1.1; Black 26.5.1 | mise SHA-256; platform-specific wheel SHA-256 closure | `black/unformatted` |
 | Go | Go/gofmt/go vet 1.26.5; Python 3.14.5 | official Go archive SHA-256; exact mise archive lock | `go-fmt/multi-file`, `go-vet/test-findings` |
 | Errcheck Go | Go 1.26.5; errcheck 1.20.0; Python 3.14.5 | official Go archive SHA-256; Go proxy zip SHA-256; exact module sums; reproducible binary SHA-256 and embedded build metadata | `errcheck/multi-file` |
+| Goimports Go | Go 1.26.5; goimports/x/tools 0.48.0; Python 3.14.5 | official Go archive SHA-256; four-module proxy closure; exact module sums; reproducible binary SHA-256 and embedded build metadata | `goimports/multi-file` |
 | Rust | Rust 1.90.0; rustfmt 1.8.0 | dated official standalone archives with independent SHA-256 digests | `rustfmt/unformatted` |
 | Cargo Clippy/Fmt | Rust/Cargo 1.97.1; Clippy 0.1.97; cargo-fmt/rustfmt 1.9.0; Python 3.14.5 | dated official Rust archive SHA-256; independently checked signed channel manifest | `cargo-clippy/workspace-autofix`, `cargo-fmt/workspace-multi` |
 | Ruby | jdx/ruby 3.4.10-2; embedded Bundler 2.6.9 and precompiled bundled Racc 1.8.1; Asciidoctor 2.0.26; RuboCop 1.30.1 | relocatable archive SHA-256; system-only dylink closure; Bundler package checksums | `asciidoctor/multi-file`, `rubocop/autocorrect-strings` |
@@ -646,6 +648,100 @@ child/private cleanup failures. Filesystem replacement races and descendants tha
 deliberately escape their process group remain explicit operating-system
 boundaries; the adapter fails closed on every demonstrated instance but cannot
 make external concurrent actors transactional.
+
+### goimports validation contract
+
+The dedicated goimports environment reproducibly builds
+`golang.org/x/tools/cmd/goimports` v0.48.0 from tag commit
+[`05f9cb5d358503005bd6f82b17916d226ca7b210`](https://go.googlesource.com/tools/+/05f9cb5d358503005bd6f82b17916d226ca7b210)
+and tree `ca40a4b11d95c9392ef4a87520efea157c8aefb5`. The official Go proxy
+archive is pinned at SHA-256
+`8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755`.
+The committed `go.mod` and `go.sum` are pinned at SHA-256
+`9de464c8f30dde87a846b165fadd6620a150e54352265f8b22a7b63959510778`
+and
+`d43f495d37c149ddc7145f20b13b84812ba3aea895834e7595d6eacd62bc7a44`.
+They intentionally contain only x/tools v0.48.0 and the binary's exact build
+dependencies: x/mod v0.38.0, x/sync v0.22.0, and x/telemetry at
+`49f421fb7959`. Provisioning downloads those four module versions explicitly;
+it does not broaden the closure with `go mod download all`.
+
+The source is built from the sealed local file proxy with the official locked
+Go 1.26.5 Darwin arm64 toolchain:
+
+```text
+go install -trimpath -ldflags "-s -w -buildid=" golang.org/x/tools/cmd/goimports@v0.48.0
+```
+
+`GOTOOLCHAIN=local`, `CGO_ENABLED=0`, `GOOS=darwin`, `GOARCH=arm64`, and
+`GOARM64=v8.0` are fixed. The resulting 5,814,322-byte binary has SHA-256
+`2d7d2892651e4452091f0fe8e280c7b6e14f3b6964854516fd7372442d57fd27`.
+Both provisioning and denied-network case execution require `go version -m`
+to name Go 1.26.5, x/tools v0.48.0, exactly the three dependencies above,
+trimpath, disabled CGO, and the Darwin arm64 v8.0 target. goimports has no
+native version flag, so this exact build record and binary hash are the version
+probe.
+
+The evaluated immediate phase and explicit deferred workflow use pinned Python
+3.14.5 in isolated mode:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+python -I -c <adapter> goimports go verify|write {extra-args} __VELVET_GLOVE_GOIMPORTS_FILES__ {workspace-indicator} {files}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+The adapter rejects every extra argument and accepts one canonical root
+`go.mod` with an empty dependency graph. It rejects workspaces, nested modules,
+vendor trees, semantic module directives, linked directory topology, and
+symlink or hard-link source/control aliases. Every physical `.go` file under
+the module is bounded, retained, and copied to a read-only private shadow,
+including tests, generated and build-tag-excluded files, dot/underscore and
+testdata directories, and node_modules. Native `-w` is never invoked.
+
+Every child runs from a complete replacement environment with denied module
+resolution. The validated Go bytes are copied into an adapter-owned minimal
+GOROOT whose retained `src` directory is empty, GOMODCACHE and GOPATH remain
+empty retained semantic trees, telemetry is disabled by its private mode file,
+and a retained mode-0400 regular file prevents the mutable goimports module
+index from being created. The adapter validates exact Go version, environment,
+build metadata, parsed module, and main-module scope; then an exact canary must
+add one standard-library import and one physical main-module import.
+
+For every selected file, native `-l`, stdin formatting with fixed `-srcdir`,
+and a candidate fixed-point rerun must agree. All candidates are then installed
+in a second private shadow and the whole selected batch must remain a fixed
+point, closing sibling-file ordering effects. Candidate sources are limited to
+goimports' binary-baked standard-library manifest, physical packages in the
+inventoried main module, and syntactic imports in inventoried same-directory
+siblings. That sibling rule can mirror an externally named path, but external
+dependency fetching, resolution, validity, compilation, and type correctness
+are not claimed.
+
+Verify emits only validated dirty paths in selected order. Write opens retained
+descriptors only for proven-dirty files, revalidates each immediately before
+truncation, and performs an authoritative post-commit shadow check. A partial
+adapter-owned write is restored best-effort. A completed write is rolled back
+only while its identity, link count, mode, exact candidate bytes, and captured
+post-write metadata still match; a detected concurrent edit is preserved and
+reported unsafe to overwrite. Clean files retain validated bytes, identity,
+link count, mode, size, and mtime, while reads may update atime and clean-file
+ctime is not promised.
+
+The four-case matrix covers clean input, a missing standard-library import, a
+three-selected-file batch proving physical main-module and same-directory
+sibling import discovery, and a dirty-before-syntax-error operational batch.
+Claude and Codex goldens cover immediate and explicit deferred check, remedy,
+final-check, exact diff, and idempotence behavior. The evaluated adversarial
+lifecycle covers ambient resolver poisoning, malformed Go and formatter
+evidence, non-fixed candidates, semantic-tree injection, alias and topology
+races, aggregate bounds, partial commits, guarded rollback, signals, timeouts,
+and inherited or closed-pipe descendants. SIGKILL or power loss, failed
+rollback, the narrow final-check-to-truncate and guarded-rollback intervals,
+and descendants that deliberately escape their process group remain explicit
+operating-system limitations.
 
 ### Betterleaks validation contract
 
