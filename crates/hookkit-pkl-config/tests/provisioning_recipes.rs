@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const RECIPES_JSON: &str = include_str!("../validation/provisioning/recipes.json");
 const GHALINT_SOURCE_BUILD_JSON: &str =
     include_str!("../validation/provisioning/ghalint-workflow/source-build.json");
+const GOLINES_SOURCE_BUILD_JSON: &str =
+    include_str!("../validation/provisioning/golines/source-build.json");
 const VACUUM_PROVENANCE_JSON: &str =
     include_str!("../validation/provisioning/vacuum/provenance.json");
 
@@ -1013,6 +1015,7 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
             "go-vet",
             "gofumpt",
             "goimports",
+            "golines",
             "jq",
             "prettier",
             "rubocop",
@@ -1282,6 +1285,73 @@ fn representative_provisioning_recipes_are_complete_and_cross_linked() {
         ]
     );
 
+    let golines = registry
+        .recipes
+        .iter()
+        .find(|recipe| recipe.tool_id == "golines")
+        .expect("golines pinned recipe");
+    assert_eq!(golines.id, "golines-macos-arm64");
+    assert_eq!(golines.environment_id, "macos-arm64-golines");
+    assert_eq!(golines.version, "0.13.0+velvet-glove.1");
+    assert_eq!(golines.case_executables, ["golines", "python"]);
+    assert_eq!(
+        golines.cases,
+        [
+            "clean",
+            "generated-explicit",
+            "long-line",
+            "multi-file",
+            "operational-failure"
+        ]
+    );
+    assert_eq!(golines.representative_case, "multi-file");
+    assert_eq!(golines.probe.argv, ["golines", "--version"]);
+    assert_eq!(golines.probe.match_kind, "exact");
+    assert_eq!(
+        golines.probe.expected,
+        "golines v0.13.0+velvet-glove.1\n\nbuild information:\n\tbuild date: 2025-08-21T21:22:01Z\n\tgit commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
+    );
+    assert_eq!(golines.integrity.kind, "go-source-build");
+    assert_eq!(
+        golines.integrity.patch_sha256.as_deref(),
+        Some("c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3")
+    );
+    assert_eq!(
+        golines.integrity.built_artifact_sha256.as_deref(),
+        Some("4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75")
+    );
+    let golines_environment = environments
+        .get(golines.environment_id.as_str())
+        .expect("golines controlled environment");
+    assert_eq!(
+        golines_environment
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<Vec<_>>(),
+        ["golines-go", "golines"]
+    );
+    assert_eq!(
+        golines_environment
+            .bootstrap
+            .iter()
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "golines-apply-closure",
+            "golines-go-mod-download",
+            "golines-go-mod-verify",
+            "golines-go-build"
+        ]
+    );
+    let download = &golines_environment.bootstrap[1];
+    assert_eq!(download.argv[4], "download");
+    assert_eq!(download.argv.len(), 17);
+    assert!(
+        !download.argv.iter().any(|argument| argument == "all"),
+        "golines bootstrap must fetch only the 12 binary runtime modules"
+    );
+
     let cargo_fmt_environment = environments
         .get(cargo_fmt.environment_id.as_str())
         .expect("cargo-fmt controlled environment");
@@ -1373,6 +1443,7 @@ fn pinned_runner_registry_selection_is_exact_and_parser_stable() {
             "macos-arm64-go",
             "macos-arm64-gofumpt",
             "macos-arm64-goimports",
+            "macos-arm64-golines",
             "macos-arm64-node",
             "macos-arm64-prettier",
             "macos-arm64-python",
@@ -1977,7 +2048,7 @@ fn errcheck_provisioning_cross_links_proxy_module_artifact_and_go_identity() {
         .split("if [[ $errcheck_selected == true ]]; then")
         .nth(1)
         .expect("errcheck provisioning block")
-        .split("if needs_group ruby; then")
+        .split("if [[ $golines_selected == true ]]; then")
         .next()
         .expect("bounded errcheck provisioning block");
     assert!(
@@ -2113,6 +2184,72 @@ fn goimports_runner_binds_the_exact_source_build_and_denied_network_artifact() {
         assert!(
             inner.contains(required),
             "inner goimports runner omits {required:?}"
+        );
+    }
+}
+
+#[test]
+fn golines_runner_binds_the_patched_source_closure_and_denied_network_artifact() {
+    let root = repository_root();
+    let outer = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract.sh"))
+        .expect("outer pinned runner");
+    let inner = std::fs::read_to_string(root.join("scripts/run-pinned-tool-contract-inner.sh"))
+        .expect("inner pinned runner");
+
+    for required in [
+        "golines_selected=false",
+        "index(\"golines\") != null",
+        "golines-build-0.13.0-vg1",
+        "golines/source-build.json",
+        "c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3",
+        "8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b",
+        "21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe",
+        ".closure.runtimeModuleObjects | length) == 12",
+        "golines source-build provenance did not declare exactly 12 runtime modules",
+        "golines proxy object differs from the reviewed closure",
+        "GOENV=off",
+        "GOWORK=off",
+        "exec --locked --fresh-env --deny-net --",
+        "-buildvcs=false",
+        "0.13.0+velvet-glove.1",
+        "4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75",
+        "validate_golines_binary",
+        "pinned_component_cache_valid",
+    ] {
+        assert!(
+            outer.contains(required),
+            "outer golines runner omits {required:?}"
+        );
+    }
+    let golines_block = outer
+        .split("if [[ $golines_selected == true ]]; then")
+        .nth(1)
+        .expect("golines provisioning block")
+        .split("if needs_group ruby; then")
+        .next()
+        .expect("bounded golines provisioning block");
+    assert!(
+        !golines_block.contains("mod download all \\")
+            && !golines_block.contains("mod download all\n"),
+        "golines bootstrap must not expand the reviewed 12-module runtime closure"
+    );
+    for required in [
+        "golines_selected=false",
+        "index(\"golines\") != null",
+        "golines_bin=\"$golines_root/bin/golines\"",
+        "golines_go_bin=$(type -P go || true)",
+        "denied-network golines Go resolves outside the managed mise root",
+        "observed_size != 7341970",
+        "version -m \"$golines_bin\"",
+        "github.com/segmentio/golines",
+        "golang.org/x/tools\\tv0.36.0\\th1:kWS0uv/zsvHEle1LbV5LE8QujrxB3wfQyxHfhOk0Qkg=",
+        "validate_golines_metadata",
+        "probe_argv=(\"$golines_go_bin\" version -m \"$golines_bin\")",
+        "resolved=\"$golines_bin\"",
+    ] {
+        assert!(
+            inner.contains(required),
+            "inner golines runner omits {required:?}"
         );
     }
 }
@@ -2412,6 +2549,12 @@ fn validate_integrity(root: &Path, integrity: &Integrity, owner: &str) {
             integrity.component_id.is_none(),
             "{owner}: source build has parent component"
         );
+        if integrity.path.as_deref()
+            == Some("crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch")
+        {
+            validate_golines_source_build(root, integrity, owner);
+            return;
+        }
         if integrity.path.as_deref()
             == Some(
                 "crates/hookkit-pkl-config/validation/provisioning/ghalint-workflow/closure.patch",
@@ -2831,6 +2974,201 @@ fn validate_ghalint_source_build(root: &Path, integrity: &Integrity, owner: &str
     );
 }
 
+fn validate_golines_source_build(root: &Path, integrity: &Integrity, owner: &str) {
+    assert_eq!(
+        integrity.url.as_deref(),
+        Some("https://github.com/segmentio/golines/archive/refs/tags/v0.13.0.tar.gz")
+    );
+    assert_eq!(
+        integrity.sha256.as_deref(),
+        Some("ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e")
+    );
+    assert_eq!(
+        integrity.patch_sha256.as_deref(),
+        Some("c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3")
+    );
+    assert_eq!(integrity.archive_format.as_deref(), Some("tar-gz"));
+    assert_eq!(integrity.archive_root.as_deref(), Some("golines-0.13.0"));
+    assert_eq!(
+        integrity.module_manifest_path.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/golines/go.mod")
+    );
+    assert_eq!(
+        integrity.module_manifest_sha256.as_deref(),
+        Some("8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b")
+    );
+    assert_eq!(
+        integrity.module_lock_path.as_deref(),
+        Some("crates/hookkit-pkl-config/validation/provisioning/golines/go.sum")
+    );
+    assert_eq!(
+        integrity.module_lock_sha256.as_deref(),
+        Some("21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe")
+    );
+    assert_eq!(
+        integrity.built_artifact_sha256.as_deref(),
+        Some("4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75")
+    );
+    assert_eq!(
+        integrity.build_toolchain_component_id.as_deref(),
+        Some("golines-go")
+    );
+    assert_eq!(
+        integrity.build_working_directory.as_deref(),
+        Some("{state}/golines-build-0.13.0-vg1/source")
+    );
+    assert_eq!(
+        integrity.build_argv,
+        [
+            "go",
+            "-C",
+            "{state}/golines-build-0.13.0-vg1/source",
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags",
+            "-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z",
+            "-o",
+            "{state}/golines-build-0.13.0-vg1/install/bin/golines",
+            ".",
+        ]
+    );
+    assert_eq!(
+        integrity.build_environment,
+        BTreeMap::from([
+            ("CGO_ENABLED".to_owned(), "0".to_owned()),
+            ("GOARCH".to_owned(), "arm64".to_owned()),
+            ("GOARM64".to_owned(), "v8.0".to_owned()),
+            (
+                "GOCACHE".to_owned(),
+                "{state}/golines-go-build-cache".to_owned(),
+            ),
+            ("GOENV".to_owned(), "off".to_owned()),
+            ("GOFLAGS".to_owned(), "-mod=readonly".to_owned()),
+            (
+                "GOMODCACHE".to_owned(),
+                "{state}/golines-go-mod-cache".to_owned(),
+            ),
+            ("GOOS".to_owned(), "darwin".to_owned()),
+            ("GOPROXY".to_owned(), "off".to_owned()),
+            ("GOSUMDB".to_owned(), "off".to_owned()),
+            ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+            ("GOWORK".to_owned(), "off".to_owned()),
+            ("SOURCE_DATE_EPOCH".to_owned(), "1755811321".to_owned()),
+        ])
+    );
+    assert_eq!(integrity.min_os_version.as_deref(), Some("12.0"));
+    assert_eq!(
+        integrity.allowed_dylib_prefixes,
+        ["/System/Library/", "/usr/lib/"]
+    );
+
+    for path in [
+        integrity.path.as_deref().expect("golines patch path"),
+        integrity
+            .module_manifest_path
+            .as_deref()
+            .expect("golines module manifest"),
+        integrity
+            .module_lock_path
+            .as_deref()
+            .expect("golines module lock"),
+    ] {
+        assert_file(root, path);
+    }
+    let provenance: serde_json::Value = serde_json::from_str(GOLINES_SOURCE_BUILD_JSON)
+        .unwrap_or_else(|error| panic!("{owner}: parse golines source build: {error}"));
+    assert_eq!(provenance["schemaVersion"], 1);
+    assert_eq!(provenance["status"], "integrated");
+    assert_eq!(
+        provenance["upstream"]["peeledCommit"],
+        "8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
+    );
+    assert_eq!(provenance["toolchain"]["componentId"], "golines-go");
+    assert_eq!(provenance["upstream"]["repositoryArchived"], true);
+    assert_eq!(provenance["upstream"]["finalRelease"], "v0.13.0");
+    assert_eq!(provenance["upstream"]["tagKind"], "lightweight");
+    assert_eq!(
+        provenance["upstream"]["commitVerification"]["verified"],
+        true
+    );
+    assert_eq!(
+        provenance["upstream"]["license"]["sha256"],
+        "d6d71a1f7dc6539e371120cc7af6e3257e55ca79634d473211f217b8965b0f16"
+    );
+    assert_eq!(
+        provenance["upstream"]["moduleProxy"]["sha256"],
+        "5166daf66491c02c7311e41009b6af6cafa7382a070b852171107b16567f806e"
+    );
+    assert_eq!(
+        provenance["upstream"]["moduleProxy"]["moduleSum"],
+        "h1:GfbpsxoF4eYuEZD3mxrlsN/XD30m6nOO4QLQj2JIa90="
+    );
+    assert_eq!(
+        provenance["excludedArtifacts"]["officialDarwinUniversal"]["embeddedGoVersion"],
+        "go1.24.6"
+    );
+    assert_eq!(
+        provenance["excludedArtifacts"]["officialDarwinUniversal"]["retrievableArtifactAttestation"],
+        false
+    );
+    assert_eq!(
+        provenance["excludedArtifacts"]["unpatchedGo1265ModuleBuild"]["vulnerableDependency"],
+        "golang.org/x/crypto@v0.41.0"
+    );
+    assert_eq!(
+        provenance["excludedArtifacts"]["unpatchedGo1265ModuleBuild"]["govulncheckFindingIds"]
+            .as_array()
+            .expect("unpatched golines vulnerability IDs")
+            .len(),
+        17
+    );
+    assert_eq!(
+        provenance["artifact"]["size"],
+        serde_json::Value::from(7_341_970_u64)
+    );
+    assert_eq!(
+        provenance["artifact"]["sha256"],
+        "4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75"
+    );
+    assert_eq!(
+        provenance["closure"]["runtimeModuleObjects"]
+            .as_array()
+            .expect("golines runtime module objects")
+            .len(),
+        12
+    );
+    let download = provenance["build"]["bootstrap"][1]["argv"]
+        .as_array()
+        .expect("golines module download argv");
+    assert_eq!(download.len(), 17);
+    assert!(!download.iter().any(|argument| argument == "all"));
+    for environment in [
+        &provenance["build"]["environment"],
+        &provenance["build"]["bootstrap"][1]["environment"],
+        &provenance["build"]["bootstrap"][2]["environment"],
+    ] {
+        assert_eq!(environment["GOENV"], "off");
+        assert_eq!(environment["GOWORK"], "off");
+    }
+    assert_eq!(
+        provenance["build"]["argv"],
+        serde_json::to_value(&integrity.build_argv).expect("golines build argv JSON")
+    );
+    assert_eq!(
+        provenance["build"]["environment"],
+        serde_json::to_value(&integrity.build_environment).expect("golines build environment JSON")
+    );
+    assert_eq!(
+        provenance["vulnerabilityEvidence"]["source"]["result"],
+        "no vulnerabilities found"
+    );
+    assert_eq!(
+        provenance["vulnerabilityEvidence"]["binary"]["result"],
+        "no vulnerabilities found"
+    );
+}
+
 fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Component) {
     match component.integrity.kind.as_str() {
         "mise-lock" => {
@@ -2884,12 +3222,12 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                 ));
                 assert!(section.contains("provenance = \"github-attestations\""));
             }
-            if matches!(component.id.as_str(), "go" | "errcheck-go") {
+            if matches!(component.id.as_str(), "go" | "errcheck-go" | "golines-go") {
                 assert_eq!(component.version, "1.26.5");
                 assert!(section.contains(
                     "checksum = \"sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a\""
                 ));
-                if component.id == "errcheck-go" {
+                if matches!(component.id.as_str(), "errcheck-go" | "golines-go") {
                     assert_eq!(selector, "go@1.26.5");
                     assert_eq!(
                         component.integrity.sha256.as_deref(),
@@ -3085,6 +3423,14 @@ fn validate_component_integrity(root: &Path, mise_lock: &str, component: &Compon
                     assert_eq!(
                         component.probe.expected,
                         "ghalint version 1.5.6+velvet-glove.1"
+                    );
+                }
+                "golines" => {
+                    assert_eq!(component.version, "0.13.0+velvet-glove.1");
+                    assert_eq!(component.probe.argv, ["golines", "--version"]);
+                    assert_eq!(
+                        component.probe.expected,
+                        "golines v0.13.0+velvet-glove.1\n\nbuild information:\n\tbuild date: 2025-08-21T21:22:01Z\n\tgit commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
                     );
                 }
                 other => panic!("unexpected Go source-build component {other}"),

@@ -1,0 +1,451 @@
+{
+  "schemaVersion": 1,
+  "status": "integrated",
+  "integrationNote": "This exact patched source-build provenance is bound by recipes.json, the validation manifest, generated documentation, the shared pinned runner, and the evaluated adapter artifact hash.",
+  "component": {
+    "id": "golines",
+    "executable": "golines",
+    "upstreamVersion": "0.13.0",
+    "productVersion": "0.13.0+velvet-glove.1",
+    "installationSource": "archived segmentio/golines v0.13.0 source at commit 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf plus the checksum-pinned velvet-glove closure patch at SHA-256 c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3, reproducibly built with locked Go 1.26.5 to SHA-256 4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75; the upstream binary and superseded unpatched Go 1.26.5 build are excluded by the recorded stale-toolchain and vulnerability evidence",
+    "probe": {
+      "argv": [
+        "golines",
+        "--version"
+      ],
+      "match": "exact",
+      "expected": "golines v0.13.0+velvet-glove.1\n\nbuild information:\n\tbuild date: 2025-08-21T21:22:01Z\n\tgit commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
+    }
+  },
+  "upstream": {
+    "repository": "https://github.com/segmentio/golines",
+    "repositoryArchived": true,
+    "finalRelease": "v0.13.0",
+    "tag": "v0.13.0",
+    "tagKind": "lightweight",
+    "peeledCommit": "8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf",
+    "commitVerification": {
+      "verified": true,
+      "note": "The lightweight tag has no independent tag signature; GitHub records the peeled commit as verified."
+    },
+    "license": {
+      "spdx": "MIT",
+      "path": "LICENSE",
+      "sha256": "d6d71a1f7dc6539e371120cc7af6e3257e55ca79634d473211f217b8965b0f16"
+    },
+    "sourceArchive": {
+      "url": "https://github.com/segmentio/golines/archive/refs/tags/v0.13.0.tar.gz",
+      "sha256": "ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e",
+      "archiveFormat": "tar-gz",
+      "archiveRoot": "golines-0.13.0"
+    },
+    "moduleProxy": {
+      "url": "https://proxy.golang.org/github.com/segmentio/golines/@v/v0.13.0.zip",
+      "sha256": "5166daf66491c02c7311e41009b6af6cafa7382a070b852171107b16567f806e",
+      "size": 58752,
+      "moduleSum": "h1:GfbpsxoF4eYuEZD3mxrlsN/XD30m6nOO4QLQj2JIa90=",
+      "goModSha256": "1981e8cea70c114c08916c9fc46adb810e458d8c7af057d2d437a533a77ec660",
+      "goModSum": "h1:MMEi38dnJiyxqFZqFOqN14QMzWHzj/i0+L9Q2MsVr64=",
+      "originCommit": "8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf"
+    }
+  },
+  "excludedArtifacts": {
+    "officialDarwinUniversal": {
+      "url": "https://github.com/segmentio/golines/releases/download/v0.13.0/golines_0.13.0_darwin_all.tar.gz",
+      "sha256": "82fb27c00940beade79a6bce44dcb7b60fee7fe8a9c0f933876dad74196ea6ba",
+      "size": 5919573,
+      "checksumsSha256": "da549fdc763150fb378d76207fade02f590353031bbd548afcd6f390d58b736b",
+      "universalBinarySha256": "4d3137d7310849927b5e6901da21e16eb62499379fcfae53fef3d5d6d8786106",
+      "embeddedGoVersion": "go1.24.6",
+      "retrievableArtifactAttestation": false,
+      "exclusion": "The upstream universal Darwin release binary embeds stale Go 1.24.6 and has no retrievable artifact attestation."
+    },
+    "unpatchedGo1265ModuleBuild": {
+      "sha256": "7cb844a3e3469362ed1dcc6df415306bd4a78872e4662174409bd85c0b9c8922",
+      "size": 7359026,
+      "embeddedGoVersion": "go1.26.5",
+      "module": "github.com/segmentio/golines@v0.13.0",
+      "vulnerableDependency": "golang.org/x/crypto@v0.41.0",
+      "govulncheckObservedAt": "2026-08-10",
+      "govulncheckFindingIds": [
+        "GO-2026-5932",
+        "GO-2026-5033",
+        "GO-2026-5023",
+        "GO-2026-5021",
+        "GO-2026-5020",
+        "GO-2026-5019",
+        "GO-2026-5018",
+        "GO-2026-5017",
+        "GO-2026-5016",
+        "GO-2026-5015",
+        "GO-2026-5014",
+        "GO-2026-5013",
+        "GO-2026-5006",
+        "GO-2026-5005",
+        "GO-2025-4135",
+        "GO-2025-4134",
+        "GO-2025-4116"
+      ],
+      "exclusion": "The exact unpatched Go 1.26.5 module build retains the vulnerable prefixed formatter and its x/crypto v0.41.0 graph; binary govulncheck reports 17 called vulnerabilities."
+    }
+  },
+  "closure": {
+    "patchPath": "crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch",
+    "patchSha256": "c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3",
+    "moduleManifestPath": "crates/hookkit-pkl-config/validation/provisioning/golines/go.mod",
+    "moduleManifestSha256": "8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b",
+    "moduleLockPath": "crates/hookkit-pkl-config/validation/provisioning/golines/go.sum",
+    "moduleLockSha256": "21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe",
+    "originalFiles": {
+      "main.go": "f4b5292ae055fd299e5ea8d2b42af8b907bb9bf1002e7c5bb3796f8e1069949f",
+      "go.mod": "1981e8cea70c114c08916c9fc46adb810e458d8c7af057d2d437a533a77ec660",
+      "go.sum": "5a29e3cb78df02fee0483a45e7ce92b83a6c3b1ebac46ca6971df9c2dc1081fe"
+    },
+    "patchedMainSha256": "a600f1ece4dde5b86707b52bc157378f50889f69f780442abe18577e0cf895c0",
+    "changes": [
+      "replace the vulnerable prefixed log formatter with logrus TextFormatter and deterministic no-color output",
+      "remove the prefixed-formatter and unused vulnerable/test-only transitive closure",
+      "advance the module language directive to Go 1.25 and x/term/x/sys to the locked clean versions"
+    ],
+    "runtimeModuleObjects": [
+      {
+        "module": "github.com/alecthomas/kingpin/v2",
+        "version": "v2.4.0",
+        "moduleSum": "h1:f48lwail6p8zpO1bC4TxtqACaGqHYA22qkHjHpqDjYY=",
+        "goModSum": "h1:0gyi0zQnjuFk8xrkNKamJoyUo382HRL7ATRpFZCw6tE=",
+        "zip": {
+          "sha256": "ef1ea6fead21e5fcc9e1532187888c8c7c4f3ebbdb00587ab67a19245206ca66",
+          "size": 62260
+        },
+        "mod": {
+          "sha256": "d7b3accc083c2d887107e7b9998d2b7daa7df77352d169e69d6fbbe6995fb8bd",
+          "size": 352
+        }
+      },
+      {
+        "module": "github.com/alecthomas/units",
+        "version": "v0.0.0-20240927000941-0f3dac36c52b",
+        "moduleSum": "h1:mimo19zliBX/vSQ6PWWSL9lK8qwHozUj03+zLoEB8O0=",
+        "goModSum": "h1:fvzegU4vN3H1qMT+8wDmzjAcDONcgo2/SZ/TyfdUOFs=",
+        "zip": {
+          "sha256": "9a275dbb1454d52d2b868b990be424c7d31c0acf2c4a99850faf18ecb9f48b91",
+          "size": 8965
+        },
+        "mod": {
+          "sha256": "449a67b815394b36f2ffcabec8735f0442ee56edf52b84f71b9131f58976e1a3",
+          "size": 88
+        }
+      },
+      {
+        "module": "github.com/dave/dst",
+        "version": "v0.27.3",
+        "moduleSum": "h1:P1HPoMza3cMEquVf9kKy8yXsFirry4zEnWOdYPOoIzY=",
+        "goModSum": "h1:jHh6EOibnHgcUW3WjKHisiooEkYwqpHLBSX1iOBhEyc=",
+        "zip": {
+          "sha256": "b682472decb3dc1d618df96a22467326de225676c608c0be50eb6c13b03d1f98",
+          "size": 145180
+        },
+        "mod": {
+          "sha256": "fc6780a86f5d3c6c97b5853d881791538f753794f4f05af3a2edda6c95ff3fd5",
+          "size": 327
+        }
+      },
+      {
+        "module": "github.com/fatih/structtag",
+        "version": "v1.2.0",
+        "moduleSum": "h1:/OdNE99OxoI/PqaW/SuSK9uxxT3f/tcSZgon/ssNSx4=",
+        "goModSum": "h1:mBJUNpUnHmRKrKlQQlmCrh5PuhftFbNv8Ys4/aAZl94=",
+        "zip": {
+          "sha256": "9fe0ed2128614a3c35c4149febde484cfae8c5ecb13c128957cfcdf2776dd1eb",
+          "size": 6770
+        },
+        "mod": {
+          "sha256": "2dad92dbafa08e2723426d1e2160c7a4769b8736e8610c4cc0f1d1decfe74862",
+          "size": 43
+        }
+      },
+      {
+        "module": "github.com/pmezard/go-difflib",
+        "version": "v1.0.0",
+        "moduleSum": "h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=",
+        "goModSum": "h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=",
+        "zip": {
+          "sha256": "de04cecc1a4b8d53e4357051026794bcbc54f2e6a260cfac508ce69d5d6457a0",
+          "size": 12433
+        },
+        "mod": {
+          "sha256": "74b2e766eb215377864d587badf57e95521f692d2a7860b3c7759093f9c9bec2",
+          "size": 37
+        }
+      },
+      {
+        "module": "github.com/sirupsen/logrus",
+        "version": "v1.9.3",
+        "moduleSum": "h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=",
+        "goModSum": "h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=",
+        "zip": {
+          "sha256": "4501f4e6b858bfdd997671fcdd2f647a3178b29b6b4d1344caa7c07517121dd0",
+          "size": 69937
+        },
+        "mod": {
+          "sha256": "01e82122d547d1228151a623fe6cacc4d7a9cb318a0f668ce08bb6b67fdb28b1",
+          "size": 192
+        }
+      },
+      {
+        "module": "github.com/xhit/go-str2duration/v2",
+        "version": "v2.1.0",
+        "moduleSum": "h1:lxklc02Drh6ynqX+DdPyp5pCKLUQpRT8bp8Ydu2Bstc=",
+        "goModSum": "h1:ohY8p+0f07DiV6Em5LKB0s2YpLtXVyJfNt1+BlmyAsU=",
+        "zip": {
+          "sha256": "907db1bdf362568191e659f82339c21a4031d433bc5ac52f36de23eeceb8cb26",
+          "size": 7331
+        },
+        "mod": {
+          "sha256": "65b4b4d7f142b91f81e2b42631f980360021a72a6801825109b3e585edd02553",
+          "size": 51
+        }
+      },
+      {
+        "module": "golang.org/x/mod",
+        "version": "v0.27.0",
+        "moduleSum": "h1:kb+q2PyFnEADO2IEF935ehFUXlWiNjJWtRNgBLSfbxQ=",
+        "goModSum": "h1:rWI627Fq0DEoudcK+MBkNkCe0EetEaDSwJJkCcjpazc=",
+        "zip": {
+          "sha256": "19fb241d46e4397d3193b5fa899e2a9d62bb5d1c41f73d09d29c17c3c0d3953c",
+          "size": 172649
+        },
+        "mod": {
+          "sha256": "b20d6c1f4b46742e6af828327160346aeb3e622ab1780ad51b80e1d67adfe95b",
+          "size": 86
+        }
+      },
+      {
+        "module": "golang.org/x/sync",
+        "version": "v0.16.0",
+        "moduleSum": "h1:ycBJEhp9p4vXvUZNszeOq0kGTPghopOL8q0fq3vstxw=",
+        "goModSum": "h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=",
+        "zip": {
+          "sha256": "ca43984183eb14f7f50d33da350312fed1c42e106dceac2437bfd5084b497dcd",
+          "size": 25707
+        },
+        "mod": {
+          "sha256": "720b98f1bf033d6b64a454ca8c29cdca6e9265ab7d70db3b834dff49560f1587",
+          "size": 36
+        }
+      },
+      {
+        "module": "golang.org/x/sys",
+        "version": "v0.44.0",
+        "moduleSum": "h1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=",
+        "goModSum": "h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=",
+        "zip": {
+          "sha256": "f1fa1052808e6bd6eb9c5372c053b2370a582532fac5d6a4600e7a6fab190ff3",
+          "size": 2012379
+        },
+        "mod": {
+          "sha256": "57f4393ea18d5446a12363b35c23a616d843fa1669c7121a70a2bc3a9677d665",
+          "size": 35
+        }
+      },
+      {
+        "module": "golang.org/x/term",
+        "version": "v0.43.0",
+        "moduleSum": "h1:S4RLU2sB31O/NCl+zFN9Aru9A/Cq2aqKpTZJ6B+DwT4=",
+        "goModSum": "h1:lrhlHNdQJHO+1qVYiHfFKVuVioJIheAc3fBSMFYEIsk=",
+        "zip": {
+          "sha256": "0d12dd77f2c620f236e59421d604f6bcd1f9212a4083a1c0ec13425c67bc6e81",
+          "size": 21694
+        },
+        "mod": {
+          "sha256": "d901212ab10297286b157086365fc813a4468ac9e7f91737e7c696e38f68fab7",
+          "size": 70
+        }
+      },
+      {
+        "module": "golang.org/x/tools",
+        "version": "v0.36.0",
+        "moduleSum": "h1:kWS0uv/zsvHEle1LbV5LE8QujrxB3wfQyxHfhOk0Qkg=",
+        "goModSum": "h1:WBDiHKJK8YgLHlcQPYQzNCkUxUypCaa5ZegCVutKm+s=",
+        "zip": {
+          "sha256": "85b486030e995cd5b4d56dea92f247b32bf4e0ae2fe6816b29d4514b5a43fec8",
+          "size": 3553586
+        },
+        "mod": {
+          "sha256": "53792e623827ef40be8f1af36dcf12790e82780b3d33b4b0944f56a3584bc429",
+          "size": 301
+        }
+      }
+    ],
+    "runtimeModulePolicy": "Bootstrap exactly the 12 modules embedded by the pinned binary. Do not use `go mod download all`; the committed go.sum also records test-only modules that are not runtime build inputs."
+  },
+  "toolchain": {
+    "componentId": "golines-go",
+    "version": "1.26.5",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "archive": {
+      "url": "https://dl.google.com/go/go1.26.5.darwin-arm64.tar.gz",
+      "sha256": "efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a",
+      "archiveFormat": "tar-gz",
+      "archiveRoot": "go"
+    },
+    "tagCommit": "c19862e5f8415b4f24b189d065ed739517c548ba",
+    "probe": {
+      "argv": [
+        "go",
+        "version"
+      ],
+      "match": "exact",
+      "expected": "go version go1.26.5 darwin/arm64"
+    }
+  },
+  "build": {
+    "sourceDateEpoch": "1755811321",
+    "sourceDate": "2025-08-21T21:22:01Z",
+    "workingDirectory": "{state}/golines-build-0.13.0-vg1/source",
+    "output": "{state}/golines-build-0.13.0-vg1/install/bin/golines",
+    "argv": [
+      "go",
+      "-C",
+      "{state}/golines-build-0.13.0-vg1/source",
+      "build",
+      "-trimpath",
+      "-buildvcs=false",
+      "-ldflags",
+      "-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z",
+      "-o",
+      "{state}/golines-build-0.13.0-vg1/install/bin/golines",
+      "."
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "local",
+      "GOENV": "off",
+      "GOWORK": "off",
+      "GOFLAGS": "-mod=readonly",
+      "CGO_ENABLED": "0",
+      "GOOS": "darwin",
+      "GOARCH": "arm64",
+      "GOARM64": "v8.0",
+      "SOURCE_DATE_EPOCH": "1755811321",
+      "GOMODCACHE": "{state}/golines-go-mod-cache",
+      "GOCACHE": "{state}/golines-go-build-cache",
+      "GOPROXY": "off",
+      "GOSUMDB": "off"
+    },
+    "bootstrap": [
+      {
+        "id": "golines-apply-closure",
+        "argv": [
+          "/usr/bin/patch",
+          "-p1",
+          "-i",
+          "{repository}/crates/hookkit-pkl-config/validation/provisioning/golines/closure.patch"
+        ],
+        "workingDirectory": "{state}/golines-build-0.13.0-vg1/source",
+        "network": "denied"
+      },
+      {
+        "id": "golines-go-mod-download",
+        "argv": [
+          "go",
+          "-C",
+          "{state}/golines-build-0.13.0-vg1/source",
+          "mod",
+          "download",
+          "github.com/alecthomas/kingpin/v2@v2.4.0",
+          "github.com/alecthomas/units@v0.0.0-20240927000941-0f3dac36c52b",
+          "github.com/dave/dst@v0.27.3",
+          "github.com/fatih/structtag@v1.2.0",
+          "github.com/pmezard/go-difflib@v1.0.0",
+          "github.com/sirupsen/logrus@v1.9.3",
+          "github.com/xhit/go-str2duration/v2@v2.1.0",
+          "golang.org/x/mod@v0.27.0",
+          "golang.org/x/sync@v0.16.0",
+          "golang.org/x/sys@v0.44.0",
+          "golang.org/x/term@v0.43.0",
+          "golang.org/x/tools@v0.36.0"
+        ],
+        "environment": {
+        "GOTOOLCHAIN": "local",
+        "GOENV": "off",
+        "GOWORK": "off",
+        "GOFLAGS": "-mod=readonly",
+          "GOMODCACHE": "{state}/golines-go-mod-cache",
+          "GOCACHE": "{state}/golines-bootstrap-go-build-cache",
+          "GOPROXY": "https://proxy.golang.org",
+          "GOSUMDB": "sum.golang.org"
+        },
+        "workingDirectory": "/",
+        "network": "required"
+      },
+      {
+        "id": "golines-go-mod-verify",
+        "argv": [
+          "go",
+          "-C",
+          "{state}/golines-build-0.13.0-vg1/source",
+          "mod",
+          "verify"
+        ],
+        "environment": {
+        "GOTOOLCHAIN": "local",
+        "GOENV": "off",
+        "GOWORK": "off",
+        "GOFLAGS": "-mod=readonly",
+          "GOMODCACHE": "{state}/golines-go-mod-cache",
+          "GOCACHE": "{state}/golines-bootstrap-go-build-cache",
+          "GOPROXY": "off",
+          "GOSUMDB": "off"
+        },
+        "workingDirectory": "/",
+        "network": "denied"
+      }
+    ]
+  },
+  "artifact": {
+    "sha256": "4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75",
+    "size": 7341970,
+    "format": "Mach-O 64-bit executable arm64",
+    "minimumOsVersion": "12.0",
+    "allowedDylibPrefixes": [
+      "/System/Library/",
+      "/usr/lib/"
+    ],
+    "observedDylibs": [
+      "/usr/lib/libSystem.B.dylib",
+      "/usr/lib/libresolv.9.dylib"
+    ],
+    "embeddedBuildFacts": {
+      "goVersion": "go1.26.5",
+      "module": "github.com/segmentio/golines",
+      "moduleVersion": "(devel)",
+      "dependencyCount": 12,
+      "trimpath": true,
+      "cgoEnabled": false,
+      "goos": "darwin",
+      "goarch": "arm64",
+      "goarm64": "v8.0"
+    },
+    "reproducibility": "Two builds from independently populated fresh build caches produced this exact SHA-256; a third fresh-cache check using only the recorded 12 runtime module objects reproduced it again."
+  },
+  "vulnerabilityEvidence": {
+    "source": {
+      "command": [
+        "govulncheck",
+        "./..."
+      ],
+      "result": "no vulnerabilities found"
+    },
+    "binary": {
+      "command": [
+        "govulncheck",
+        "-mode=binary",
+        "{artifact}"
+      ],
+      "result": "no vulnerabilities found"
+    },
+    "observedAt": "2026-08-10",
+    "policy": "Both the patched source graph and the exact final binary were scanned; neither scan reported a called vulnerability."
+  }
+}

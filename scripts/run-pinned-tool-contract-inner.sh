@@ -89,6 +89,29 @@ goimports_path_prefix=
 if [[ ,$selection, == *,goimports/* ]]; then
   goimports_path_prefix="$goimports_root/bin:"
 fi
+golines_identity=$(jq -ce '
+  first(.recipes[] | select(.id == "golines-macos-arm64"))
+  | {id, toolId, version, installationSource, integrity}' "$registry")
+golines_root=$(pinned_component_cache_root \
+  "$state_dir" golines-0.13.0-vg1 "$golines_identity")
+golines_bin="$golines_root/bin/golines"
+golines_expected_sha256=$(printf '%s\n' "$golines_identity" | \
+  jq -r '.integrity.builtArtifactSha256')
+if [[ $golines_expected_sha256 != \
+    4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75 || \
+  $(printf '%s\n' "$golines_identity" | jq -r '.integrity.sha256') != \
+    ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e || \
+  $(printf '%s\n' "$golines_identity" | jq -r '.integrity.patchSha256') != \
+    c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3 || \
+  $(printf '%s\n' "$golines_identity" | \
+    jq -r '.integrity.buildToolchainComponentId') != golines-go ]]; then
+  echo "error: golines recipe does not cross-link the reviewed source, patch, artifact, and Go identity" >&2
+  exit 1
+fi
+golines_path_prefix=
+if [[ ,$selection, == *,golines/* ]]; then
+  golines_path_prefix="$golines_root/bin:"
+fi
 vacuum_provenance_path="$provisioning_dir/vacuum/provenance.json"
 vacuum_identity=$(pinned_component_provenance_identity \
   jq \
@@ -118,7 +141,7 @@ export BUNDLE_FROZEN=1
 export BUNDLE_GEMFILE="$provisioning_dir/ruby/Gemfile"
 export BUNDLE_PATH__SYSTEM=true
 export BUNDLE_USER_HOME="$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/user"
-export PATH="${ghalint_path_prefix}${vacuum_path_prefix}${errcheck_path_prefix}${goimports_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
+export PATH="${ghalint_path_prefix}${vacuum_path_prefix}${errcheck_path_prefix}${goimports_path_prefix}${golines_path_prefix}$state_dir/betterleaks-1.7.3-vg1/bin:$state_dir/ruby-contract-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/ruby-runtime-3.4.10-asciidoctor-2.0.26-rubocop-1.30.1/bin:$state_dir/rustfmt-1.8.0/bin:$state_dir/rust-toolchain-1.90.0/bin:$state_dir/node/node_modules/.bin:$state_dir/python-venv/bin:$PATH"
 
 errcheck_expected_metadata_body=$'\tpath\tgithub.com/kisielk/errcheck\n\tmod\tgithub.com/kisielk/errcheck\tv1.20.0\th1:9rwHBNKzd4wkDWcROy3DvFGNqEPlkxBg305rvk7HabI=\n\tdep\tgolang.org/x/mod\tv0.35.0\th1:Ww1D637e6Pg+Zb2KrWfHQUnH2dQRLBQyAtpr/haaJeM=\n\tdep\tgolang.org/x/sync\tv0.20.0\th1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=\n\tdep\tgolang.org/x/tools\tv0.44.0\th1:UP4ajHPIcuMjT1GqzDWRlalUEoY+uzoZKnhOjbIPD2c=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
 
@@ -181,6 +204,40 @@ validate_goimports_binary() {
   fi
   metadata=$("$go_binary" version -m "$binary")
   validate_goimports_metadata "$metadata" "$binary"
+}
+
+golines_expected_metadata_body=$'\tpath\tgithub.com/segmentio/golines\n\tmod\tgithub.com/segmentio/golines\t(devel)\t\n\tdep\tgithub.com/alecthomas/kingpin/v2\tv2.4.0\th1:f48lwail6p8zpO1bC4TxtqACaGqHYA22qkHjHpqDjYY=\n\tdep\tgithub.com/alecthomas/units\tv0.0.0-20240927000941-0f3dac36c52b\th1:mimo19zliBX/vSQ6PWWSL9lK8qwHozUj03+zLoEB8O0=\n\tdep\tgithub.com/dave/dst\tv0.27.3\th1:P1HPoMza3cMEquVf9kKy8yXsFirry4zEnWOdYPOoIzY=\n\tdep\tgithub.com/fatih/structtag\tv1.2.0\th1:/OdNE99OxoI/PqaW/SuSK9uxxT3f/tcSZgon/ssNSx4=\n\tdep\tgithub.com/pmezard/go-difflib\tv1.0.0\th1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=\n\tdep\tgithub.com/sirupsen/logrus\tv1.9.3\th1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=\n\tdep\tgithub.com/xhit/go-str2duration/v2\tv2.1.0\th1:lxklc02Drh6ynqX+DdPyp5pCKLUQpRT8bp8Ydu2Bstc=\n\tdep\tgolang.org/x/mod\tv0.27.0\th1:kb+q2PyFnEADO2IEF935ehFUXlWiNjJWtRNgBLSfbxQ=\n\tdep\tgolang.org/x/sync\tv0.16.0\th1:ycBJEhp9p4vXvUZNszeOq0kGTPghopOL8q0fq3vstxw=\n\tdep\tgolang.org/x/sys\tv0.44.0\th1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=\n\tdep\tgolang.org/x/term\tv0.43.0\th1:S4RLU2sB31O/NCl+zFN9Aru9A/Cq2aqKpTZJ6B+DwT4=\n\tdep\tgolang.org/x/tools\tv0.36.0\th1:kWS0uv/zsvHEle1LbV5LE8QujrxB3wfQyxHfhOk0Qkg=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
+
+validate_golines_metadata() {
+  local metadata=$1
+  local binary=$2
+  if [[ ${metadata%%$'\n'*} != "$binary: go1.26.5" || \
+    ${metadata#*$'\n'} != "$golines_expected_metadata_body" ]]; then
+    echo "error: golines artifact module, dependency, or Go 1.26.5 build identity drifted" >&2
+    return 1
+  fi
+}
+
+validate_golines_binary() {
+  local binary=$1
+  local go_binary=$2
+  local observed_sha256
+  local observed_size
+  local metadata
+  if [[ ! -f $binary || -L $binary || ! -x $binary ]]; then
+    echo "error: controlled golines artifact is not an executable regular file: $binary" >&2
+    return 1
+  fi
+  read -r observed_sha256 _ < <(/usr/bin/shasum -a 256 "$binary")
+  observed_size=$(/usr/bin/stat -f '%z' "$binary")
+  if [[ $observed_sha256 != "$golines_expected_sha256" || \
+    $observed_size != 7341970 ]]; then
+    echo "error: controlled golines artifact checksum or size mismatch" >&2
+    return 1
+  fi
+  metadata=$(env GOENV=off GOWORK=off GOTOOLCHAIN=local \
+    "$go_binary" version -m "$binary")
+  validate_golines_metadata "$metadata" "$binary"
 }
 
 mkdir -p "$artifact_dir" "$artifact_dir/fixtures" "$CARGO_TARGET_DIR" "$TMPDIR"
@@ -299,6 +356,44 @@ if [[ $goimports_selected == true ]]; then
     exit 1
   fi
   validate_goimports_binary "$goimports_bin" "$goimports_go_bin"
+fi
+golines_selected=false
+if printf '%s\n' "$tool_ids" | jq -e 'index("golines") != null' >/dev/null; then
+  golines_selected=true
+fi
+golines_go_bin=
+if [[ $golines_selected == true ]]; then
+  if ! pinned_component_cache_valid \
+    "$golines_root" "$golines_identity" bin/golines; then
+    echo "error: denied-network golines root does not match its exact recipe identity" >&2
+    exit 1
+  fi
+  golines_go_bin=$(type -P go || true)
+  if [[ -z $golines_go_bin || ! -f $golines_go_bin || \
+    -L $golines_go_bin || ! -x $golines_go_bin ]]; then
+    echo "error: denied-network golines lane cannot resolve its managed Go build toolchain" >&2
+    exit 1
+  fi
+  golines_go_real=$(python -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' \
+    "$golines_go_bin")
+  case $golines_go_real in
+    "${MISE_DATA_DIR:?}"/*) ;;
+    *)
+      echo "error: denied-network golines Go resolves outside the managed mise root" >&2
+      exit 1
+      ;;
+  esac
+  if [[ $(env GOENV=off GOWORK=off GOTOOLCHAIN=local "$golines_go_bin" version) != \
+    "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: denied-network golines lane is not using exact Go 1.26.5 Darwin arm64" >&2
+    exit 1
+  fi
+  validate_golines_binary "$golines_bin" "$golines_go_bin"
+  if [[ $(env -i PATH=/usr/bin:/bin "$golines_bin" --version) != \
+    $'golines v0.13.0+velvet-glove.1\n\nbuild information:\n\tbuild date: 2025-08-21T21:22:01Z\n\tgit commit ref: 8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf' ]]; then
+    echo "error: denied-network golines failed its exact patched-version probe" >&2
+    exit 1
+  fi
 fi
 go_vet_selected=false
 if printf '%s\n' "$tool_ids" | jq -e 'index("go-vet") != null' >/dev/null; then
@@ -493,6 +588,9 @@ while IFS= read -r program; do
   if [[ -z $resolved && $goimports_selected == true && $program == goimports ]]; then
     resolved="$goimports_bin"
   fi
+  if [[ -z $resolved && $golines_selected == true && $program == golines ]]; then
+    resolved="$golines_bin"
+  fi
   if [[ -z $resolved ]]; then
     resolved=$(type -P "$program" || true)
   fi
@@ -561,6 +659,7 @@ while IFS= read -r probe; do
   eslint_probe=false
   errcheck_probe=false
   goimports_probe=false
+  golines_probe=false
   go_vet_probe=false
   while IFS= read -r argument; do
     probe_argv+=("$argument")
@@ -669,6 +768,10 @@ while IFS= read -r probe; do
     probe_argv=("$goimports_go_bin" version -m "$goimports_bin")
     goimports_probe=true
   fi
+  if [[ $golines_selected == true && $owner == golines ]]; then
+    probe_argv=("$golines_go_bin" version -m "$golines_bin")
+    golines_probe=true
+  fi
   if [[ $go_vet_selected == true && $owner == go-vet ]]; then
     probe_argv=("$go_vet_go_bin" version)
     go_vet_probe=true
@@ -708,6 +811,14 @@ while IFS= read -r probe; do
   fi
   if [[ $goimports_probe == true ]]; then
     validate_goimports_metadata "$observed" "$goimports_bin"
+    observed="$expected"
+  fi
+  if [[ $golines_probe == true ]]; then
+    validate_golines_metadata "$observed" "$golines_bin"
+    if [[ $(env -i PATH=/usr/bin:/bin "$golines_bin" --version) != "$expected" ]]; then
+      echo "error: golines exact patched-version probe drifted" >&2
+      exit 1
+    fi
     observed="$expected"
   fi
   case $match_kind in

@@ -80,6 +80,7 @@ betterleaks_build_dir=
 ghalint_build_dir=
 errcheck_build_dir=
 goimports_build_dir=
+golines_build_dir=
 cleanup() {
   case $run_home in
     /private/tmp/velvet-glove-pinned.*) rm -rf -- "$run_home" ;;
@@ -119,6 +120,9 @@ cleanup() {
   esac
   case $goimports_build_dir in
     "$state_dir"/goimports-build-0.48.0) rm -rf -- "$goimports_build_dir" ;;
+  esac
+  case $golines_build_dir in
+    "$state_dir"/golines-build-0.13.0-vg1) rm -rf -- "$golines_build_dir" ;;
   esac
 }
 trap cleanup EXIT INT TERM
@@ -335,6 +339,12 @@ if "$jq_bin" -en --arg selection "$selection" \
   >/dev/null; then
   goimports_selected=true
 fi
+golines_selected=false
+if "$jq_bin" -en --arg selection "$selection" \
+  '$selection | split(",") | map(split("/")[0]) | index("golines") != null' \
+  >/dev/null; then
+  golines_selected=true
+fi
 
 tool_specs=()
 while IFS= read -r tool_spec; do
@@ -446,6 +456,49 @@ validate_goimports_binary() {
   expected_metadata_body=$'\tpath\tgolang.org/x/tools/cmd/goimports\n\tmod\tgolang.org/x/tools\tv0.48.0\th1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=\n\tdep\tgolang.org/x/mod\tv0.38.0\th1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=\n\tdep\tgolang.org/x/sync\tv0.22.0\th1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=\n\tdep\tgolang.org/x/telemetry\tv0.0.0-20260708182218-49f421fb7959\th1:RJhm5l6Fo4rmEIcndxDllNhhf/fAx8qIm4t6A7vpm2A=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
   if [[ $metadata_body != "$expected_metadata_body" ]]; then
     echo "error: goimports artifact module or build metadata differs from the exact closure" >&2
+    return 1
+  fi
+}
+
+validate_golines_binary() {
+  local binary=$1
+  local go_binary=$2
+  local expected_sha256=$3
+  local expected_version=$4
+  local observed_sha256
+  local observed_size
+  local metadata
+  local metadata_body
+  local expected_metadata_body
+
+  if [[ ! -f $binary || -L $binary || ! -x $binary ]]; then
+    echo "error: controlled golines artifact is not an executable regular file: $binary" >&2
+    return 1
+  fi
+  read -r observed_sha256 _ < <(/usr/bin/shasum -a 256 "$binary")
+  observed_size=$(/usr/bin/stat -f '%z' "$binary")
+  if [[ $observed_sha256 != "$expected_sha256" || $observed_size != 7341970 ]]; then
+    echo "error: controlled golines artifact checksum or size mismatch" >&2
+    return 1
+  fi
+  if [[ $(env -i PATH=/usr/bin:/bin "$binary" --version) != "$expected_version" ]]; then
+    echo "error: controlled golines artifact failed its exact patched-version probe" >&2
+    return 1
+  fi
+  metadata=$(env -i "${provisioning_env[@]}" \
+    "PATH=${go_binary%/bin/go}/bin:/usr/bin:/bin" \
+    "GOENV=off" \
+    "GOWORK=off" \
+    "GOTOOLCHAIN=local" \
+    "$go_binary" version -m "$binary")
+  if [[ ${metadata%%$'\n'*} != "$binary: go1.26.5" ]]; then
+    echo "error: golines artifact was not linked by locked Go 1.26.5" >&2
+    return 1
+  fi
+  metadata_body=${metadata#*$'\n'}
+  expected_metadata_body=$'\tpath\tgithub.com/segmentio/golines\n\tmod\tgithub.com/segmentio/golines\t(devel)\t\n\tdep\tgithub.com/alecthomas/kingpin/v2\tv2.4.0\th1:f48lwail6p8zpO1bC4TxtqACaGqHYA22qkHjHpqDjYY=\n\tdep\tgithub.com/alecthomas/units\tv0.0.0-20240927000941-0f3dac36c52b\th1:mimo19zliBX/vSQ6PWWSL9lK8qwHozUj03+zLoEB8O0=\n\tdep\tgithub.com/dave/dst\tv0.27.3\th1:P1HPoMza3cMEquVf9kKy8yXsFirry4zEnWOdYPOoIzY=\n\tdep\tgithub.com/fatih/structtag\tv1.2.0\th1:/OdNE99OxoI/PqaW/SuSK9uxxT3f/tcSZgon/ssNSx4=\n\tdep\tgithub.com/pmezard/go-difflib\tv1.0.0\th1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=\n\tdep\tgithub.com/sirupsen/logrus\tv1.9.3\th1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=\n\tdep\tgithub.com/xhit/go-str2duration/v2\tv2.1.0\th1:lxklc02Drh6ynqX+DdPyp5pCKLUQpRT8bp8Ydu2Bstc=\n\tdep\tgolang.org/x/mod\tv0.27.0\th1:kb+q2PyFnEADO2IEF935ehFUXlWiNjJWtRNgBLSfbxQ=\n\tdep\tgolang.org/x/sync\tv0.16.0\th1:ycBJEhp9p4vXvUZNszeOq0kGTPghopOL8q0fq3vstxw=\n\tdep\tgolang.org/x/sys\tv0.44.0\th1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=\n\tdep\tgolang.org/x/term\tv0.43.0\th1:S4RLU2sB31O/NCl+zFN9Aru9A/Cq2aqKpTZJ6B+DwT4=\n\tdep\tgolang.org/x/tools\tv0.36.0\th1:kWS0uv/zsvHEle1LbV5LE8QujrxB3wfQyxHfhOk0Qkg=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-trimpath=true\n\tbuild\tDefaultGODEBUG=cryptocustomrand=1,tlssecpmlkem=0,urlstrictcolons=0\n\tbuild\tCGO_ENABLED=0\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0'
+  if [[ $metadata_body != "$expected_metadata_body" ]]; then
+    echo "error: golines artifact module or build metadata differs from the exact closure" >&2
     return 1
   fi
 }
@@ -1898,6 +1951,267 @@ if [[ $goimports_selected == true ]]; then
   validate_goimports_binary \
     "$goimports_binary" "$goimports_go_bin" "$goimports_expected_sha256"
   verify_macho_closure "$goimports_root" goimports-macos-arm64
+fi
+
+if [[ $golines_selected == true ]]; then
+  golines_identity=$(recipe_integrity_json golines-macos-arm64)
+  golines_root=$(pinned_component_cache_root \
+    "$state_dir" golines-0.13.0-vg1 "$golines_identity")
+  golines_binary="$golines_root/bin/golines"
+  golines_expected_sha256=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.builtArtifactSha256')
+  golines_expected_version=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.version')
+  golines_expected_version_output=$("$jq_bin" -r \
+    '.recipes[] | select(.id == "golines-macos-arm64") | .probe.expected' "$registry")
+  golines_patch_path=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.path')
+  golines_manifest_path=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.moduleManifestPath')
+  golines_lock_path=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.moduleLockPath')
+  golines_patch_sha256=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.patchSha256')
+  golines_manifest_sha256=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.moduleManifestSha256')
+  golines_lock_sha256=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.moduleLockSha256')
+  golines_source_sha256=$(printf '%s\n' "$golines_identity" | \
+    "$jq_bin" -r '.integrity.sha256')
+  if [[ $golines_expected_sha256 != \
+      4d7bf2a59b9b48bfc234078498b3ddf6a412cf9bd0ce525945bb19d558f6ab75 || \
+    $golines_source_sha256 != \
+      ec1933e0fb73cf0517fd007d325603007aa65ce430267a70fc78cfea43d9716e || \
+    $golines_patch_sha256 != \
+      c4a7fcf96b2f1a83440e824340e6d51e15ed34630415e044781a780fc7a2a4d3 || \
+    $golines_manifest_sha256 != \
+      8754d400db1f04a71e5e3eb13343bb051afaba153ea9cb9219fb217250adfa4b || \
+    $golines_lock_sha256 != \
+      21eaf4b83c0df55ae2e7b94ee43fd72a01171bf4ed2729a578b1fc1e54c219fe || \
+    $golines_expected_version != 0.13.0+velvet-glove.1 || \
+    $(printf '%s\n' "$golines_identity" | \
+      "$jq_bin" -r '.integrity.buildToolchainComponentId') != golines-go ]]; then
+    echo "error: golines recipe does not cross-link the reviewed source, patch, artifact, and Go identity" >&2
+    exit 1
+  fi
+  golines_patch="$repository_root/$golines_patch_path"
+  golines_manifest="$repository_root/$golines_manifest_path"
+  golines_lock="$repository_root/$golines_lock_path"
+  golines_provenance="$provisioning_dir/golines/source-build.json"
+  for input in "$golines_patch" "$golines_manifest" "$golines_lock" "$golines_provenance"; do
+    if [[ ! -f $input || -L $input ]]; then
+      echo "error: golines exact source-build input is missing or linked: $input" >&2
+      exit 1
+    fi
+  done
+  read -r observed_golines_patch_sha256 _ < <(/usr/bin/shasum -a 256 "$golines_patch")
+  read -r observed_golines_manifest_sha256 _ < <(/usr/bin/shasum -a 256 "$golines_manifest")
+  read -r observed_golines_lock_sha256 _ < <(/usr/bin/shasum -a 256 "$golines_lock")
+  if [[ $observed_golines_patch_sha256 != "$golines_patch_sha256" || \
+    $observed_golines_manifest_sha256 != "$golines_manifest_sha256" || \
+    $observed_golines_lock_sha256 != "$golines_lock_sha256" ]]; then
+    echo "error: golines patch, module manifest, or sum checksum mismatch" >&2
+    exit 1
+  fi
+  if ! "$jq_bin" -e \
+    --arg patch "$golines_patch_sha256" \
+    --arg manifest "$golines_manifest_sha256" \
+    --arg lock "$golines_lock_sha256" \
+    --arg artifact "$golines_expected_sha256" '
+      .schemaVersion == 1
+      and .status == "integrated"
+      and .component.id == "golines"
+      and .component.productVersion == "0.13.0+velvet-glove.1"
+      and .closure.patchSha256 == $patch
+      and .closure.moduleManifestSha256 == $manifest
+      and .closure.moduleLockSha256 == $lock
+      and (.closure.runtimeModuleObjects | length) == 12
+      and .closure.runtimeModulePolicy == "Bootstrap exactly the 12 modules embedded by the pinned binary. Do not use `go mod download all`; the committed go.sum also records test-only modules that are not runtime build inputs."
+      and .toolchain.componentId == "golines-go"
+      and .toolchain.version == "1.26.5"
+      and .build.environment.GOENV == "off"
+      and .build.environment.GOWORK == "off"
+      and .build.environment.GOPROXY == "off"
+      and .artifact.sha256 == $artifact
+      and .artifact.size == 7341970
+      and .artifact.embeddedBuildFacts.dependencyCount == 12' \
+    "$golines_provenance" >/dev/null; then
+    echo "error: golines source-build provenance does not match the reviewed closure" >&2
+    exit 1
+  fi
+
+  golines_go_root=$(env -i "${provisioning_env[@]}" "$mise_bin" where go@1.26.5)
+  golines_go_bin="$golines_go_root/bin/go"
+  case $golines_go_bin in
+    "$state_dir"/*) ;;
+    *)
+      echo "error: pinned golines Go resolved outside the controlled state: $golines_go_bin" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! -f $golines_go_bin || -L $golines_go_bin || ! -x $golines_go_bin ]]; then
+    echo "error: pinned golines Go executable is unavailable: $golines_go_bin" >&2
+    exit 1
+  fi
+  if [[ $(env -i "${provisioning_env[@]}" \
+    "PATH=$golines_go_root/bin:/usr/bin:/bin" \
+    "GOENV=off" \
+    "GOWORK=off" \
+    "GOTOOLCHAIN=local" \
+    "$golines_go_bin" version) != "go version go1.26.5 darwin/arm64" ]]; then
+    echo "error: pinned golines build toolchain is not exact Go 1.26.5 Darwin arm64" >&2
+    exit 1
+  fi
+
+  if [[ -e $golines_root && ( ! -d $golines_root || -L $golines_root ) ]]; then
+    echo "error: controlled golines root is not a directory: $golines_root" >&2
+    exit 1
+  fi
+  if [[ ! -d $golines_root ]]; then
+    echo "==> Building exact patched golines 0.13.0+velvet-glove.1 with locked Go 1.26.5"
+    golines_archive=$(fetch_component_archive golines)
+    golines_build_dir="$state_dir/golines-build-0.13.0-vg1"
+    if [[ -e $golines_build_dir ]]; then
+      echo "warning: removing stale transactional golines build directory" >&2
+      rm -rf -- "$golines_build_dir"
+    fi
+    mkdir -p \
+      "$golines_build_dir/install/bin" \
+      "$golines_build_dir/go-mod-cache" \
+      "$golines_build_dir/bootstrap-go-build-cache" \
+      "$golines_build_dir/go-build-cache"
+    /usr/bin/tar -xf "$golines_archive" -C "$golines_build_dir"
+    if [[ ! -d $golines_build_dir/golines-0.13.0 || \
+      -L $golines_build_dir/golines-0.13.0 ]]; then
+      echo "error: golines source archive omitted its exact root" >&2
+      exit 1
+    fi
+    mv "$golines_build_dir/golines-0.13.0" "$golines_build_dir/source"
+    golines_source="$golines_build_dir/source"
+    golines_staging_root="$golines_build_dir/install"
+    golines_staging_binary="$golines_staging_root/bin/golines"
+    golines_mod_cache="$golines_build_dir/go-mod-cache"
+    golines_bootstrap_cache="$golines_build_dir/bootstrap-go-build-cache"
+    golines_build_cache="$golines_build_dir/go-build-cache"
+    if [[ $(/usr/bin/shasum -a 256 "$golines_source/main.go" | /usr/bin/awk '{print $1}') != \
+        f4b5292ae055fd299e5ea8d2b42af8b907bb9bf1002e7c5bb3796f8e1069949f || \
+      $(/usr/bin/shasum -a 256 "$golines_source/go.mod" | /usr/bin/awk '{print $1}') != \
+        1981e8cea70c114c08916c9fc46adb810e458d8c7af057d2d437a533a77ec660 || \
+      $(/usr/bin/shasum -a 256 "$golines_source/go.sum" | /usr/bin/awk '{print $1}') != \
+        5a29e3cb78df02fee0483a45e7ce92b83a6c3b1ebac46ca6971df9c2dc1081fe ]]; then
+      echo "error: golines source archive does not contain the reviewed unpatched inputs" >&2
+      exit 1
+    fi
+    (
+      cd "$golines_source"
+      env -i "${provisioning_env[@]}" \
+        "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+        /usr/bin/patch -p1 -i "$golines_patch"
+    )
+    if ! /usr/bin/cmp -s "$golines_source/go.mod" "$golines_manifest" || \
+      ! /usr/bin/cmp -s "$golines_source/go.sum" "$golines_lock" || \
+      [[ $(/usr/bin/shasum -a 256 "$golines_source/main.go" | /usr/bin/awk '{print $1}') != \
+        a600f1ece4dde5b86707b52bc157378f50889f69f780442abe18577e0cf895c0 ]]; then
+      echo "error: golines closure patch did not produce the reviewed source inputs" >&2
+      exit 1
+    fi
+    golines_go_env=(
+      "${provisioning_env[@]}"
+      "PATH=$golines_go_root/bin:/usr/bin:/bin"
+      "GOENV=off"
+      "GOWORK=off"
+      "GOTOOLCHAIN=local"
+      "GOFLAGS=-mod=readonly"
+      "CGO_ENABLED=0"
+      "GOOS=darwin"
+      "GOARCH=arm64"
+      "GOARM64=v8.0"
+      "SOURCE_DATE_EPOCH=1755811321"
+      "GOMODCACHE=$golines_mod_cache"
+    )
+    golines_modules=()
+    while IFS=$'\t' read -r module version; do
+      golines_modules+=("$module@$version")
+    done < <("$jq_bin" -r '.closure.runtimeModuleObjects[] | [.module, .version] | @tsv' \
+      "$golines_provenance")
+    if [[ ${#golines_modules[@]} -ne 12 ]]; then
+      echo "error: golines source-build provenance did not declare exactly 12 runtime modules" >&2
+      exit 1
+    fi
+    env -i "${golines_go_env[@]}" \
+      "GOCACHE=$golines_bootstrap_cache" \
+      "GOPROXY=https://proxy.golang.org" \
+      "GOSUMDB=sum.golang.org" \
+      "$golines_go_bin" -C "$golines_source" mod download "${golines_modules[@]}"
+    if ! /usr/bin/cmp -s "$golines_source/go.mod" "$golines_manifest" || \
+      ! /usr/bin/cmp -s "$golines_source/go.sum" "$golines_lock"; then
+      echo "error: golines network bootstrap changed the exact module inputs" >&2
+      exit 1
+    fi
+    while IFS=$'\t' read -r module version zip_sha zip_size mod_sha mod_size; do
+      archive_base="$golines_mod_cache/cache/download/$module/@v/$version"
+      for object in zip mod; do
+        if [[ $object == zip ]]; then
+          object_sha=$zip_sha
+          object_size=$zip_size
+        else
+          object_sha=$mod_sha
+          object_size=$mod_size
+        fi
+        object_path="$archive_base.$object"
+        if [[ ! -f $object_path || -L $object_path || \
+          $(/usr/bin/stat -f '%z' "$object_path") != "$object_size" || \
+          $(/usr/bin/shasum -a 256 "$object_path" | /usr/bin/awk '{print $1}') != "$object_sha" ]]; then
+          echo "error: golines proxy object differs from the reviewed closure: $module@$version.$object" >&2
+          exit 1
+        fi
+      done
+    done < <("$jq_bin" -r \
+      '.closure.runtimeModuleObjects[] | [.module, .version, .zip.sha256, .zip.size, .mod.sha256, .mod.size] | @tsv' \
+      "$golines_provenance")
+    env -i "${golines_go_env[@]}" \
+      "GOCACHE=$golines_bootstrap_cache" \
+      "GOPROXY=off" \
+      "GOSUMDB=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$golines_go_bin" -C "$golines_source" mod verify
+    env -i "${golines_go_env[@]}" \
+      "GOCACHE=$golines_build_cache" \
+      "GOPROXY=off" \
+      "GOSUMDB=off" \
+      "$mise_bin" -C "$provisioning_dir" exec --locked --fresh-env --deny-net -- \
+      "$golines_go_bin" -C "$golines_source" build \
+        -trimpath \
+        -buildvcs=false \
+        -ldflags '-s -w -buildid= -X=main.version=0.13.0+velvet-glove.1 -X=main.commit=8f32f0f7e89c30f572c7f2cd3b2a48016b9d8bbf -X=main.date=2025-08-21T21:22:01Z' \
+        -o "$golines_staging_binary" \
+        .
+    validate_golines_binary \
+      "$golines_staging_binary" "$golines_go_bin" \
+      "$golines_expected_sha256" "$golines_expected_version_output"
+    printf '%s\n' "$golines_identity" \
+      >"$golines_staging_root/.velvet-glove-artifacts.json"
+    verify_macho_closure "$golines_staging_root" golines-macos-arm64
+    mv "$golines_staging_root" "$golines_root"
+    rm -rf -- "$golines_build_dir"
+    golines_build_dir=
+  fi
+  if ! pinned_component_cache_valid \
+    "$golines_root" "$golines_identity" bin/golines; then
+    echo "error: controlled golines installation does not match its exact recipe identity" >&2
+    exit 1
+  fi
+  if [[ -n $(/usr/bin/find "$golines_root" -type l -print -quit) || \
+    $(/usr/bin/find "$golines_root" -type f | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 2 || \
+    $(/usr/bin/find "$golines_root" -type d | /usr/bin/wc -l | /usr/bin/tr -d ' ') != 2 || \
+    -n $(/usr/bin/find "$golines_root" -mindepth 1 ! -type d ! -type f -print -quit) ]]; then
+    echo "error: controlled golines installation has an unexpected or linked closure" >&2
+    exit 1
+  fi
+  validate_golines_binary \
+    "$golines_binary" "$golines_go_bin" \
+    "$golines_expected_sha256" "$golines_expected_version_output"
+  verify_macho_closure "$golines_root" golines-macos-arm64
 fi
 
 if needs_group ruby; then
