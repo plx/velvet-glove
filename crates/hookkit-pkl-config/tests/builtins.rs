@@ -327,37 +327,50 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
     assert_eq!(clippy.display_name, "cargo clippy");
     assert_eq!(clippy.executable, "cargo");
     assert_eq!(clippy.workspace_indicator.as_deref(), Some("Cargo.toml"));
+    assert_eq!(clippy.files.include, vec!["*.rs", "**/*.rs"]);
+    assert_eq!(clippy.phase_order, vec!["fix", "verify"]);
 
     let fix = clippy.phases.get("fix").expect("fix");
+    assert_eq!(fix.mode, PhaseMode::Fix);
     assert_argv(
         fix,
         vec![
             literal("clippy"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
+            literal("--workspace"),
+            literal("--all-targets"),
             literal("--fix"),
             literal("--allow-dirty"),
             literal("--allow-staged"),
+            literal("--allow-no-vcs"),
             literal("--quiet"),
             token(ArgToken::ExtraArgs),
         ],
     );
-    assert_exit_codes(&fix.exit_codes, &[0], &[101], &[]);
+    assert_exit_codes(&fix.exit_codes, &[0], &[], &[101]);
     assert_eq!(fix.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
     assert_eq!(fix.writes, WriteBehavior::MatchingGlobs);
 
     let verify = clippy.phases.get("verify").expect("verify");
+    assert_eq!(verify.mode, PhaseMode::Verify);
     assert_argv(
         verify,
         vec![
             literal("clippy"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
+            literal("--workspace"),
+            literal("--all-targets"),
             literal("--quiet"),
             token(ArgToken::ExtraArgs),
+            literal("--"),
+            literal("-D"),
+            literal("warnings"),
         ],
     );
     assert_exit_codes(&verify.exit_codes, &[0], &[101], &[]);
+    assert_eq!(verify.writes, WriteBehavior::None);
 
     assert_eq!(
         clippy.messages.issues_agent,

@@ -1,0 +1,13 @@
+[package]
+name = "fixture"
+version = "0.1.0"
+edition = "2024"
+autolib = false
+
+[[bin]]
+name = "fixture"
+path = "example.rs"
+test = false
+bench = false
+
+[workspace]

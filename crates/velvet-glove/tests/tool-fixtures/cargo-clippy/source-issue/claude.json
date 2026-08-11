@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"cargo clippy reports issues; inspect diagnostics at <workspace>/.velvet-glove/cargo-clippy-agent-hook/test-session_cargo-clippy-tool_cargo-clippy-tool-issues.txt."}}
