@@ -1,0 +1,12 @@
+error: gofmt: phase `preflight` failed; diagnostics: <workspace>/.velvet-glove/go-fmt-agent-hook/test-session_go-fmt-tool_go-fmt-tool-failure.txt
+gofmt failure diagnostics:
+== phase preflight failed (exit Some(2)) ==
+[preflight] command: gofmt -l <workspace>/example.go <workspace>/example.invalid.go
+status: Some(2)
+classification: Some(Failure)
+stdout:
+<workspace>/example.go
+stderr:
+<workspace>/example.invalid.go:3:15: expected ')', found '{'
+artifact: <workspace>/.velvet-glove/go-fmt-agent-hook/test-session_go-fmt-tool_go-fmt-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
