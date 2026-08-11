@@ -220,6 +220,35 @@ fn actionlint_builtin_classifies_findings_and_operational_failures() {
 }
 
 #[test]
+fn jq_builtin_checks_each_file_with_precise_exit_classification() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let jq = spec(&specs, "jq");
+
+    assert_eq!(jq.id, "jq");
+    assert_eq!(jq.display_name, "jq");
+    assert_eq!(jq.executable, "jq");
+    assert_eq!(jq.files.include, vec!["*.json", "**/*.json"]);
+    assert_eq!(jq.phase_invocation, InvocationGranularity::PerFile);
+    assert!(jq.workflows.is_empty(), "jq uses compatibility translation");
+
+    assert_eq!(jq.phase_order, vec!["verify"]);
+    let verify = jq.phases.get("verify").expect("verify phase");
+    assert_eq!(verify.mode, PhaseMode::Verify);
+    assert_argv(
+        verify,
+        vec![
+            literal("empty"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&verify.exit_codes, &[0], &[5], &[1, 2, 3, 4]);
+    assert_eq!(verify.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(verify.writes, WriteBehavior::None);
+}
+
+#[test]
 fn eslint_builtin_matches_rust_spec() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");

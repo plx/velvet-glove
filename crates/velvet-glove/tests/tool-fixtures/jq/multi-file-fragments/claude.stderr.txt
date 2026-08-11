@@ -1,9 +1,15 @@
 warning: jq: issues remain; diagnostics: <workspace>/.velvet-glove/jq-agent-hook/test-session_jq-tool_jq-tool-issues.txt
 jq diagnostics:
-[verify] command: jq empty <workspace>/example.json
+[verify] command: jq empty <workspace>/example.1-open.json
 status: Some(5)
 classification: Some(Issues)
 stderr:
-jq: parse error: Invalid numeric literal at line 1, column 5
+jq: parse error: Unfinished JSON term at EOF at line 2, column 0
+
+[verify] command: jq empty <workspace>/example.2-close.json
+status: Some(5)
+classification: Some(Issues)
+stderr:
+jq: parse error: Unmatched '}' at line 1, column 2
 artifact: <workspace>/.velvet-glove/jq-agent-hook/test-session_jq-tool_jq-tool-issues.txt
 hookkit: redirected user notices and diagnostics to protocol stderr

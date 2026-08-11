@@ -262,7 +262,7 @@ fn utf8_path(path: PathBuf, label: &str) -> Result<Utf8PathBuf, String> {
     Utf8PathBuf::from_path_buf(path).map_err(|path| format!("{label} is not UTF-8: {path:?}"))
 }
 
-fn shell_quote(value: &str) -> String {
+pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
