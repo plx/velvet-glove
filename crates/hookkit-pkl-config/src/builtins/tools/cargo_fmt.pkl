@@ -20,6 +20,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "format"
       argv = new Listing<String | Config.ArgToken> {
         "fmt"
+        "--all"
         "--manifest-path"
         new Config.WorkspaceIndicator {}
         new Config.ExtraArgs {}
@@ -33,6 +34,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "fmt"
+        "--all"
         "--check"
         "--manifest-path"
         new Config.WorkspaceIndicator {}

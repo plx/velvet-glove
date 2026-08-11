@@ -282,12 +282,16 @@ fn cargo_fmt_builtin_uses_workspace_indicator() {
     assert_eq!(cargo_fmt.display_name, "cargo fmt");
     assert_eq!(cargo_fmt.executable, "cargo");
     assert_eq!(cargo_fmt.workspace_indicator.as_deref(), Some("Cargo.toml"));
+    assert_eq!(cargo_fmt.files.include, vec!["*.rs", "**/*.rs"]);
+    assert_eq!(cargo_fmt.phase_order, vec!["format", "verify"]);
 
     let format = cargo_fmt.phases.get("format").expect("format");
+    assert_eq!(format.mode, PhaseMode::Format);
     assert_argv(
         format,
         vec![
             literal("fmt"),
+            literal("--all"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
             token(ArgToken::ExtraArgs),
@@ -297,16 +301,20 @@ fn cargo_fmt_builtin_uses_workspace_indicator() {
     assert_eq!(format.writes, WriteBehavior::MatchingGlobs);
 
     let verify = cargo_fmt.phases.get("verify").expect("verify");
+    assert_eq!(verify.mode, PhaseMode::Verify);
     assert_argv(
         verify,
         vec![
             literal("fmt"),
+            literal("--all"),
             literal("--check"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
             token(ArgToken::ExtraArgs),
         ],
     );
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[]);
+    assert_eq!(verify.writes, WriteBehavior::None);
 }
 
 #[test]

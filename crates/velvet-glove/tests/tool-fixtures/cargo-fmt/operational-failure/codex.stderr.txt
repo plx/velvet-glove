@@ -1,0 +1,12 @@
+error: cargo fmt: phase `format` failed; diagnostics: <workspace>/.velvet-glove/cargo-fmt-agent-hook/test-session_test-turn_cargo-fmt-tool_cargo-fmt-tool-failure.txt
+cargo fmt failure diagnostics:
+== phase format failed (exit Some(1)) ==
+[format] command: cargo fmt --all --manifest-path <workspace>/Cargo.toml
+status: Some(1)
+classification: Some(Failure)
+stderr:
+The file `<workspace>/rustfmt.toml` failed to parse.
+Error details: invalid type: string "wide", expected usize
+in `max_width`
+artifact: <workspace>/.velvet-glove/cargo-fmt-agent-hook/test-session_test-turn_cargo-fmt-tool_cargo-fmt-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

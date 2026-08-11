@@ -1,0 +1,2 @@
+cargo fmt: changed alpha/src/lib.rs, beta/src/lib.rs
+hookkit: redirected user notices and diagnostics to protocol stderr
