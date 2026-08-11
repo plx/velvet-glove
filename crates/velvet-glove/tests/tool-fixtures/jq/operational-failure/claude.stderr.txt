@@ -1,0 +1,10 @@
+error: jq: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/jq-agent-hook/test-session_jq-tool_jq-tool-failure.txt
+jq failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: jq empty missing-operational.json <workspace>/example.json
+status: Some(2)
+classification: Some(Failure)
+stderr:
+jq: error: Could not open file missing-operational.json: No such file or directory
+artifact: <workspace>/.velvet-glove/jq-agent-hook/test-session_jq-tool_jq-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

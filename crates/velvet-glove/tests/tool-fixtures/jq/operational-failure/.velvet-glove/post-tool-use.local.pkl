@@ -1,0 +1,13 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["jq"] = (Builtins.jq) {
+    phases {
+      ["verify"] {
+        // Exercise jq's missing-input failure through supported extra args.
+        extraArgs = new Listing<String> { "missing-operational.json" }
+      }
+    }
+  }
+}

@@ -34,6 +34,9 @@ tests/tool-fixtures/<tool-id>/<example-name>/
   `PostToolUse` event) by looking for a top-level file whose name starts with
   `example.`. If none exists, the first non-golden, non-`expected/` file at
   the fixture root is used.
+- If a case has multiple top-level `example.*` files, the harness cites all of
+  them in one synthetic shell-tool event so invocation granularity and
+  per-file attribution can be exercised.
 - Every non-golden, non-`expected/` file (including subdirectory contents like
   `src/main.rs` or `Cargo.toml`) is copied into the test's temp workspace at
   the same relative path.

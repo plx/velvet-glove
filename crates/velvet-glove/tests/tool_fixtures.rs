@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use support::native_events::{PostToolUseBuilder, ProtocolSurface, canonical_project};
+use support::native_events::{PostToolUseBuilder, ProtocolSurface, canonical_project, shell_quote};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -830,9 +830,25 @@ fn run_fixture_case_inner(
     workspace: &FixtureWorkspace,
 ) -> Result<(), String> {
     write_pkl_config(&workspace.project, &case.tool, &case.pkl_property)?;
-    let input = PostToolUseBuilder::new(surface, &workspace.project, &case.entry)
-        .identity("test-session", "test-turn", format!("{}-tool", case.tool))
-        .build()?;
+    let mut input = PostToolUseBuilder::new(surface, &workspace.project, &case.entry).identity(
+        "test-session",
+        "test-turn",
+        format!("{}-tool", case.tool),
+    );
+    let example_files = find_example_files(&case.directory)?;
+    if example_files.len() > 1 {
+        let command = example_files
+            .iter()
+            .map(|path| format!("printf fixture > {}", shell_quote(&path.to_string_lossy())))
+            .collect::<Vec<_>>()
+            .join("; ");
+        input = input.tool(
+            "Bash",
+            serde_json::json!({ "command": command }),
+            serde_json::json!({ "exit_code": 0 }),
+        );
+    }
+    let input = input.build()?;
     std::fs::write(workspace.evidence.join("input.json"), input.bytes())
         .map_err(|error| format!("write input evidence: {error}"))?;
 
@@ -1047,6 +1063,21 @@ fn find_entry_file(directory: &Path) -> Result<PathBuf, String> {
     candidates.into_iter().next().ok_or_else(|| {
         format!("no entry file in {directory:?}; add an `example.<ext>` at the case root")
     })
+}
+
+fn find_example_files(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut examples = Vec::new();
+    for entry in sorted_entries(directory)? {
+        let path = entry.path();
+        let name = entry.file_name();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("file type for {path:?}: {error}"))?;
+        if file_type.is_file() && name.to_string_lossy().starts_with("example.") {
+            examples.push(PathBuf::from(name));
+        }
+    }
+    Ok(examples)
 }
 
 fn is_golden_output(name: &str) -> bool {

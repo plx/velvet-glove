@@ -344,9 +344,18 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
         checks,
         remedies,
         scopes,
-        invocations: vec!["batch".into()],
-        limitation: if mutators.is_empty() {
-            "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
+        invocations: vec![invocation(spec.phase_invocation).into()],
+        limitation: if spec.id == "jq" {
+            "The per-file parse check accepts an empty stream and multiple whitespace-separated top-level JSON values; exact-one-document validation is not claimed.".into()
+        } else if mutators.is_empty() {
+            if spec.phase_invocation == InvocationGranularity::Batch {
+                "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
+            } else {
+                format!(
+                    "Read-only checks are compatibility-translated with {} invocation granularity; real-tool behavior is version-dependent.",
+                    invocation(spec.phase_invocation)
+                )
+            }
         } else if let Some(reason) = &spec.unverified_remedy_fallback {
             format!("Unverified mutator-first fallback: {reason}")
         } else {

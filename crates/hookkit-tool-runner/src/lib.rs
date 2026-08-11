@@ -73,6 +73,8 @@ pub struct ToolSpec {
     pub file_selection: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Granularity used by the immediate pipeline and phase-derived workflows.
+    pub phase_invocation: InvocationGranularity,
     /// Deferred workflows executed at turn completion.
     pub workflows: Vec<ToolWorkflow>,
     /// External commands executed in vector order.
@@ -99,6 +101,7 @@ impl ToolSpec {
             install_hint: None,
             file_selection: FileSelection::default(),
             workspace_indicator: None,
+            phase_invocation: InvocationGranularity::default(),
             workflows: Vec::new(),
             phases: Vec::new(),
             messages: ToolMessages::default(),
@@ -1171,7 +1174,7 @@ fn build_deferred_plan(
                     spec.id, workflow.id
                 )));
             }
-            let jobs = workflow_jobs(&base_jobs, workflow.invocation);
+            let jobs = invocation_jobs(&base_jobs, workflow.invocation);
             for (job_index, job) in jobs.into_iter().enumerate() {
                 plan.push(ScheduledWorkflow {
                     tool_index,
@@ -1198,7 +1201,7 @@ fn build_deferred_plan(
     Ok((plan, planned_tools))
 }
 
-fn workflow_jobs(base_jobs: &[ToolJob], invocation: InvocationGranularity) -> Vec<ToolJob> {
+fn invocation_jobs(base_jobs: &[ToolJob], invocation: InvocationGranularity) -> Vec<ToolJob> {
     if invocation != InvocationGranularity::PerFile {
         return base_jobs.to_vec();
     }
@@ -1857,7 +1860,8 @@ fn run_post_tool_input(
             continue;
         }
 
-        let jobs = build_jobs(&runnable_paths, &project_root, &spec);
+        let base_jobs = build_jobs(&runnable_paths, &project_root, &spec);
+        let jobs = invocation_jobs(&base_jobs, spec.phase_invocation);
         if jobs.is_empty() {
             continue;
         }
@@ -2277,6 +2281,7 @@ fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpe
             exclude,
         },
         workspace_indicator: spec.workspace_indicator.clone(),
+        phase_invocation: convert_invocation(spec.phase_invocation),
         workflows,
         phases,
         messages: convert_messages(&spec.messages),
@@ -2301,11 +2306,7 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
                     pkl::CheckScope::TargetFiles => CheckScope::TargetFiles,
                     pkl::CheckScope::Workspace => CheckScope::Workspace,
                 },
-                invocation: match workflow.invocation {
-                    pkl::InvocationGranularity::PerFile => InvocationGranularity::PerFile,
-                    pkl::InvocationGranularity::Batch => InvocationGranularity::Batch,
-                    pkl::InvocationGranularity::Workspace => InvocationGranularity::Workspace,
-                },
+                invocation: convert_invocation(workflow.invocation),
                 compatibility_translation: false,
                 enabled: workflow.enabled,
             })
@@ -2340,7 +2341,7 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
             } else {
                 CheckScope::TargetFiles
             },
-            invocation: InvocationGranularity::Batch,
+            invocation: convert_invocation(spec.phase_invocation),
             compatibility_translation: true,
             enabled: true,
         })
@@ -2360,13 +2361,21 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
                     } else {
                         CheckScope::TargetFiles
                     },
-                    invocation: InvocationGranularity::Batch,
+                    invocation: convert_invocation(spec.phase_invocation),
                     compatibility_translation: true,
                     enabled: true,
                 }),
         );
     }
     workflows
+}
+
+fn convert_invocation(invocation: pkl::InvocationGranularity) -> InvocationGranularity {
+    match invocation {
+        pkl::InvocationGranularity::PerFile => InvocationGranularity::PerFile,
+        pkl::InvocationGranularity::Batch => InvocationGranularity::Batch,
+        pkl::InvocationGranularity::Workspace => InvocationGranularity::Workspace,
+    }
 }
 
 fn ordered_workflows(spec: &pkl::ToolSpec) -> Vec<(&String, &pkl::Workflow)> {
@@ -3846,6 +3855,51 @@ mod tests {
             workspace_indicator: None,
             files: vec![root.join(name)],
         }
+    }
+
+    #[test]
+    fn per_file_invocation_splits_jobs_without_losing_workspace_context() {
+        let root = PathBuf::from("/tmp/hookkit-per-file-jobs");
+        let marker = root.join("package.json");
+        let base = ToolJob {
+            workspace_dir: root.clone(),
+            workspace_indicator: Some(marker.clone()),
+            files: vec![root.join("first.json"), root.join("second.json")],
+        };
+
+        let jobs = invocation_jobs(std::slice::from_ref(&base), InvocationGranularity::PerFile);
+
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].workspace_dir, root);
+        assert_eq!(jobs[0].workspace_indicator.as_ref(), Some(&marker));
+        assert_eq!(jobs[0].files, [base.files[0].clone()]);
+        assert_eq!(jobs[1].files, [base.files[1].clone()]);
+        assert_eq!(
+            invocation_jobs(std::slice::from_ref(&base), InvocationGranularity::Batch)[0].files,
+            base.files
+        );
+    }
+
+    #[test]
+    fn compatibility_workflows_inherit_phase_invocation() {
+        let schema = pkl::ToolSpec {
+            id: "jq".into(),
+            executable: "jq".into(),
+            phase_invocation: pkl::InvocationGranularity::PerFile,
+            phases: BTreeMap::from([("verify".into(), pkl::Phase::default())]),
+            phase_order: vec!["verify".into()],
+            ..pkl::ToolSpec::default()
+        };
+
+        let spec = convert_tool_spec(&schema, &[]);
+
+        assert_eq!(spec.phase_invocation, InvocationGranularity::PerFile);
+        assert_eq!(spec.workflows.len(), 1);
+        assert_eq!(spec.workflows[0].id, "verify");
+        assert_eq!(spec.workflows[0].invocation, InvocationGranularity::PerFile);
+        assert!(spec.workflows[0].compatibility_translation);
+        assert!(spec.workflows[0].check.is_some());
+        assert!(spec.workflows[0].remedy.is_none());
     }
 
     fn completed_files(outcome: &ToolRunOutcome) -> &[PathBuf] {
