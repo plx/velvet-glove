@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"cargo fmt changed alpha/src/lib.rs, beta/src/lib.rs; re-read changed files before editing further.","hookEventName":"PostToolUse"}}
