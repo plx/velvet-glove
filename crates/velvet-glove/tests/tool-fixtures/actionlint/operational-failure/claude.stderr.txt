@@ -1,0 +1,10 @@
+error: actionlint: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/actionlint-agent-hook/test-session_actionlint-tool_actionlint-tool-failure.txt
+actionlint failure diagnostics:
+== phase verify failed (exit Some(3)) ==
+[verify] command: actionlint -config-file missing-actionlint.yaml <workspace>/example.yml
+status: Some(3)
+classification: Some(Failure)
+stderr:
+could not read config file "missing-actionlint.yaml": open missing-actionlint.yaml: no such file or directory
+artifact: <workspace>/.velvet-glove/actionlint-agent-hook/test-session_actionlint-tool_actionlint-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

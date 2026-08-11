@@ -1,0 +1,16 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["actionlint"] = (Builtins.actionlint) {
+    phases {
+      ["verify"] {
+        // Exercise actionlint's fatal config/IO exit through supported extra args.
+        extraArgs = new Listing<String> {
+          "-config-file"
+          "missing-actionlint.yaml"
+        }
+      }
+    }
+  }
+}
