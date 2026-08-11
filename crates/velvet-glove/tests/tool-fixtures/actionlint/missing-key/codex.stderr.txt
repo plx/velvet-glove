@@ -1,4 +1,4 @@
-warning: actionlint: issues remain; diagnostics: <workspace>/.velvet-glove/actionlint-agent-hook/test-session_actionlint-tool-issues.txt
+warning: actionlint: issues remain; diagnostics: <workspace>/.velvet-glove/actionlint-agent-hook/test-session_test-turn_actionlint-tool_actionlint-tool-issues.txt
 actionlint diagnostics:
 [verify] command: actionlint <workspace>/example.yml
 status: Some(1)
@@ -8,8 +8,5 @@ example.yml:3:5: unexpected key "branch" for "push" section. expected one of "br
   |
 3 |     branch: main
   |     ^~~~~~~
-artifact: <workspace>/.velvet-glove/actionlint-agent-hook/test-session_actionlint-tool-issues.txt (text/plain)
-project-relative artifact: .velvet-glove/actionlint-agent-hook/test-session_actionlint-tool-issues.txt
-summary: actionlint diagnostics
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
+artifact: <workspace>/.velvet-glove/actionlint-agent-hook/test-session_test-turn_actionlint-tool_actionlint-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

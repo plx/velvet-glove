@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"actionlint reports issues; inspect diagnostics at <workspace>/.velvet-glove/actionlint-agent-hook/test-session_actionlint-tool-issues.txt.","hookEventName":"PostToolUse"}}
+{"hookSpecificOutput":{"additionalContext":"actionlint reports issues; inspect diagnostics at <workspace>/.velvet-glove/actionlint-agent-hook/test-session_actionlint-tool_actionlint-tool-issues.txt.","hookEventName":"PostToolUse"}}

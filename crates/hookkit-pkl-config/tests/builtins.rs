@@ -194,6 +194,32 @@ fn prettier_builtin_has_expected_extensions() {
 }
 
 #[test]
+fn actionlint_builtin_classifies_findings_and_operational_failures() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let actionlint = spec(&specs, "actionlint");
+
+    assert_eq!(actionlint.id, "actionlint");
+    assert_eq!(actionlint.display_name, "actionlint");
+    assert_eq!(actionlint.executable, "actionlint");
+    assert_eq!(
+        actionlint.files.include,
+        vec!["*.yml", "*.yaml", "**/*.yml", "**/*.yaml"]
+    );
+    assert_eq!(actionlint.phase_order, vec!["verify"]);
+
+    let verify = actionlint.phases.get("verify").expect("verify");
+    assert_eq!(verify.mode, PhaseMode::Verify);
+    assert_argv(
+        verify,
+        vec![token(ArgToken::ExtraArgs), token(ArgToken::Files)],
+    );
+    assert_exit_codes(&verify.exit_codes, &[0], &[1], &[]);
+    assert_eq!(verify.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(verify.writes, WriteBehavior::None);
+}
+
+#[test]
 fn eslint_builtin_matches_rust_spec() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
