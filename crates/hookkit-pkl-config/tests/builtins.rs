@@ -249,6 +249,83 @@ fn jq_builtin_checks_each_file_with_precise_exit_classification() {
 }
 
 #[test]
+fn gofmt_builtin_preflights_batches_and_models_stdout_diffs() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let gofmt = spec(&specs, "goFmt");
+
+    assert_eq!(gofmt.id, "go-fmt");
+    assert_eq!(gofmt.display_name, "gofmt");
+    assert_eq!(gofmt.executable, "gofmt");
+    assert_eq!(gofmt.files.include, vec!["*.go", "**/*.go"]);
+    assert_eq!(gofmt.phase_invocation, InvocationGranularity::Batch);
+    assert_eq!(gofmt.workflow_order, vec!["format"]);
+
+    let workflow = gofmt.workflows.get("format").expect("format workflow");
+    assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+    assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+
+    let check = workflow.check.as_ref().expect("format check");
+    assert_workflow_argv(
+        check,
+        vec![
+            literal("-l"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&check.exit_codes, &[0], &[], &[2]);
+    assert_eq!(check.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert!(check.issues_on_stdout);
+    assert_eq!(check.writes, WriteBehavior::None);
+
+    let remedy = workflow.remedy.as_ref().expect("format remedy");
+    assert_workflow_argv(
+        remedy,
+        vec![
+            literal("-w"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&remedy.exit_codes, &[0], &[], &[2]);
+    assert_eq!(remedy.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
+
+    assert_eq!(gofmt.phase_order, vec!["preflight", "format"]);
+    let preflight = gofmt.phases.get("preflight").expect("preflight phase");
+    assert_eq!(preflight.mode, PhaseMode::Verify);
+    assert_argv(
+        preflight,
+        vec![
+            literal("-l"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&preflight.exit_codes, &[0], &[], &[2]);
+    assert_eq!(
+        preflight.exit_codes.unexpected,
+        UnexpectedExitPolicy::Failure
+    );
+    assert_eq!(preflight.writes, WriteBehavior::None);
+
+    let format = gofmt.phases.get("format").expect("format phase");
+    assert_eq!(format.mode, PhaseMode::Format);
+    assert_argv(
+        format,
+        vec![
+            literal("-w"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&format.exit_codes, &[0], &[], &[2]);
+    assert_eq!(format.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
+    assert_eq!(format.writes, WriteBehavior::TargetFiles);
+}
+
+#[test]
 fn eslint_builtin_matches_rust_spec() {
     require_pkl!();
     let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");

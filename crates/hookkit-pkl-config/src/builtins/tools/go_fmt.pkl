@@ -2,6 +2,8 @@
 ///
 /// `gofmt -l` is non-mutating and lists unformatted files on stdout while
 /// retaining exit status zero; the deferred workflow classifies that output.
+/// Immediate execution also uses `-l` as a read-only batch preflight because
+/// `-w` can rewrite an earlier file before reporting a later parse failure.
 
 module velvet_glove.builtins.tools.GoFmt
 
@@ -50,6 +52,18 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   workflowOrder = new Listing<String> { "format" }
 
   phases = new Mapping<String, Config.Phase> {
+    ["preflight"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "-l"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
+      }
+    }
     ["format"] = new Config.Phase {
       mode = "format"
       argv = new Listing<String | Config.ArgToken> {
@@ -64,5 +78,5 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       writes = "target-files"
     }
   }
-  phaseOrder = new Listing<String> { "format" }
+  phaseOrder = new Listing<String> { "preflight"; "format" }
 }
