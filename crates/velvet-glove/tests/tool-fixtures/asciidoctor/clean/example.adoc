@@ -1,3 +1,0 @@
-= Clean fixture
-
-This AsciiDoc document is valid.

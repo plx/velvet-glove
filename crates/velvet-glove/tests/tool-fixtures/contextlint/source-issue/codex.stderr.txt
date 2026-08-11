@@ -1,9 +1,0 @@
-warning: Contextlint: issues remain; diagnostics: <workspace>/.velvet-glove/contextlint-agent-hook/test-session_test-turn_contextlint-tool_contextlint-tool-issues.txt
-Contextlint diagnostics:
-[verify] command: python -I -c <inline-script> node contextlint <workspace>/contextlint.config.json __VELVET_GLOVE_CONTEXTLINT_FILES__ <workspace>/docs/example.md
-status: Some(1)
-classification: Some(Issues)
-stdout:
-[{"file":"docs/example.md","line":1,"message":"Section \"Overview\" contains only placeholder \"TODO\"","ruleId":"CTX-001","severity":"warning"}]
-artifact: <workspace>/.velvet-glove/contextlint-agent-hook/test-session_test-turn_contextlint-tool_contextlint-tool-issues.txt
-hookkit: redirected user notices and diagnostics to protocol stderr

@@ -1,6 +1,0 @@
-[package]
-name = "cargo-clippy-clean"
-version = "0.1.0"
-edition = "2024"
-
-[workspace]

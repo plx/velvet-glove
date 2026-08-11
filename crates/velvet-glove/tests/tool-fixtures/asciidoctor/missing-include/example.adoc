@@ -1,3 +1,0 @@
-= Missing include fixture
-
-include::does-not-exist.adoc[]

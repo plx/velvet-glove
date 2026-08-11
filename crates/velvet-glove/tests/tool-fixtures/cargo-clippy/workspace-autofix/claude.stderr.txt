@@ -1,2 +1,0 @@
-cargo clippy: changed src/example.rs, src/workspace_only.rs
-hookkit: redirected user notices and diagnostics to protocol stderr

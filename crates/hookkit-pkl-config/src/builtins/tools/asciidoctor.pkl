@@ -1,10 +1,6 @@
 /// Asciidoctor — AsciiDoc syntax validator and processor.
 ///
-/// Asciidoctor's CLI deliberately uses status 1 for both logged document
-/// warnings/errors and its own usage, configuration, or processing failures.
-/// A silent FATAL-threshold preflight distinguishes CLI/configuration failures
-/// before the warning-sensitive pass classifies document diagnostics.
-/// Fatal document diagnostics share the preflight's operational classification.
+/// DRAFT: requires Ruby; not verified against a fixture in this catalog.
 
 module velvet_glove.builtins.tools.Asciidoctor
 
@@ -27,51 +23,17 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
-      program = "ruby"
-      // Safe mode permits local includes but rejects paths above the source.
       // `--failure-level=WARNING` promotes warnings to non-zero exits;
       // `--out-file=/dev/null` suppresses generated HTML.
       argv = new Listing<String | Config.ArgToken> {
-        "-ropen3"
-        "-e"
-        """
-        tool = ARGV.shift
-        unless tool
-          warn "velvet-glove-asciidoctor: missing tool executable"
-          exit 2
-        end
-        unsupported = ARGV.find do |argument|
-          short = argument.start_with?("-") && !argument.start_with?("--")
-          argument == "--" ||
-            (short && (argument.include?("h") || argument.include?("V") || argument.include?("v") || argument.include?("q") || argument.include?("?"))) ||
-            argument.start_with?("--h") || argument.start_with?("--v") || argument.start_with?("--q")
-        end
-        if unsupported
-          warn "velvet-glove-asciidoctor: unsupported argument #{unsupported.inspect} would bypass validation or diagnostic evidence"
-          exit 2
-        end
-        begin
-          stdout, stderr, status = Open3.capture3(tool, *ARGV, "--safe-mode=safe", "--failure-level=FATAL", "--out-file=/dev/null")
-          unless status.success?
-            $stdout.write(stdout)
-            $stderr.write(stderr)
-            exit 2
-          end
-          exec(tool, *ARGV, "--safe-mode=safe", "--failure-level=WARNING", "--out-file=/dev/null")
-        rescue SystemCallError => error
-          warn "velvet-glove-asciidoctor: #{error.message}"
-          exit 2
-        end
-        """
-        "--"
-        new Config.ToolExecutable {}
+        "--failure-level=WARNING"
+        "--out-file=/dev/null"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
-        failure = new Listing<Int> { 2 }
       }
     }
   }

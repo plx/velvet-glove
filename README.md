@@ -49,16 +49,12 @@ they run. Open `/hooks` in the Codex CLI after installing the plugin.
 
 Every invocation explicitly selects its harness and event:
 
-<!-- markdownlint-disable MD013 -->
-
 | Command | Native event | Purpose |
 | --- | --- | --- |
 | `post-tool-immediate` | PostToolUse | Run applicable checks and fixes immediately. |
 | `post-tool` | PostToolUse | Quietly record file activity for deferred work. |
 | `turn-completion` | Stop/turn completion | Reconcile activity, run batched workflows, and report or block. |
 | `session-start-state` | SessionStart | Record an exact Claude/Codex session lower bound. |
-
-<!-- markdownlint-enable MD013 -->
 
 ```sh
 cargo build --release -p velvet-glove --bin velvet-glove
@@ -92,12 +88,8 @@ generated example policy is
 
 The embedded catalog contains immediate phases and deferred workflows for a
 broad set of formatters and linters. See the generated
-[built-in workflow audit](docs/builtin-deferred-workflow-audit.md), the
-[validation coverage report](docs/builtin-validation-coverage.md), the
-[pinned environment guide](docs/pinned-tool-environments.md), and the
-[configuration reference](docs/configuration.md). The coverage report keeps
-schema, rendered-command, and pinned-real-tool evidence separate; existing
-host-dependent fixtures are inventory rather than pinned evidence.
+[built-in workflow audit](docs/builtin-deferred-workflow-audit.md) and the
+[configuration reference](docs/configuration.md).
 
 ## Deferred hook suite
 
@@ -105,15 +97,11 @@ The three deferred commands must share the same state root. The default is
 `$TMPDIR/velvet-glove/state`; use `--state-dir PATH` on every command to
 override it.
 
-<!-- markdownlint-disable MD013 -->
-
 | Purpose | Claude Code | Codex | Antigravity |
 | --- | --- | --- | --- |
 | Session lower bound | `session-start-state` | `session-start-state` | unavailable |
 | Activity producer | `post-tool` | `post-tool` | `post-tool` |
 | Deferred consumer | `turn-completion` | `turn-completion` | `turn-completion` |
-
-<!-- markdownlint-enable MD013 -->
 
 The consumer commits command artifacts and `summary.json` before changing the
 pending window. Clean and auto-fixed work is acknowledged; manual issues,
@@ -143,256 +131,14 @@ just validate-plugins
 # Complete local pre-PR check, including the plugin checks above.
 just check
 
-# Exact selected real-tool contracts (macOS 26+, Apple developer tools,
-# Apple silicon, mise 2026.5.15).
-just tool-case jq multi-file-fragments
-just tool-case astro multi-file-project
-just tool-case betterleaks multi-file
-just tool-case biome multi-file
-just tool-case prettier multi-file
-just tool-case contextlint multi-file-project
-just tool-case dclint autofix-multi-file
-just tool-case eslint multi-file
-just tool-case ghalint-workflow multi-workflow
-just tool-case buf-format multi-file
-just tool-case go-fmt multi-file
-just tool-case go-vet test-findings
-just tool-case errcheck multi-file
-just tool-case goimports multi-file
-just tool-case golines multi-file
-just tool-case cargo-clippy workspace-autofix
-just tool-case cargo-fmt workspace-multi
-
-# Twenty-four behavior-rich contracts across nineteen environments: jq, Buf, and
-# Vacuum data formats; shared Node; dedicated Prettier, Contextlint, dclint,
-# ESLint, and GitHub Actions; Python, gofmt/go vet, errcheck, goimports, golines, Rust, Cargo Clippy/Fmt,
-# Ruby, security, and native macOS.
-just tool-representatives
-
 cargo fmt --all -- --check
 cargo +1.85.0 check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-targets
 
-# Optional host-PATH compatibility lane; missing programs are structured skips.
+# Optional real-tool compatibility lane; requires controlled tool versions.
 cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
-
-The data-formats representative pins the official jq 1.8.2 macOS arm64
-release and its GitHub SLSA provenance, then exercises `jq empty` once per
-file. The `-e` option is intentionally absent: `empty` produces no result, so
-`jq -e empty` exits four even for valid input. Per-file execution prevents jq
-from joining adjacent file bytes into one parse stream. Within an individual
-file, the contract still accepts an empty stream or multiple
-whitespace-separated top-level values rather than requiring exactly one JSON
-document. The exact artifact URLs, SHA-256 digests, status mapping, and
-provenance identity are in the
-[pinned environment guide](docs/pinned-tool-environments.md#jq-validation-contract).
-
-The separate Buf data-formats lane pins Buf 1.72.0 and the declared Apple
-`/usr/bin/diff` prerequisite. Its isolated adapter rejects configurable flags,
-proves every physical Proto file belongs to the effective module scope, locks
-symlink-safe workspace formatting, and accepts status 100 only after parsing a
-complete unified diff and removing its generated mtime fields. The
-representative repairs selected and unselected in-scope files, records the
-complete workspace diff, reruns the authoritative check, and proves a clean
-idempotent repeat. Exact release/signature provenance and the config, syntax,
-filesystem, and transaction limitations are in the
-[Buf contract](docs/pinned-tool-environments.md#buf-format-validation-contract).
-
-The Node lane also pins Astro 7.2.0, `@astrojs/check` 0.9.10, and TypeScript
-6.0.3. Its evaluated adapter performs one error-only check for the whole
-workspace, requires Astro's positive-file `Result` footer before accepting
-status zero or one, and treats an incomplete or configuration-failed check as
-an operational failure. The representative proves project scope with two clean
-selected files and an unselected failing third file. Exact provenance,
-integrities, repeat and no-mutation evidence, and the conservative attribution
-and side-effect limitations are in the
-[Astro contract](docs/pinned-tool-environments.md#astro-validation-contract).
-
-The same Node lane pins Biome 2.5.7 and its macOS arm64 native package. An
-isolated Python adapter locks Biome's JSON reporter and safe-fix controls,
-requires a complete report for every selected file, distinguishes source
-diagnostics from configuration failures, and runs an authoritative check after
-each mutation. The representative proves one batched repair with exact changed
-files, conservative candidate attribution, an untouched unselected sentinel,
-and clean idempotent repeats. Provenance, integrity, command, mutation, and
-security limitations are recorded in the
-[Biome contract](docs/pinned-tool-environments.md#biome-validation-contract).
-
-The dedicated Prettier lane pins Prettier 3.9.6 in a one-package npm graph and
-runs it only through checksum-pinned Node 24.19.0 with bundled npm 11.17.0. Its
-isolated adapter disables implicit configuration, ignores, plugins,
-EditorConfig, cache, and pragma discovery; accepts only a narrow data-only JSON
-configuration and option set; and requires a complete read-only
-`--list-different` batch before any write. The four-case matrix proves clean,
-dirty, configuration-failure, and mixed multi-file behavior on both immediate
-and compatibility-deferred surfaces. Exact provenance, signal and descendant
-cleanup, private-config handling, and the remaining file-replacement and late
-partial-write limitations are in the
-[Prettier contract](docs/pinned-tool-environments.md#prettier-validation-contract).
-
-The dedicated Contextlint lane installs the exact `@contextlint/cli` and
-`@contextlint/core` 1.1.1 pair in a separate locked npm graph and executes it
-only through checksum-pinned Node 24.19.0. Its isolated adapter ignores config
-include patterns for scope, inventories and snapshots every physical Markdown
-file outside physical fixed-name exclusions, rejects Contextlint glob-magic
-paths and every encountered symlink, copies the validated JSON config into a
-private root, and requires an exact private SEC-001 completion probe before it
-accepts project JSON. The four-case matrix proves clean, warning-only source,
-cross-file/project, and operational-failure behavior on both immediate and
-compatibility-deferred surfaces. Exact package integrities and tag provenance,
-permission and trace bindings, signal/descendant cleanup, and the remaining
-unwalked-subtree, workspace-topology/referenced-target replacement, and
-escaped-process limitations are in the [Contextlint
-contract](docs/pinned-tool-environments.md#contextlint-validation-contract).
-
-The dedicated dclint lane pins dclint 3.1.0 in its exact one-package npm graph
-and executes it only through checksum-pinned Node 24.19.0. Its isolated adapter
-accepts only a bounded data-only JSON config, normalizes that config into a
-private mode-0600 copy, validates dclint's complete JSON diagnostics, and
-preflights the full selected batch before narrowing writes to files with proven
-fixable findings. Every enabled top-level-order fixer receives a complete safe
-Compose order that preserves extension properties and `models`; incomplete
-custom orders and duplicate service-key group assignments fail before native
-execution. The native `no-version-field` fixer is also forced off because it
-can delete nested extension data during an unrelated write, and explicit
-enables fail before spawn. The five-case matrix proves clean, persistent source,
-invalid YAML, multi-file autofix, and pre-spawn configuration-failure behavior
-on both the immediate pipeline and explicit deferred workflow. Exact npm integrity,
-canonical temporary-root handling, rollback and lifecycle evidence, and the
-remaining skipped-subtree, replacement-race, rollback, and escaped-process
-limitations are in the [dclint
-contract](docs/pinned-tool-environments.md#dclint-validation-contract).
-
-The dedicated ESLint lane pins ESLint 10.8.1 and its complete npm lock graph,
-then executes the JavaScript CLI only through checksum-pinned Node 24.19.0 with
-bundled npm 11.17.0. The isolated adapter disables all project config, plugin,
-parser, processor, ignore, inline-config, and suppression discovery; an
-optional `.velvet-glove-eslint.json` can change only the severity of seven
-reviewed built-in rules and is translated into private mode-0600 state. Fixes
-are admitted only after a complete read-only check and `--fix-dry-run`; every
-written byte must match the prediction before a final authoritative batch
-check. The five-case matrix proves clean, persistent source, pre-spawn config
-failure, exact autofix, and mixed multi-file behavior on both immediate and
-compatibility-deferred surfaces. Exact release and npm provenance, private
-config/cache/suppression handling, signal and descendant cleanup, and the
-remaining replacement-race and late-partial-write limitations are in the
-[ESLint contract](docs/pinned-tool-environments.md#eslint-validation-contract).
-
-The dedicated GitHub Actions lane reproducibly builds ghalint
-`1.5.6+velvet-glove.1` from the checksum-pinned v1.5.6 source with a
-checksum-pinned `golang.org/x/text` 0.39.0 closure update and locked Go 1.26.5;
-the official release binary is excluded because it embeds stale Go 1.26.2.
-The isolated adapter inventories exactly the native top-level
-`.github/workflows/*.yml`-then-`*.yaml` set, rejects the native empty-workspace
-success, snapshots the retained project, and accepts status one only when every
-timestamped line belongs to the pinned policy, workflow-parse, or configuration
-diagnostic grammar. The six-case matrix covers clean execution, ordinary
-policy findings, the complete native policy-field grammar, two structured YAML
-parse shapes, invalid configuration, and multi-workflow scope on both the
-immediate pipeline and explicit deferred workflow. Exact source and build
-provenance, command and lifecycle evidence, closed-log grammar, and remaining
-skipped-subtree, replacement-race, and escaped-process limitations are in the
-[ghalint workflow
-contract](docs/pinned-tool-environments.md#ghalint-workflow-validation-contract).
-
-The Go lane pins Go and gofmt 1.26.5. Its isolated adapter treats `gofmt -l`
-stdout as the formatting signal while preserving native status-two failure
-dominance, rejects link aliases and scope-changing arguments, and scrubs Go,
-loader, and debug overrides. Every mutation is gated by a read-only batch
-preflight; deferred writes additionally receive the explicit workflow's
-authoritative final check, while immediate idempotence is proved by its clean
-repeat. The representative selects one dirty and one clean file while
-preserving an unselected dirty sentinel; the full matrix also proves a mixed
-dirty-valid and parse-invalid batch cannot partially mutate. Exact archive/tag
-provenance, command traces, environment controls, and filesystem limitations
-are in the
-[gofmt contract](docs/pinned-tool-environments.md#gofmt-validation-contract).
-
-The dedicated errcheck lane pins errcheck 1.20.0 from its exact Go proxy and
-module-sum closure, then reproducibly builds it with the checksum-locked Go
-1.26.5 Darwin arm64 toolchain. The outer and denied-network runners both bind
-the proxy zip, module manifests, binary SHA-256, and full embedded Go build
-metadata. Its read-only adapter verifies the selected module and physical Go
-source inventory before running one workspace-wide check, accepts only
-canonical source-bound diagnostics, scrubs network and toolchain overrides,
-and performs bounded signal and descendant cleanup. Clean, unchecked-error,
-multi-file/workspace-scope, and operational cases run on Claude and Codex across
-immediate and compatibility-deferred surfaces; the adversarial lifecycle also
-proves false-clean, mutation, malformed-output, alias, signal, and orphan
-failure behavior. Exact provenance and remaining filesystem/process boundaries
-are in the
-[errcheck contract](docs/pinned-tool-environments.md#errcheck-validation-contract).
-
-The dedicated goimports lane pins x/tools v0.48.0 and its exact four-module
-build closure, then reproducibly builds the formatter with locked Go 1.26.5.
-Its isolated adapter reconstructs the complete physical single-module Go tree,
-seals resolver inputs behind a minimal private GOROOT and empty module/GOPATH
-caches, validates per-file and whole-batch fixed points, and never runs native
-`-w` against the project. The representative adds both a physical main-module
-import and a same-directory sibling import while removing an unused import,
-then proves exact transactional diff, final verification, and idempotence.
-Exact source/build provenance, closed-module scope, rollback rules, and
-remaining resolver and process limitations are in the
-[goimports contract](docs/pinned-tool-environments.md#goimports-validation-contract).
-
-The dedicated golines lane pins an archived v0.13.0 source snapshot plus a
-checksum-locked closure patch that removes the vulnerable prefixed formatter
-graph, then reproducibly builds `0.13.0+velvet-glove.1` with Go 1.26.5. Its
-isolated adapter passes selected bytes only through fixed native stdin
-semantics, proves every candidate is a fixed point, and commits the complete
-batch through guarded retained descriptors without ever invoking native `-w`
-on project paths. The representative formats two selected dirty files while
-preserving selected-clean and unselected sentinels, then proves exact diff,
-final verification, and idempotence. Exact patch/build provenance, generated
-file behavior, rollback guards, and remaining filesystem/process limitations
-are in the
-[golines contract](docs/pinned-tool-environments.md#golines-validation-contract).
-
-The dedicated Cargo Clippy lane pins the official Rust and Cargo 1.97.1
-distribution with Clippy 0.1.97. Its isolated adapter runs frozen read-only
-metadata and Clippy JSON checks, proves every physical workspace Rust source
-was compiled through fresh dependency information, and applies only validated
-non-overlapping `MachineApplicable` suggestions before the authoritative final
-check. The representative repairs one selected and one unselected compiled
-source while preserving a selected clean source, then proves exact workspace
-diffs and clean idempotent repeats. The deliberately narrow single-package,
-all-targets/all-features scope and execution/TOCTOU limitations are recorded in
-the [Cargo Clippy contract](docs/pinned-tool-environments.md#cargo-clippy-validation-contract).
-
-The same Rust 1.97.1 closure supplies cargo-fmt and rustfmt 1.9.0. The isolated
-Cargo Fmt adapter performs locked metadata checks, then proves on a private
-copy that `cargo fmt --all --check` reaches every physical Rust source before
-it trusts a real check or mutation. The representative two-member workspace
-repairs both a selected dirty source and an unselected dirty member source,
-records that exact workspace diff, and proves the authoritative check and
-idempotent repeat. A dedicated dormant `autobins = false` case proves the
-adapter fails closed when Cargo Fmt omits a physical `.rs` file. Exact archive
-and source provenance, eight-event child trace, status rules, and supported
-workspace limitations are in the
-[Cargo Fmt contract](docs/pinned-tool-environments.md#cargo-fmt-validation-contract).
-
-The security lane reproducibly builds Betterleaks
-`1.7.3+velvet-glove.1` from the checksum-pinned upstream v1.7.3 source and a
-checksum-pinned dependency-closure patch with Go 1.26.5. Its adapter scans all
-selected files in one batch, locks complete redaction and stable legacy output,
-reserves status 10 for findings, removes ambient Betterleaks and Gitleaks
-configuration variables, and accepts only non-controlled long-form configured
-arguments. The source scan has no reachable package or symbol vulnerability
-finding; the remaining `GO-2026-5932` result is a coarse module match whose
-binary expansion names an OpenPGP package absent from the source dependency
-graph. Exact source, patch, module-lock, build-artifact, command, and limitation
-details are in the
-[Betterleaks contract](docs/pinned-tool-environments.md#betterleaks-validation-contract).
-
-The Ruby lane also pins the dependency-free Asciidoctor 2.0.26 gem by SHA-256.
-Its checked command runs in safe mode through a small Ruby preflight adapter:
-document warnings and nonfatal errors remain source issues, while Asciidoctor
-usage and configuration failures are remapped to operational failures despite
-the upstream CLI using status one for both. Exact provenance, batch behavior,
-and the adapter and safe-mode limitations are in the
-[Asciidoctor contract](docs/pinned-tool-environments.md#asciidoctor-validation-contract).
 
 Run `scripts/regen-licenses.sh` after dependency changes. The generated
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) is checked in alongside

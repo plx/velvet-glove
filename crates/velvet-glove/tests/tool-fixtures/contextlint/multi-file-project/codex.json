@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "Contextlint reports issues; inspect diagnostics at <workspace>/.velvet-glove/contextlint-agent-hook/test-session_test-turn_contextlint-tool_contextlint-tool-issues.txt."
-  }
-}

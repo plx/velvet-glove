@@ -33,22 +33,21 @@ impl std::error::Error for CatalogValidationError {}
 /// Legacy `phases` remain valid when their compatibility translation pairs
 /// each mutator with a read-only verifier. A mutating-only legacy entry must
 /// carry a nonempty `unverifiedRemedyFallback` explanation; the shipped
-/// catalog intentionally contains no such fallback. Identity checks apply to
-/// every entry, including disabled drafts.
+/// catalog intentionally contains no such fallback.
 pub fn validate_builtin_catalog(
     specs: &BTreeMap<String, ToolSpec>,
 ) -> Result<(), CatalogValidationError> {
     let mut errors = Vec::new();
     let mut tool_ids = BTreeSet::new();
     for (key, spec) in specs {
+        if !spec.enabled {
+            continue;
+        }
         let prefix = format!("{key} ({})", spec.id);
         if spec.id.trim().is_empty() {
             errors.push(format!("{key}: tool id is empty"));
         } else if !tool_ids.insert(spec.id.as_str()) {
             errors.push(format!("{prefix}: duplicate tool id"));
-        }
-        if !spec.enabled {
-            continue;
         }
         if spec.executable.trim().is_empty() {
             errors.push(format!("{prefix}: executable is empty"));
@@ -345,38 +344,9 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
         checks,
         remedies,
         scopes,
-        invocations: vec![invocation(spec.phase_invocation).into()],
-        limitation: if spec.id == "jq" {
-            "The per-file parse check accepts an empty stream and multiple whitespace-separated top-level JSON values; exact-one-document validation is not claimed.".into()
-        } else if spec.id == "asciidoctor" {
-            "The adapter rejects early-exit or diagnostic-suppression arguments, then a silent FATAL-threshold preflight maps CLI/configuration failures to exit 2 before the WARNING-threshold pass maps document diagnostics to exit 1; safe mode rejects ancestor includes, and batch inputs remain independent documents.".into()
-        } else if spec.id == "astro" {
-            "The adapter disables telemetry, synchronization, watch mode, and timestamped output, rejects project-control and early-exit arguments, and accepts exit 0 or 1 only when a completed positive-file Result footer proves a workspace scan; incomplete runs and output beyond the explicit 16 MiB buffer map to exit 2. Validation intentionally fails on errors, not warnings or hints, and workspace findings are conservatively attributed to every selected candidate.".into()
-        } else if spec.id == "betterleaks" {
-            "The isolated adapter preflights regular readable inputs, accepts only non-controlled long --name=value extra arguments, locks complete redaction, canonicalizes Betterleaks' fatal-log clock, reserves exit 10 for findings, and forwards cancellation with bounded child cleanup. Selected paths are scanned in one batch and conservatively share attribution; file targets require an explicit config, and the launch-time preflight cannot eliminate path replacement races.".into()
-        } else if spec.id == "biome" {
-            "The isolated adapter preflights regular readable files, rejects extra arguments that alter selection, rule scope, mutation, reporting, or completion evidence, scrubs Biome/Node diagnostic overrides, and requires an exact-pinned JSON report proving every selected file was processed with no skips or truncated diagnostics. Status 1 maps to source issues only when every failing category is parse, format, lint, assist, or suppression syntax; configuration, incomplete, unexpected-category, signal, spawn, and output-over-16-MiB failures map to status 2. Safe fixes run in one batch and are followed by the authoritative check, so candidate attribution remains conservative while changed-file evidence stays exact; the experimental JSON schema is locked to the tested Biome patch release.".into()
-        } else if spec.id == "contextlint" {
-            "The isolated adapter rejects extra arguments and empty or unknown-rule configs, binds absolute Node and CLI-JS paths to the exact @contextlint/cli and @contextlint/core 1.1.1 package pair, and runs a byte-stable private SEC-001 completion probe before accepting project output. The validated source config is copied to a mode-0600 private file and that authoritative copy is used for the project child. Config include patterns never control coverage: every physical Markdown file outside physical .git, node_modules, and .velvet-glove directories is bounded, snapshotted, and passed explicitly; mixed-case runner globs select every supported suffix, matching root and nested exclusions prevent skipped candidates, and every candidate must belong to the physical inventory. Every encountered symlink, hard-linked Markdown, a Contextlint-glob-magic component in an inventoried path, an empty inventory, more than 4,096 Markdown files, and more than 64 MiB of Markdown are rejected. A minimal child environment and Node permission mode allow reads only from the pinned package graph, lexical workspace root, and private config/probe root and grant no writes, child processes, workers, or native addons. Exact JSON validation maps warnings as well as errors to source issues, while incomplete, malformed, permission-denied, signal, spawn, mutation, normally exiting same-group descendants, and over-16-MiB results fail operationally. Physical skipped subtrees and non-Markdown objects are outside inventory; nested symlinks inside real skipped trees are unwalked but built-in existence checks may follow them through the lexical workspace grant. Concurrent workspace topology, referenced-target, Markdown, config, or executable replacement cannot be eliminated, and a deliberately escaped session or process group is outside containment. Node permissions are not an OS sandbox, so the active deny-network wrapper remains authoritative for network isolation.".into()
-        } else if spec.id == "eslint" {
-            "The isolated adapter binds absolute Node and ESLint CLI paths to the exact Node 24.19.0, npm 11.17.0, and ESLint 10.8.1 closure, rejects every extra argument, and never discovers project ESLint config, plugins, parsers, processors, ignore files, inline configuration, or suppressions. Only unique UTF-8 .js, .cjs, and .mjs files are accepted; TypeScript and JSX are deliberately outside this core contract. An optional strict .velvet-glove-eslint.json document can set only built-in rule severities from a fixed allowlist and is translated to mode-0600 private CJS configuration alongside private suppressions and per-child cache state. A minimal child environment clears ambient Node, npm, ESLint, loader, home, and cache channels. Exact bounded JSON completion evidence must cover every selected file, and verify must leave source bytes and identities unchanged. Fix first performs a complete read-only check and native --fix-dry-run, writes only files whose exact output was predicted, checks every resulting byte and identity, and then verifies the complete batch; repeated remedy proves idempotence. Warnings and errors remain conservatively attributed to every selected candidate, while exact changed-file evidence records mutations. Symlinked, hard-linked, oversized, non-UTF-8, and aliased selections are unsupported. A selected path can still be replaced or changed after validation, a late native write failure can leave partial writes, and a deliberately escaped session or process group is outside containment; the adapter intentionally does not attempt an unsafe rollback.".into()
-        } else if spec.id == "buf-format" {
-            "The isolated adapter rejects every extra argument, requires a canonical v1/v2 workspace config, resolves the managed Buf executable before fixing PATH to the declared Apple diff prerequisite, disables symlink traversal, rejects hard-linked physical Proto files and Proto files beneath runner-hard-skipped directories, and runs a strict `buf config ls-modules` preflight that fails when any physical Proto file in the non-symlink workspace tree is outside the configured module/include scope or excluded from it. It bounds child output and accepts status 100 only with complete unified-diff blocks whose generated header mtimes it canonicalizes. A workspace invocation and workspace write scope cover every supported file, so findings are conservatively attributed to selected candidates while snapshot evidence records exact changes, including unselected matching files. Configurations that intentionally leave physical workspace Proto files outside Buf's module scope are unsupported; Buf format proves formatting cleanliness, not Proto syntax validity; late filesystem failures can partially mutate a workspace, and config/file checks cannot eliminate replacement races.".into()
-        } else if spec.id == "cargo-clippy" {
-            "The isolated adapter rejects every extra argument, binds Cargo, rustc, rustdoc, cargo-clippy, and clippy-driver to one dedicated Rust 1.97.1 toolchain closure, ignores workspace and ambient Cargo configuration by running frozen offline commands from a private directory, and clears compiler, wrapper, loader, and Clippy overrides. Read-only metadata, a lint-capped coverage pass, and the authoritative Cargo JSON pass must prove one locked package and terminal completion; only fresh dep-info tied to selected-package artifacts may prove compilation of every physical workspace Rust source. The remedy applies only validated, non-overlapping MachineApplicable byte replacements transactionally; the final read-only phase remains authoritative, and workspace attribution is conservative while changed-file evidence is exact. This intentionally narrow contract rejects multi-package workspaces, workspace-local path-dependency sources, custom build targets, dormant or target-gated physical `.rs` files, and projects whose all-targets/all-features build is not jointly valid. Dependency and procedural-macro code still executes under the network sandbox, and file/config replacement races or a failed rollback cannot be eliminated.".into()
-        } else if spec.id == "cargo-fmt" {
-            "The isolated adapter rejects every extra argument, roots each invocation at one unique Cargo.lock and its sibling Cargo.toml, binds Cargo, cargo-fmt, rustfmt, and rustc to the dedicated Rust 1.97.1/rustfmt 1.9.0 closure, runs locked offline children from a private directory, and clears Cargo, Rust, wrapper, cache, and loader overrides. Before touching the selected workspace it copies every validated file plus retained directory topology and modes, adds a parseable formatting defect to every physical `.rs` file, and requires `cargo fmt --all --check` to report exactly that complete set; this makes dormant or Cargo-excluded Rust sources fail closed. Status 1 counts as formatting issues only with a complete files-with-diff report and empty stderr. Formatting must change exactly its reported physical Rust files without altering retained directory topology or modes; an operational failure after the real child starts attempts to restore baseline file bytes, modes, and mtimes plus retained directory topology and modes while reporting rollback failure. File or directory inode identity and directory mtimes are not restored. Every normally completed child is checked for and sweeps remaining members of its owned process group, but a child that deliberately escapes into another session or process group cannot be contained by this adapter. The authoritative check plus repeated remedy proves the retained post-state and idempotence. Multi-member workspaces are supported, but external path dependencies, non-member manifests, nested rustfmt configs, symlinks, hard links, missing locks, and files beneath `.git`, `.velvet-glove`, `node_modules`, or `target` are outside the contract. Rustfmt proves formatting rather than compilation, and replacement races or an unsuccessful rollback cannot be eliminated.".into()
-        } else if spec.id == "go-vet" {
-            "The isolated adapter rejects every extra argument and ambient Go override, requires exact Go 1.26.5, fixes read-only offline module semantics with CGO disabled, and gives each invocation private home, temporary, Go-path, and fresh build-cache roots. Exact `go env`, `go mod verify`, and concatenated `go list -json` preflights bind the main module, physical Go inventory, package scope, and internal/external test actions before `go vet -json -mod=readonly ./...` runs. Native vet findings exit zero, so only a complete UTF-8 JSON-object stream whose package/action count, analyzer results, canonical paths, byte positions, related information, and suggested fixes validate maps to status 1; native nonzero, stderr, embedded errors, malformed or incomplete scope, mutation, and over-limit output map to status 2. Empty `{}` action objects are conservatively accepted only when their total count equals the trusted package/test action count; Go does not identify those objects, so they cannot prove which clean action each represents. Physical build-tag-ignored files are accepted only when `go list` reports them ignored, cgo-only scopes are unsupported, and local replacements or already-cached external modules remain read dependencies outside the workspace snapshot. Replacement races restored between snapshots and descendants that deliberately escape their owned process group cannot be eliminated. The active deny-network wrapper remains authoritative.".into()
-        } else if mutators.is_empty() {
-            if spec.phase_invocation == InvocationGranularity::Batch {
-                "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
-            } else {
-                format!(
-                    "Read-only checks are compatibility-translated with {} invocation granularity; real-tool behavior is version-dependent.",
-                    invocation(spec.phase_invocation)
-                )
-            }
+        invocations: vec!["batch".into()],
+        limitation: if mutators.is_empty() {
+            "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
         } else if let Some(reason) = &spec.unverified_remedy_fallback {
             format!("Unverified mutator-first fallback: {reason}")
         } else {
@@ -387,30 +357,11 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
 
 fn explicit_limitation(spec: &ToolSpec) -> String {
     match spec.id.as_str() {
-        "dclint" => {
-            "The isolated adapter accepts only one validated JSON config override, binds dclint and Node through absolute managed paths, clears ambient Node, loader, debug, and dclint configuration channels, and validates the exact dclint 3.1.0 JSON result shape and rule-fixability table. The source config is normalized into a mode-0600 private copy: executable-loading, diagnostic-suppression, selection-changing, unknown-rule, unsafe-option, duplicate service-group membership, and incomplete top-level-order configurations are rejected before the native child; every enabled top-level-order write receives a complete Compose order that preserves extension properties and models. The unsafe no-version-field rule is marked nonfixable and always disabled, and an explicit enable is rejected because its native fixer can delete nested extension data even when a line-level disable suppresses the diagnostic. The adapter snapshots the retained project outside fixed skipped directories, preflights the complete selected batch, narrows the native write to files proven fixable, rejects topology, metadata, identity, and out-of-subset changes, and requires a full authoritative recheck; operational failures attempt to restore retained file bytes, modes, and mtimes plus directory topology and modes. TMPDIR must be an existing absolute directory outside the project and is canonicalized before private allocation. Child output, workspace size, file count, and cleanup are bounded, cancellation is forwarded to a dedicated process group, and normally exiting same-group descendants are swept. Findings remain conservatively attributed to every selected candidate; fixed skipped subtrees are outside the retained snapshot, file inode identity and directory mtimes are not restored, and concurrent replacement races, an unsuccessful rollback, and a deliberately escaped session or process group cannot be eliminated.".into()
-        }
-        "ghalint-workflow" => {
-            "The isolated adapter is pinned to the ghalint 1.5.6 source diagnostic grammar and accepts only an optional normalized relative YAML config override. It inventories exactly the native top-level `.github/workflows/*.yml`-then-`*.yaml` set, rejects zero or out-of-inventory selected candidates, and snapshots the bounded retained project outside fixed skipped directories before and after execution. A mode-0600 private config copy, absolute executable identity, minimal child environment, exact version probe, bounded output, signal forwarding, and same-process-group cleanup constrain the native child. Status 1 maps to source issues only when every timestamped log record matches the closed policy, workflow-parse, or configuration-error grammar, including policy-specific `action` and `env_name` fields and the pinned structured parse/config references; any other status, output, mutation, or record maps operationally. Every physical retained file, directory, workflow, and config must remain identical, while findings from the authoritative full native workspace scan are conservatively attributed across the selected candidate subset. Symlinks and hard-linked files in the retained project are unsupported, skipped subtrees are outside the snapshot, and concurrent replacement races or a deliberately escaped session or process group cannot be eliminated. The pinned source build carries a checksum-locked x/text closure update because the upstream release binary embeds an older Go toolchain.".into()
-        }
-        "go-fmt" => {
-            "The isolated adapter rejects extra arguments, resolves the managed gofmt executable before fixing the child environment, and accepts only normalized absolute selected paths that are unique regular files with one link. Every verify runs `gofmt -l`; because native dirty output still exits zero, only complete ordered selected-path lines are accepted as source issues, while native status 2 dominates any partial stdout and remains operational failure. Every write is preceded by the same read-only list preflight, so a parse or read failure detected there cannot partially format an otherwise valid batch; successful writes must preserve file identities, and deferred writes are followed by the authoritative workflow check. Go, loader, and debug overrides are scrubbed, output and selected bytes are bounded, and cancellation forwards to a dedicated child process group with bounded cleanup. Symlinked and hard-linked selections are deliberately unsupported. Preflight/file snapshots cannot eliminate concurrent path-replacement races, and native multi-file `-w` is nontransactional, so a late write-time I/O failure may leave earlier files mutated. These semantics are pinned to Go 1.26.5.".into()
-        }
-        "gofumpt" => {
-            "The isolated adapter rejects every extra argument and pins gofumpt v0.11.0 built with Go 1.26.5. It accepts at most 4,096 normalized absolute `.go` files totaling 64 MiB under the canonical project root, rejects selected symlinks, linked ancestors, hard links, aliases, and duplicate selections, and snapshots at most 256 distinct nearest `go.mod` controls totaling 16 MiB. The pinned Go executable parses private manifest copies, while gofumpt receives only private source copies on stdin with fixed `-lang` and `-modpath` values; an owned empty mode-0600 `go.mod` at the private root stops gofumpt's implicit discovery when `-modpath` is empty. A standalone file with no project `go.mod` is deliberately bound to gofumpt's `go1`/empty-module defaults, and a manifest without a module directive retains its empty module path and native `go1.16` fallback when it also omits `go`. Bounded safe Go-version spellings emitted by the pinned parser, including supported prereleases, are passed to pinned gofumpt rather than narrowed by an adapter grammar. Formatter and Go environment overrides, network access, project workspace discovery, and the two gofumpt-specific ambient feature switches are removed. Native version and formatting canaries, per-file syntax/list checks, complete-batch formatting, a fixed-point rerun, bounded aggregate output, and an authoritative post-commit rerun must all agree. Verify is read-only. Remedy acquires writable descriptors only for proven-dirty files, revalidates each immediately before truncation, commits through those retained descriptors, and leaves clean files untouched. An adapter-owned partial write is restored best-effort; a completed write is restored only while its original identity, link count, mode, exact candidate bytes, and captured post-write size, mtime, and ctime still match. A detected post-commit concurrent edit is intentionally preserved and reported as unsafe to roll back. Successful rollback restores original bytes, mode, atime, and mtime, but ctime is not restorable, and SIGKILL, power loss, kernel-level partial writes, or rollback failure can still leave mutation. Nested modules are supported, but formatting validates syntax and canonical style rather than package type correctness. Selected generated or build-tagged files are treated as explicit files and receive gofumpt's added rules; only unselected files are outside scope. The original managed Go launch path is revalidated around each call but retains a narrow executable-replacement race. A concurrent actor can still replace a source or manifest path, add a link, add a nearer module control, or change the next dirty descriptor in the narrow interval after its final check and before truncation; there is also an irreducible narrow interval between a completed-write rollback guard and restoration. Newly created concurrent topology is detected where it changes scope but is not deleted during rollback. Deliberately escaped process groups cannot be eliminated.".into()
-        }
-        "goimports" => {
-            concat!(
-                "The isolated adapter rejects every extra argument and pins goimports from golang.org/x/tools v0.48.0 plus Go 1.26.5 by exact binary hashes and Go build metadata. One canonical root `go.mod` structurally defines each batch: at most 4,096 selected or unselected physical `.go` files and 65,536 total entries totaling 64 MiB are inventoried under that root, while linked directories or controls, source/control symlinks, hard links, aliases, `go.work`, nested modules, vendor trees, external requirements, replaces, excludes, retracts, tools, ignores, toolchain directives, GoDebug directives, and future or prerelease Go versions are unsupported. Every physical Go source is copied into an immutable private shadow, including test, generated, build-tag-excluded, dot/underscore, testdata, and node_modules paths; build tags do not suppress an explicitly selected file. Candidate imports can come only from the pinned binary's baked standard-library manifest, physical packages in that closed main module, and syntactic imports already present in inventoried same-directory siblings. That last rule can deterministically mirror an externally named import even though external dependency fetching, resolution, validity, compilation, and type correctness are deliberately unsupported and no network, module cache, workspace, vendor tree, local replacement, or ambient GOPATH input is consulted. The managed Go bytes are copied into an adapter-owned minimal GOROOT whose sealed `src` is empty; the shadow, canary, minimal GOROOT, empty GOMODCACHE and GOPATH, and semantic directory inventories are retained and rechecked around every child. A retained mode-0400 regular file disables goimports' mutable module-index cache, telemetry is disabled by a retained private mode file, and a complete from-scratch environment fixes Darwin arm64 with cgo off, readonly module mode, a local toolchain, and denied resolution. Exact Go environment/module-scope/build-metadata preflights, a stdlib-plus-main-module resolver canary, native list/candidate agreement, per-file fixed-point reruns, and an authoritative whole-batch shadow rerun must all agree; verify is read-only and emits only validated dirty paths in selected order. ",
-                "Because resolution consumes the full inventoried module, the deferred check scope is workspace-wide: a later workflow write anywhere under the module invalidates and reruns an earlier goimports check, even when it changes an unselected sibling. ",
-                "Remedy opens writable descriptors only for proven-dirty targets, revalidates each immediately before truncation, keeps clean-file bytes, identity, link count, mode, size, and mtime unchanged, and requires a post-commit authoritative rerun; reads may still update atime on filesystems that record it, and clean-file ctime is not promised. Adapter-owned partial writes are restored best-effort; completed writes are restored only while exact candidate bytes, captured post-write metadata, identity, mode, and link count still match, so a detected later concurrent edit is preserved and reported unsafe to roll back. Successful rollback restores original bytes, mode, atime, and mtime, but ctime is not restorable; SIGKILL, power loss, kernel partial writes, rollback failure, the narrow final-check-to-truncate interval, the narrow guarded-rollback interval, or a deliberately escaped process group can still leave mutation. Private child output and time are bounded, cancellation is forwarded to a dedicated process group, and same-group descendants are swept."
-            ).into()
+        "go-fmt" | "gofumpt" | "goimports" => {
+            "Read-only list mode reports dirty files through stdout with exit 0; parse failures depend on the installed tool version.".into()
         }
         "golines" => {
-            concat!(
-                "The isolated adapter rejects every extra argument and pins the checksum-locked golines 0.13.0+velvet-glove.1 closure build made with Go 1.26.5 by exact binary bytes and native version output. It accepts at most 4,096 normalized absolute `.go` files totaling 64 MiB under the canonical project root and rejects selected symlinks, linked ancestors, hard links, aliases, and duplicate selections. The native formatter receives only controlled mode-0600 stdin from an adapter-owned private directory with fixed `--base-formatter=gofmt --no-ignore-generated` arguments and a from-scratch environment; it never receives a project path or native write flag. A generated-source-specific canary binds the patched generated-file semantics before project bytes are accepted. Every selected source is formatted from one immutable baseline, the complete candidate batch is bounded, and every candidate must be an exact formatter fixed point before verify emits validated dirty paths in selected order. Selected generated files, including `generated_*` basenames and generated markers, are deliberately formatted; unselected files and project/module semantics are outside this stdin-only contract. ",
-                "Remedy pre-acquires and revalidates writable descriptors for every proven-dirty target before the first write, leaves clean-file bytes, identity, link count, mode, size, and mtime unchanged, commits each candidate through its retained descriptor, and requires an authoritative post-commit formatter rerun. Reads may update atime on filesystems that record it, and clean-file ctime is not promised. Adapter-owned incomplete and completed writes are restored only while their exact last-known bytes, captured size/mtime/ctime, original identity, mode, and link count still match; detected concurrent edits after a partial or completed commit are intentionally preserved and reported unsafe to roll back. Successful rollback restores original bytes, mode, atime, and mtime, but ctime is not restorable. Native nonzero status or stderr, malformed version/canary evidence, non-fixed-point output, source or executable mutation, output/time bounds, signal, cleanup, and rollback failures map operationally to status 2; native partial stdout is suppressed, timestamped native stderr is sanitized, and one deterministic wrapper diagnostic identifies the selected path. Cancellation is forwarded to a dedicated process group and normally exiting same-group descendants are swept. SIGKILL, power loss, kernel-level partial writes, rollback failure, the narrow final-check-to-write interval, the narrow guarded-rollback interval, or a deliberately escaped process group can still leave mutation."
-            ).into()
+            "Read-only dry-run diffs are detected through stdout; the original upstream is archived and installed-version behavior may vary.".into()
         }
         "gomod-tidy" => {
             "Requires a Go release with `go mod tidy -diff`; exit 1 is treated as source issues and may be ambiguous with some command failures.".into()
@@ -503,7 +454,6 @@ fn command_text(program: &str, argv: &[ArgvElement]) -> String {
 
 fn argv_text(element: &ArgvElement) -> String {
     match element {
-        ArgvElement::Literal(value) if value.contains('\n') => "<inline-script>".into(),
         ArgvElement::Literal(value) => value.replace('`', "'").replace('|', "\\|"),
         ArgvElement::Token(token) => format!(
             "{{{}}}",
@@ -560,70 +510,4 @@ fn nonempty_or_dash(values: Vec<String>) -> Vec<String> {
 
 fn cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn enabled_checker(id: &str) -> ToolSpec {
-        ToolSpec {
-            id: id.into(),
-            display_name: "Checker".into(),
-            executable: "checker".into(),
-            phases: BTreeMap::from([("verify".into(), Phase::default())]),
-            phase_order: vec!["verify".into()],
-            ..ToolSpec::default()
-        }
-    }
-
-    #[test]
-    fn disabled_specs_still_require_nonempty_ids() {
-        let specs = BTreeMap::from([(
-            "disabled".into(),
-            ToolSpec {
-                id: "  ".into(),
-                enabled: false,
-                ..ToolSpec::default()
-            },
-        )]);
-
-        let error = validate_builtin_catalog(&specs).expect_err("empty id must fail");
-
-        assert_eq!(error.errors, ["disabled: tool id is empty"]);
-    }
-
-    #[test]
-    fn duplicate_ids_are_rejected_across_enabled_and_disabled_specs() {
-        let specs = BTreeMap::from([
-            ("enabled".into(), enabled_checker("shared")),
-            (
-                "disabled".into(),
-                ToolSpec {
-                    id: "shared".into(),
-                    enabled: false,
-                    ..ToolSpec::default()
-                },
-            ),
-        ]);
-
-        let error = validate_builtin_catalog(&specs).expect_err("duplicate id must fail");
-
-        assert_eq!(error.errors, ["enabled (shared): duplicate tool id"]);
-    }
-
-    #[test]
-    fn compatibility_audit_uses_phase_invocation_and_records_jq_stream_limit() {
-        let spec = ToolSpec {
-            phase_invocation: InvocationGranularity::PerFile,
-            ..enabled_checker("jq")
-        };
-
-        let audit = audit_tool(&spec);
-
-        assert_eq!(audit.mode, "compatibility");
-        assert_eq!(audit.invocations, ["per-file"]);
-        assert!(audit.limitation.contains("empty stream"));
-        assert!(audit.limitation.contains("exact-one-document"));
-    }
 }

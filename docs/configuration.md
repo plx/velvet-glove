@@ -35,10 +35,7 @@ run = new Listing<String> { "ruff"; "prettier" }
 
 `phases` drive `post-tool-immediate`. Explicit `workflows` drive deferred
 `turn-completion`; compatible legacy phase sets are translated only when the
-catalog validator can prove a read-only final check. `phaseInvocation` controls
-how matching files are divided for the immediate phase pipeline and for those
-phase-derived compatibility workflows: `batch` (the default), `per-file`, or
-`workspace`. Explicit workflows continue to use their own `invocation` field.
+catalog validator can prove a read-only final check.
 
 ## Discovery and merge order
 
@@ -85,12 +82,7 @@ Ruff, Prettier, ESLint, Biome, Cargo fmt, and Cargo Clippy. Each enabled entry
 either has explicit deferred workflows or a validated compatibility
 translation. The generated [built-in workflow audit](builtin-deferred-workflow-audit.md)
 is the authoritative inventory of commands, scopes, invocation granularity,
-and known limitations. The separate
-[built-in validation contract](builtin-validation-contract.md) defines the
-minimum evidence required for each capability, and its generated
-[coverage report](builtin-validation-coverage.md) records schema,
-rendered-command, and pinned-real-tool claims without treating missing
-coverage as a successful skip.
+and known limitations.
 
 ## Deferred reports
 

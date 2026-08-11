@@ -1,2 +1,0 @@
-const first={alpha:1,beta:2}
-console.log(first)

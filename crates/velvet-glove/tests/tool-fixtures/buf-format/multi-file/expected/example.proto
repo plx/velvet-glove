@@ -1,5 +1,0 @@
-syntax = "proto3";
-package fixture.multi.v1;
-message Selected {
-  string name = 1;
-}

@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "vacuum reports issues; inspect diagnostics at <workspace>/.velvet-glove/vacuum-agent-hook/test-session_vacuum-tool_vacuum-tool-issues.txt."
-  }
-}

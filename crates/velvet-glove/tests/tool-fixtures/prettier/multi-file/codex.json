@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "Prettier changed example.js; re-read changed files before editing further."
-  }
-}

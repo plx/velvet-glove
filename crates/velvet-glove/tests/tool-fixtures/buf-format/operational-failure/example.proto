@@ -1,7 +1,0 @@
-syntax = "proto3";
-
-package fixture.failure.v1;
-
-message Example {
-  string name = 1;
-}

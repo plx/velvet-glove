@@ -1,3 +1,0 @@
-= Missing include batch member
-
-include::does-not-exist.adoc[]

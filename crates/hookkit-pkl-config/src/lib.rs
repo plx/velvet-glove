@@ -20,7 +20,6 @@ pub mod error;
 pub mod eval;
 pub mod merge;
 pub mod schema;
-pub mod validation;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,16 +38,6 @@ pub use schema::{
     InvocationGranularity, LoweringPolicy, Merge, MergeResetKey, Messages, MissingToolPolicy,
     Phase, PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch, TemplatePair,
     TemplatePairPatch, ToolSpec, UnexpectedExitPolicy, Workflow, WorkflowCommand, WriteBehavior,
-};
-pub use validation::{
-    Architecture, Capability, CommandRole, CommandSignature, CommandTarget, CommandTargetKind,
-    Constraints, ContractCase, CoverageSummary, DeferredSurface, Dependencies, EvidenceRecord,
-    EvidenceStatus, EvidenceSurface, EvidenceTier, ImmediateSurface, LayerState, LayerTotals,
-    ManifestValidationError, NetworkPolicy, Platform, Provenance, SupportState, SurfaceContract,
-    SurfaceContracts, Surfaces, TargetCoverage, ToolCoverage, ToolValidation, UpstreamProvenance,
-    VALIDATION_MANIFEST_JSON, ValidationException, ValidationManifest, WorkingDirectory,
-    builtin_validation_manifest, current_utc_date, derived_capabilities, derived_surface_contracts,
-    minimum_required_cases, render_coverage_markdown, validate_manifest,
 };
 
 /// Result of loading the config chain.

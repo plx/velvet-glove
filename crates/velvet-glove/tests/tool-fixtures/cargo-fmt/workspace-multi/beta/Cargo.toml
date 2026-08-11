@@ -1,7 +1,0 @@
-[package]
-name = "cargo-fmt-beta"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-path = "src/workspace_only.rs"

@@ -1,1 +1,0 @@
-{"hookSpecificOutput":{"additionalContext":"go vet reports likely mistakes; inspect diagnostics at <workspace>/.velvet-glove/go-vet-agent-hook/test-session_test-turn_go-vet-tool_go-vet-tool-issues.txt.","hookEventName":"PostToolUse"}}

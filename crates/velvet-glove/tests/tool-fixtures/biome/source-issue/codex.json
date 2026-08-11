@@ -1,6 +1,0 @@
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "Biome reports issues; inspect diagnostics at <workspace>/.velvet-glove/biome-agent-hook/test-session_test-turn_biome-tool_biome-tool-issues.txt."
-  }
-}

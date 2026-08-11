@@ -1,2 +1,0 @@
-cargo fmt: changed src/example.rs
-hookkit: redirected user notices and diagnostics to protocol stderr

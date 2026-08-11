@@ -1,3 +1,0 @@
-= Clean batch member
-
-This AsciiDoc document is valid.
