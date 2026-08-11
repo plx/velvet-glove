@@ -1,0 +1,35 @@
+warning: cargo clippy: issues remain; diagnostics: <workspace>/.velvet-glove/cargo-clippy-agent-hook/test-session_cargo-clippy-tool_cargo-clippy-tool-issues.txt
+cargo clippy diagnostics:
+[fix] command: cargo clippy --manifest-path <workspace>/Cargo.toml --workspace --all-targets --fix --allow-dirty --allow-staged --allow-no-vcs --quiet
+status: Some(0)
+classification: Some(Clean)
+stderr:
+warning: `todo` should not be present in production code
+ --> member/tests/persistent.rs:4:5
+  |
+4 |     todo!();
+  |     ^^^^^^^
+  |
+note: the lint level is defined here
+ --> member/tests/persistent.rs:1:8
+  |
+1 | #[warn(clippy::todo)]
+  |        ^^^^^^^^^^^^
+
+
+[verify] command: cargo clippy --manifest-path <workspace>/Cargo.toml --workspace --all-targets --quiet -- -D warnings
+status: Some(101)
+classification: Some(Issues)
+stderr:
+error: `todo` should not be present in production code
+ --> member/tests/persistent.rs:4:5
+  |
+4 |     todo!();
+  |     ^^^^^^^
+  |
+  = note: `-D clippy::todo` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::todo)]`
+
+error: could not compile `member` (test "persistent") due to 1 previous error
+artifact: <workspace>/.velvet-glove/cargo-clippy-agent-hook/test-session_cargo-clippy-tool_cargo-clippy-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

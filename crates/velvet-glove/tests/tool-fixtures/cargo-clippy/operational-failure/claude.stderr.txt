@@ -1,0 +1,16 @@
+error: cargo clippy: phase `fix` failed; diagnostics: <workspace>/.velvet-glove/cargo-clippy-agent-hook/test-session_cargo-clippy-tool_cargo-clippy-tool-failure.txt
+cargo clippy failure diagnostics:
+== phase fix failed (exit Some(101)) ==
+[fix] command: cargo clippy --manifest-path <workspace>/Cargo.toml --workspace --all-targets --fix --allow-dirty --allow-staged --allow-no-vcs --quiet
+status: Some(101)
+classification: Some(Failure)
+stderr:
+error: error reading Clippy's configuration file: invalid type: string "not-an-integer", expected u64
+ --> <workspace>/clippy.toml:1:32
+  |
+1 | too-many-arguments-threshold = "not-an-integer"
+  |                                ^^^^^^^^^^^^^^^^
+
+error: could not compile `fixture` (bin "fixture") due to 1 previous error
+artifact: <workspace>/.velvet-glove/cargo-clippy-agent-hook/test-session_cargo-clippy-tool_cargo-clippy-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

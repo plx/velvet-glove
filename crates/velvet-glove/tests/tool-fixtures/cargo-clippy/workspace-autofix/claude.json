@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"cargo clippy changed member/src/lib.rs; re-read changed files before editing further."}}

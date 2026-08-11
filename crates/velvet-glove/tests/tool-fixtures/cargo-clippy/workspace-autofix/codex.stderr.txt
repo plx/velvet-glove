@@ -1,0 +1,2 @@
+cargo clippy: changed member/src/lib.rs
+hookkit: redirected user notices and diagnostics to protocol stderr
