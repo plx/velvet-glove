@@ -1,0 +1,12 @@
+# CI-only tool installation. Prefixes float to the latest patch on each run.
+# Pkl is the runner's required configuration runtime, not a floating test tool.
+[tools]
+pkl = "0.31.1"
+rust = { version = "prefix:1.97", profile = "minimal", components = ["rustfmt", "clippy"] }
+go = "prefix:1.26"
+actionlint = "prefix:1.7"
+jq = "prefix:1.8"
+
+[env]
+VELVET_GLOVE_FIXTURE_TOOLS = "cargo-fmt,cargo-clippy,actionlint,jq,go-fmt"
+VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS = "all"

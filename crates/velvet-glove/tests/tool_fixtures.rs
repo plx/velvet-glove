@@ -28,6 +28,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const TIMEOUT_ENV: &str = "VELVET_GLOVE_FIXTURE_TIMEOUT_SECS";
 const ARTIFACT_ENV: &str = "VELVET_GLOVE_FIXTURE_ARTIFACT_DIR";
 const REQUIRED_TOOLS_ENV: &str = "VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS";
+const SELECTED_TOOLS_ENV: &str = "VELVET_GLOVE_FIXTURE_TOOLS";
 const REPORT_PREFIX: &str = "VELVET_GLOVE_FIXTURE_JSON=";
 const PROBE_SENTINEL_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_SENTINEL";
 const PROBE_DIR_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_DIR";
@@ -212,6 +213,7 @@ fn setup_failures_are_retained_when_requested() {
         timeout: Duration::from_secs(1),
         artifact_dir: Some(artifact_root.clone()),
         required_tools: RequiredTools::default(),
+        selected_tools: None,
     };
 
     let outcome = run_fixture_case(&case, ProtocolSurface::Claude, &options);
@@ -258,6 +260,66 @@ fn required_tools_reject_unknown_fixture_ids() {
         .expect_err("unknown required tools must fail closed");
     assert!(error.contains("typo-tool"));
     assert!(error.contains(REQUIRED_TOOLS_ENV));
+}
+
+#[test]
+fn tool_selection_rejects_empty_and_unknown_lists() {
+    let available = BTreeSet::from(["jq".to_owned(), "go-fmt".to_owned()]);
+    assert_eq!(select_fixture_tools(None, &available).unwrap(), available);
+    assert_eq!(
+        select_fixture_tools(Some(" jq, jq "), &available).unwrap(),
+        BTreeSet::from(["jq".to_owned()])
+    );
+    for value in ["", " , ", "jq,typo", "all"] {
+        let error = select_fixture_tools(Some(value), &available).unwrap_err();
+        assert!(error.contains(SELECTED_TOOLS_ENV), "{error}");
+    }
+}
+
+#[test]
+fn selection_precedes_availability_and_required_tools_fail_closed() {
+    let mut selected = fixture_case("missing-tool");
+    selected.spec.executable = "/velvet-glove-test/nonexistent-tool".to_owned();
+    let mut excluded = fixture_case("must-not-run");
+    excluded.tool = "excluded-tool".to_owned();
+    excluded.spec.executable = "/bin/sh".to_owned();
+    let catalog = FixtureCatalog {
+        tool_count: 2,
+        cases: vec![selected, excluded],
+    };
+    let selection = BTreeSet::from(["fixture-tool".to_owned()]);
+    let mut options = HarnessOptions {
+        timeout: Duration::from_secs(1),
+        artifact_dir: None,
+        required_tools: RequiredTools {
+            all: true,
+            names: BTreeSet::new(),
+        },
+        selected_tools: None,
+    };
+    let outcomes = run_selected_fixtures(&catalog, &selection, &options);
+    assert!(
+        outcomes[..2]
+            .iter()
+            .all(|o| matches!(o.status, FixtureStatus::Fail(_)))
+    );
+    assert!(outcomes[2..].iter().all(|o| matches!(
+        &o.status, FixtureStatus::Skip(reason) if reason.code == "not-selected"
+    )));
+    let report = build_report(&catalog, &outcomes, 3);
+    assert_eq!(report["totals"]["failed"], 2);
+    assert_eq!(report["skipReasons"]["not-selected"], 2);
+
+    options.required_tools = RequiredTools::default();
+    let outcomes = run_selected_fixtures(&catalog, &selection, &options);
+    assert!(outcomes[..2].iter().all(|o| matches!(
+        &o.status, FixtureStatus::Skip(reason) if reason.code == "executable-unavailable"
+    )));
+    let required = RequiredTools {
+        all: false,
+        names: BTreeSet::from(["excluded-tool".to_owned()]),
+    };
+    assert!(required.validate(&selection).is_err());
 }
 
 #[test]
@@ -356,41 +418,17 @@ fn run_all_tool_fixtures() {
     let specs = builtin_index().unwrap_or_else(|error| panic!("{error}"));
     let catalog = discover_fixture_catalog(&fixtures_root(), &specs)
         .unwrap_or_else(|error| panic!("fixture discovery failed: {error}"));
+    let selected = select_fixture_tools(options.selected_tools.as_deref(), &catalog.tool_ids())
+        .unwrap_or_else(|error| panic!("{error}"));
     options
         .required_tools
-        .validate(&catalog.tool_ids())
+        .validate(&selected)
         .unwrap_or_else(|error| panic!("{error}"));
     let probe_commands = run_probe_matrix(options.timeout, options.artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
     assert!(probe_commands > 0, "probe executed zero external commands");
 
-    let mut availability = BTreeMap::<String, Result<(), Vec<String>>>::new();
-    let mut outcomes = Vec::with_capacity(catalog.cases.len() * REAL_TOOL_SURFACES.len());
-    for case in &catalog.cases {
-        let available = availability
-            .entry(case.tool.clone())
-            .or_insert_with(|| check_tool_programs(&case.spec));
-        for surface in REAL_TOOL_SURFACES {
-            match available {
-                Ok(()) => outcomes.push(run_fixture_case(case, *surface, &options)),
-                Err(programs) if options.required_tools.requires(&case.tool) => {
-                    outcomes.push(FixtureOutcome::failed(
-                        case,
-                        *surface,
-                        format!("required prerequisite unavailable: {}", programs.join(", ")),
-                    ));
-                }
-                Err(programs) => outcomes.push(FixtureOutcome::skipped(
-                    case,
-                    *surface,
-                    SkipReason {
-                        code: "executable-unavailable",
-                        detail: format!("programs not found on PATH: {}", programs.join(", ")),
-                    },
-                )),
-            }
-        }
-    }
+    let outcomes = run_selected_fixtures(&catalog, &selected, &options);
 
     let report = build_report(&catalog, &outcomes, probe_commands);
     print_outcomes(&outcomes);
@@ -430,11 +468,86 @@ fn run_all_tool_fixtures() {
     );
 }
 
+fn run_selected_fixtures(
+    catalog: &FixtureCatalog,
+    selected: &BTreeSet<String>,
+    options: &HarnessOptions,
+) -> Vec<FixtureOutcome> {
+    let mut availability = BTreeMap::<String, Result<(), Vec<String>>>::new();
+    let mut outcomes = Vec::with_capacity(catalog.cases.len() * REAL_TOOL_SURFACES.len());
+    for case in &catalog.cases {
+        for surface in REAL_TOOL_SURFACES {
+            if !selected.contains(&case.tool) {
+                outcomes.push(FixtureOutcome::skipped(
+                    case,
+                    *surface,
+                    SkipReason {
+                        code: "not-selected",
+                        detail: format!("outside {SELECTED_TOOLS_ENV}; not validated by this run"),
+                    },
+                ));
+                continue;
+            }
+            let available = availability
+                .entry(case.tool.clone())
+                .or_insert_with(|| check_tool_programs(&case.spec));
+            match available {
+                Ok(()) => outcomes.push(run_fixture_case(case, *surface, options)),
+                Err(programs) if options.required_tools.requires(&case.tool) => {
+                    outcomes.push(FixtureOutcome::failed(
+                        case,
+                        *surface,
+                        format!("required prerequisite unavailable: {}", programs.join(", ")),
+                    ));
+                }
+                Err(programs) => outcomes.push(FixtureOutcome::skipped(
+                    case,
+                    *surface,
+                    SkipReason {
+                        code: "executable-unavailable",
+                        detail: format!("programs not found on PATH: {}", programs.join(", ")),
+                    },
+                )),
+            }
+        }
+    }
+    outcomes
+}
+
+fn select_fixture_tools(
+    value: Option<&str>,
+    available: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, String> {
+    let Some(value) = value else {
+        return Ok(available.clone());
+    };
+    let selected = value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if selected.is_empty() {
+        return Err(format!(
+            "{SELECTED_TOOLS_ENV} must select at least one tool"
+        ));
+    }
+    let unknown = selected.difference(available).cloned().collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "{SELECTED_TOOLS_ENV} names tools without fixture cases: {}",
+            unknown.join(", ")
+        ));
+    }
+    Ok(selected)
+}
+
 #[derive(Debug)]
 struct HarnessOptions {
     timeout: Duration,
     artifact_dir: Option<PathBuf>,
     required_tools: RequiredTools,
+    selected_tools: Option<String>,
 }
 
 impl HarnessOptions {
@@ -443,6 +556,13 @@ impl HarnessOptions {
             timeout: configured_timeout()?,
             artifact_dir: configured_artifact_dir()?,
             required_tools: RequiredTools::from_environment()?,
+            selected_tools: std::env::var_os(SELECTED_TOOLS_ENV)
+                .map(|value| {
+                    value
+                        .into_string()
+                        .map_err(|_| format!("{SELECTED_TOOLS_ENV} must be UTF-8"))
+                })
+                .transpose()?,
         })
     }
 }
@@ -495,7 +615,7 @@ impl RequiredTools {
             Ok(())
         } else {
             Err(format!(
-                "{REQUIRED_TOOLS_ENV} names tools without fixture cases: {}",
+                "{REQUIRED_TOOLS_ENV} names tools without selected fixture cases: {}",
                 unknown.join(", ")
             ))
         }
