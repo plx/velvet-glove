@@ -47,7 +47,8 @@ jobs:
           cache: false
       - uses: Swatinem/rust-cache@v2
       - name: Run real-tool fixtures
-        run: bash scripts/run-real-tool-fixtures.sh
+        # Resolve tool paths explicitly before Cargo/fixtures change directories.
+        run: mise -C .github/real-tools exec -- bash ../../scripts/run-real-tool-fixtures.sh
       - name: Summarize results
         if: always()
         run: python3 .github/real-tools/summary.py "$VELVET_GLOVE_FIXTURE_ARTIFACT_DIR" >> "$GITHUB_STEP_SUMMARY"
