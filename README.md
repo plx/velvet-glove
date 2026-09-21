@@ -140,6 +140,11 @@ cargo test --locked --workspace --all-targets
 cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
 
+The weekly/manual [real-tool CI lane](.github/workflows/real-tool-fixtures.yml)
+tests the five v2 reference tools on Ubuntu and macOS. See the
+[fixture README](crates/velvet-glove/tests/tool-fixtures/README.md#scheduled-real-tool-ci)
+for its scope, local reproduction, reports, and how to add tools.
+
 Run `scripts/regen-licenses.sh` after dependency changes. The generated
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) is checked in alongside
 the dual [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE) licenses.

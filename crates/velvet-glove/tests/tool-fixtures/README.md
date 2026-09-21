@@ -97,6 +97,16 @@ tool ids are configuration errors rather than silent no-ops.
 Those skips describe only the ignored host-tool compatibility lane; a skip
 here never counts as validation evidence for a tool.
 
+Set `VELVET_GLOVE_FIXTURE_TOOLS` to a comma-separated list of fixture tool IDs
+to run a subset. Unset it to retain the full host-tool matrix. Empty lists,
+unknown IDs, and IDs without fixtures fail. Selection happens after complete
+inventory validation and before executable discovery: other installed tools
+are reported as `not-selected` and never executed. Explicit required IDs must
+belong to the selection; `VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS=all` requires
+every selected tool. Report totals still cover the complete fixture inventory,
+including `not-selected` surface cases; they are not a coverage claim for the
+entire enabled catalog.
+
 Every subprocess is bounded to 60 seconds. Override that positive whole-second
 limit with `VELVET_GLOVE_FIXTURE_TIMEOUT_SECS`.
 
@@ -108,3 +118,52 @@ status, and outcome JSON, set `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to a writable
 directory. Probe and fixture-setup failures are retained there too. A complete
 run report is written there as well; successful case workspaces are still
 removed.
+
+## Scheduled real-tool CI
+
+The `Real-tool fixtures` workflow runs weekly on Mondays at 07:23 UTC and can
+be run manually from GitHub Actions. PRs changing the lane's workflow,
+installation/reporting configuration, run script, or harness also run it so
+infrastructure changes can be verified before merge. Other PRs retain the
+ordinary hermetic lane.
+
+The initial Ubuntu/macOS selection is `cargo-fmt`, `cargo-clippy`, `actionlint`,
+`jq`, and `go-fmt`. All five are required; there are no platform exceptions in
+this initial selection. Other fixture tools have the explicit `not-selected`
+reason while v2 validation rolls out. The twelve enabled tools without fixture
+directories are also outside this lane's coverage. This lane currently proves
+immediate behavior on Claude and Codex, not deferred real-tool execution or
+repeated-run idempotence. Antigravity is covered by the hermetic protocol probe.
+
+CI-only installation and selection live in
+[`.github/real-tools/mise.toml`](../../../../.github/real-tools/mise.toml).
+Tool versions float within the configured major/minor series; Pkl stays at the
+runner's required 0.31.1. No mise lockfile is used and CI does not cache tool
+installations, so each run resolves patches afresh. Rust build dependencies are
+cached separately. These choices do not affect users' tool installations.
+
+To reproduce the selected lane locally with [mise](https://mise.jdx.dev/):
+
+```sh
+mise trust .github/real-tools/mise.toml
+mise -C .github/real-tools install
+mise -C .github/real-tools exec -- bash ../../scripts/run-real-tool-fixtures.sh
+```
+
+The script prints its artifact directory in the harness output; set
+`VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to an absolute directory to choose it.
+Use a fresh directory for each run. CI retains versions, full logs, JSON
+results, and failure workspaces (including hidden generated policy and
+diagnostics) for 14 days. Its job summary separates selected results from tools
+outside the selection. Missing required tools and fixture failures fail the
+job; setup/build/probe failures remain failures even without a complete report.
+
+To add a tool, validate its contract following
+[`docs/validation-architecture.md`](../../../../docs/validation-architecture.md),
+then add its normal installation/version series and fixture ID to the mise
+configuration, and its version command to `scripts/run-real-tool-fixtures.sh`.
+Verify both hosted platforms. If normal installation is unavailable on a
+platform, document the skip reason in the workflow and summary rather than
+adding bespoke provisioning. Update the initial coverage list above as it grows.
+When a patch release breaks a fixture, investigate the spec or volatile golden
+output and record any version-specific limitation; do not tighten binary pins.
