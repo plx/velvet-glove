@@ -4,11 +4,8 @@ import "Builtins.pkl"
 tools {
   ["fix-smart-quotes"] = (Builtins.fixSmartQuotes) {
     phases {
-      ["fix"] {
-        // Exercise hk's usage-error exit (2) through supported extra args.
-        extraArgs = new Listing<String> { "--nonexistent-flag" }
-      }
       ["verify"] {
+        // Exercise hk's usage-error exit (2) through supported extra args.
         extraArgs = new Listing<String> { "--nonexistent-flag" }
       }
     }

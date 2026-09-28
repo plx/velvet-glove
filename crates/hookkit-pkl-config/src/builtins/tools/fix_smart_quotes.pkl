@@ -1,12 +1,13 @@
-/// fix-smart-quotes — replace typographic quotes with plain ASCII quotes.
+/// fix-smart-quotes — flag typographic quotes that should be plain ASCII.
 ///
-/// Backed by hk's (jdx/hk) `hk util fix-smart-quotes`, covering
-/// U+2018/U+2019/U+201C/U+201D. Note hk's default direction here is the
-/// opposite of its other util commands: with no flag it *fixes* in place;
-/// `--check` is the non-mutating, issue-reporting mode. A missing path with
-/// `--check` exits 1, the same code as a real issue, so an I/O error cannot
-/// be told apart from found smart quotes; a malformed invocation (bad flag)
-/// exits 2 and is classified as a failure.
+/// Backed by hk's (jdx/hk) `hk util fix-smart-quotes --check`, covering
+/// U+2018/U+2019/U+201C/U+201D. Deliberately check-only: hk's fixing mode
+/// (the command with no flag) truncates any non-UTF-8 file, binary or
+/// legacy-encoded text, to zero bytes and exits 0, as the `non-utf8`
+/// fixture demonstrates. `--check` reports such files clean and never
+/// mutates. A missing path with `--check` exits 1, the same code as a real
+/// issue, so an I/O error cannot be told apart from found smart quotes; a
+/// malformed invocation (bad flag) exits 2 and is classified as a failure.
 
 module velvet_glove.builtins.tools.FixSmartQuotes
 
@@ -23,19 +24,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   }
 
   phases = new Mapping<String, Config.Phase> {
-    ["fix"] = new Config.Phase {
-      mode = "fix"
-      argv = new Listing<String | Config.ArgToken> {
-        "util"
-        "fix-smart-quotes"
-        new Config.ExtraArgs {}
-        new Config.Files {}
-      }
-      exitCodes = new Config.ExitCodes {
-        clean = new Listing<Int> { 0 }
-      }
-      writes = "target-files"
-    }
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
@@ -52,9 +40,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
     }
   }
-  phaseOrder = new Listing<String> { "fix"; "verify" }
+  phaseOrder = new Listing<String> { "verify" }
 
   detect = new Config.Detect {
-    note = "opt-in only: rewrites quote characters in every edited file"
+    note = "opt-in only: flags smart quotes in every edited file"
   }
 }
