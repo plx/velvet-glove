@@ -1,0 +1,13 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["check-symlinks"] = (Builtins.checkSymlinks) {
+    phases {
+      ["verify"] {
+        // Exercise hk's usage-error exit (2) through supported extra args.
+        extraArgs = new Listing<String> { "--nonexistent-flag" }
+      }
+    }
+  }
+}
