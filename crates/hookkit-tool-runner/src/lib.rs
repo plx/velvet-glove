@@ -1005,7 +1005,10 @@ fn run_turn_completion_view(
             );
         }
     };
-    let mut execution = execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast);
+    let mut execution = {
+        let _project = lock_project(&project_root);
+        execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast)
+    };
     let tools = write_deferred_artifacts(
         &mut |relative, contents| run.write_text(relative, contents).map_err(state_error),
         &plan,
@@ -1209,7 +1212,7 @@ impl DeferredCommit<'_, '_> {
             result,
         })?;
         let run_id = summary.run.id.clone();
-        let runs_directory = run.directory().parent().map(Path::to_path_buf);
+        let current_run = run.directory().to_path_buf();
         run.commit(&summary).map_err(state_error)?;
         if let Some(missing) = hard_failure {
             return Err(invalid_data(format!(
@@ -1219,8 +1222,8 @@ impl DeferredCommit<'_, '_> {
         let output = lowering.finish()?;
         apply_deferred_state_disposition(self.session.activity_store, disposition, run_id)?;
         decision.next.save(&guard_path);
-        if let Some(runs) = runs_directory {
-            prune_run_bundles(&runs, RETAINED_RUN_BUNDLES);
+        if let Some(runs) = current_run.parent() {
+            prune_run_bundles(runs, RETAINED_RUN_BUNDLES, &current_run);
         }
         let state_root = StateRoot::new(self.session.activity_store.state().state_root());
         let _ = SessionState::gc(&state_root, STALE_SESSION_AGE);
@@ -1267,14 +1270,17 @@ fn run_status(result: &DeferredRunResult) -> &'static str {
     }
 }
 
-/// Keep the newest `keep` run bundles (named `<millis>-...`) in `runs`.
-fn prune_run_bundles(runs: &Path, keep: usize) {
+/// Keep the newest `keep` run bundles (named `<millis>-...`) in `runs`,
+/// always including `current`: the run just committed is never removed, even
+/// if a backwards clock step gave it the oldest name.
+fn prune_run_bundles(runs: &Path, keep: usize, current: &Path) {
     let Ok(entries) = std::fs::read_dir(runs) else {
         return;
     };
     let mut bundles = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| entry.path() != current)
         .filter_map(|entry| {
             let millis = entry
                 .file_name()
@@ -1287,9 +1293,48 @@ fn prune_run_bundles(runs: &Path, keep: usize) {
         })
         .collect::<Vec<_>>();
     bundles.sort_by(|left, right| right.cmp(left));
-    for (_, stale) in bundles.into_iter().skip(keep) {
+    for (_, stale) in bundles.into_iter().skip(keep.saturating_sub(1)) {
         let _ = std::fs::remove_dir_all(stale);
     }
+}
+
+/// Advisory lock serializing the tool runs of every hook and `check`
+/// invocation on one project, so two sessions' fixers never rewrite the same
+/// files at once and neither session's before/after snapshots record the
+/// other's writes as its own. Released on drop; best effort (no lock when the
+/// lock file cannot be opened, and none off Unix).
+struct ProjectLock {
+    _file: Option<std::fs::File>,
+}
+
+fn lock_project(project_root: &Path) -> ProjectLock {
+    let directory = std::env::temp_dir()
+        .join("velvet-glove")
+        .join("project-locks");
+    let name = excerpt::fingerprint([project_root.to_string_lossy().as_bytes()]);
+    let file = std::fs::create_dir_all(&directory).ok().and_then(|()| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join(format!("{name}.lock")))
+            .ok()
+    });
+    #[cfg(unix)]
+    if let Some(file) = &file {
+        use std::os::unix::io::AsRawFd;
+        loop {
+            // SAFETY: `flock` has no memory-safety preconditions; the
+            // descriptor stays open for the lifetime of the guard.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0
+                || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+            {
+                break;
+            }
+        }
+    }
+    ProjectLock { _file: file }
 }
 
 #[derive(Debug)]
@@ -2024,6 +2069,7 @@ fn run_post_tool_input(
 
     let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.clone();
 
+    let _project = lock_project(&project_root);
     for schema_spec in tools {
         if !schema_spec.enabled {
             continue;
@@ -4508,6 +4554,32 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn project_lock_serializes_runs_on_the_same_project_only() {
+        let project = unique_test_directory("project-lock");
+        let first = lock_project(&project);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let contender = project.clone();
+        let handle = std::thread::spawn(move || {
+            let _second = lock_project(&contender);
+            sender.send(()).unwrap();
+        });
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a second run on the same project must wait"
+        );
+        drop(first);
+        receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second run proceeds once the first finishes");
+        handle.join().unwrap();
+
+        let _held = lock_project(&project);
+        let _other = lock_project(&project.join("other"));
+        let _ = std::fs::remove_dir_all(project);
+    }
+
     #[test]
     fn run_bundle_pruning_keeps_the_newest_bundles() {
         let runs = unique_test_directory("prune-runs");
@@ -4519,7 +4591,7 @@ mod tests {
         ] {
             std::fs::create_dir_all(runs.join(name)).unwrap();
         }
-        prune_run_bundles(&runs, 2);
+        prune_run_bundles(&runs, 2, &runs.join("3000-1-0-turn-completion"));
         let mut remaining = std::fs::read_dir(&runs)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -4530,6 +4602,24 @@ mod tests {
             vec![
                 "2000-1-0-turn-completion",
                 "3000-1-0-turn-completion",
+                "not-a-run"
+            ]
+        );
+
+        // A run committed after a backwards clock step has the oldest name
+        // but is never the one removed.
+        std::fs::create_dir_all(runs.join("500-1-0-turn-completion")).unwrap();
+        prune_run_bundles(&runs, 2, &runs.join("500-1-0-turn-completion"));
+        let mut remaining = std::fs::read_dir(&runs)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                "3000-1-0-turn-completion",
+                "500-1-0-turn-completion",
                 "not-a-run"
             ]
         );

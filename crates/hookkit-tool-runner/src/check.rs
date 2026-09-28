@@ -134,7 +134,10 @@ pub fn run_check(request: CheckRequest<'_>) -> Result<CheckReport, CheckError> {
         .map_err(|error| configuration(&error))?;
 
     let log_directory = new_log_directory(request.log_root)?;
-    let mut execution = execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast);
+    let mut execution = {
+        let _project = crate::lock_project(&project_root);
+        execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast)
+    };
     let tool_summaries = write_deferred_artifacts(
         &mut |relative, contents| {
             let path = log_directory.join(relative);
@@ -197,6 +200,6 @@ fn new_log_directory(root: &Path) -> Result<PathBuf, CheckError> {
             directory.display()
         ))
     })?;
-    crate::prune_run_bundles(root, RETAINED_CHECK_RUNS);
+    crate::prune_run_bundles(root, RETAINED_CHECK_RUNS, &directory);
     Ok(directory)
 }
