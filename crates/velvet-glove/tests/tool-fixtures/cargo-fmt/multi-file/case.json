@@ -1,1 +1,1 @@
-{"outcome": "auto-fixed"}
+{"outcome": "auto-fixed", "files": {"example.rs": "clean", "alpha/src/lib.rs": "auto-fixed", "beta/src/lib.rs": "auto-fixed"}}

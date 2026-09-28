@@ -145,9 +145,11 @@ impl fmt::Display for Outcome {
 /// A case's `case.json`: what a correct spec does with its cited files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CaseSpec {
-    /// Aggregate (worst) outcome across the cited files.
+    /// Aggregate (worst) outcome across the cited files and every non-cited
+    /// file the run reports changed or blamed.
     outcome: Outcome,
-    /// Exact per-file outcomes for mixed multi-file cases.
+    /// Exact per-file outcomes: cited files, or non-cited files the run is
+    /// expected to change or blame.
     files: BTreeMap<String, Outcome>,
     immediate: bool,
     deferred: bool,
@@ -165,7 +167,9 @@ impl CaseSpec {
         }
     }
 
-    fn parse(text: &str, cited: &[String]) -> Result<Self, String> {
+    /// Parses `case.json` against the case's input files (case-relative
+    /// paths) and returns the cited files with the expectation.
+    fn parse(text: &str, inputs: &[String]) -> Result<(Vec<String>, Self), String> {
         let value: JsonValue =
             serde_json::from_str(text).map_err(|error| format!("{CASE_SPEC}: {error}"))?;
         let object = value
@@ -174,7 +178,7 @@ impl CaseSpec {
         if let Some(key) = object.keys().find(|key| {
             !matches!(
                 key.as_str(),
-                "outcome" | "files" | "immediate" | "deferred" | "note"
+                "outcome" | "cite" | "files" | "immediate" | "deferred" | "note"
             )
         }) {
             return Err(format!("{CASE_SPEC}: unknown key {key:?}"));
@@ -184,16 +188,19 @@ impl CaseSpec {
             .and_then(JsonValue::as_str)
             .ok_or_else(|| format!("{CASE_SPEC}: missing string `outcome`"))
             .and_then(|value| Outcome::parse(value).map_err(|e| format!("{CASE_SPEC}: {e}")))?;
+        let cited = match object.get("cite") {
+            None => default_cited(inputs)?,
+            Some(cite) => parse_cite(cite, inputs)?,
+        };
         let mut spec = Self::new(outcome);
         if let Some(files) = object.get("files") {
             let files = files
                 .as_object()
-                .ok_or_else(|| format!("{CASE_SPEC}: `files` must map cited files to outcomes"))?;
+                .ok_or_else(|| format!("{CASE_SPEC}: `files` must map case files to outcomes"))?;
             for (file, value) in files {
-                if !cited.contains(file) {
+                if !inputs.contains(file) {
                     return Err(format!(
-                        "{CASE_SPEC}: `files` names {file:?}, which is not a cited file ({})",
-                        cited.join(", ")
+                        "{CASE_SPEC}: `files` names {file:?}, which is not an input file of the case"
                     ));
                 }
                 let file_outcome = value
@@ -208,13 +215,22 @@ impl CaseSpec {
                          require a non-operational aggregate"
                     ));
                 }
+                if file_outcome == Outcome::Clean && !cited.contains(file) {
+                    return Err(format!(
+                        "{CASE_SPEC}: `files` expects non-cited {file:?} to be clean, but a \
+                         non-cited file is reported only when changed or blamed; expect \
+                         auto-fixed or manual, or cite it"
+                    ));
+                }
                 spec.files.insert(file.clone(), file_outcome);
             }
             let worst = spec.files.values().max().copied();
-            if worst > Some(outcome) || (spec.files.len() == cited.len() && worst != Some(outcome))
-            {
+            let names_every_cited = cited.iter().all(|file| spec.files.contains_key(file));
+            if worst > Some(outcome) || (names_every_cited && worst != Some(outcome)) {
                 return Err(format!(
-                    "{CASE_SPEC}: per-file outcomes disagree with aggregate `{outcome}`"
+                    "{CASE_SPEC}: per-file outcomes disagree with aggregate `{outcome}` (when \
+                     `files` names every cited file, also name the non-cited files that set \
+                     the aggregate)"
                 ));
             }
         }
@@ -243,7 +259,7 @@ impl CaseSpec {
                 "{CASE_SPEC}: explain why a lane is skipped in `note`"
             ));
         }
-        Ok(spec)
+        Ok((cited, spec))
     }
 
     const fn runs_on(&self, lane: Lane) -> bool {
@@ -384,24 +400,57 @@ fn discovery_requires_case_specs_and_rejects_legacy_goldens() {
         std::fs::remove_file(case.join(legacy)).expect("remove legacy golden");
     }
 
+    for dir in ["member", "expected/member"] {
+        std::fs::create_dir_all(case.join(dir)).expect("nested fixture directory");
+        std::fs::write(case.join(dir).join("lib.txt"), "fixture").expect("nested file");
+    }
+    let cite = |paths: &str| {
+        let text = format!(r#"{{"outcome": "manual", "cite": [{paths}]}}"#);
+        std::fs::write(case.join(CASE_SPEC), text).expect("case spec");
+        load_case(&case)
+    };
+    let (cited, _) = cite(r#""member/lib.txt", "example.txt""#).expect("nested cite");
+    assert_eq!(cited, ["member/lib.txt", "example.txt"]);
+    for (paths, reason) in [
+        (r#""expected/member/lib.txt""#, "expected/ holds post-state"),
+        (r#""member/missing.txt""#, "not an input file"),
+        (r#""case.json""#, "not an input file"),
+    ] {
+        let error = cite(paths).expect_err("invalid cite must fail closed");
+        assert!(error.contains(reason), "{error}");
+    }
+
     let _ = std::fs::remove_dir_all(case);
 }
 
 #[test]
 fn case_specs_are_strict() {
-    let cited = ["example.a.json".to_owned(), "example.b.json".to_owned()];
-    let mixed = CaseSpec::parse(
+    let inputs = ["example.a.json", "example.b.json", "member/lib.json"].map(str::to_owned);
+    let (cited, mixed) = CaseSpec::parse(
         r#"{"outcome": "manual", "files": {"example.a.json": "clean", "example.b.json": "manual"}}"#,
-        &cited,
+        &inputs,
     )
     .expect("mixed multi-file case");
+    assert_eq!(cited, ["example.a.json", "example.b.json"]);
     assert_eq!(mixed.files["example.a.json"], Outcome::Clean);
-    let deferred_only = CaseSpec::parse(
+    let (_, deferred_only) = CaseSpec::parse(
         r#"{"outcome": "clean", "immediate": false, "note": "deferred-only behavior"}"#,
-        &cited,
+        &inputs,
     )
     .expect("explained lane skip");
     assert!(deferred_only.runs_on(Lane::Deferred) && !deferred_only.runs_on(Lane::Immediate));
+    let (cited, _) = CaseSpec::parse(
+        r#"{"outcome": "manual", "cite": ["member/lib.json"]}"#,
+        &inputs,
+    )
+    .expect("explicit nested cite");
+    assert_eq!(cited, ["member/lib.json"]);
+    let (_, workspace) = CaseSpec::parse(
+        r#"{"outcome": "auto-fixed", "files": {"example.a.json": "clean", "example.b.json": "clean", "member/lib.json": "auto-fixed"}}"#,
+        &inputs,
+    )
+    .expect("a non-cited file the tool changes sets the aggregate");
+    assert_eq!(workspace.files["member/lib.json"], Outcome::AutoFixed);
 
     for invalid in [
         "[]",
@@ -415,9 +464,17 @@ fn case_specs_are_strict() {
         r#"{"outcome": "clean", "immediate": false}"#,
         r#"{"outcome": "clean", "immediate": false, "deferred": false, "note": "x"}"#,
         r#"{"outcome": "clean", "deferred": "no", "note": "x"}"#,
+        r#"{"outcome": "clean", "cite": []}"#,
+        r#"{"outcome": "clean", "cite": "example.a.json"}"#,
+        r#"{"outcome": "clean", "cite": [1]}"#,
+        r#"{"outcome": "clean", "cite": ["example.a.json", "example.a.json"]}"#,
+        r#"{"outcome": "clean", "cite": ["/fixture/example.a.json"]}"#,
+        r#"{"outcome": "auto-fixed", "files": {"member/lib.json": "clean"}}"#,
+        r#"{"outcome": "auto-fixed", "files": {"example.a.json": "clean", "example.b.json": "clean"}}"#,
+        r#"{"outcome": "manual", "cite": ["member/lib.json"], "files": {"example.a.json": "clean"}}"#,
     ] {
         assert!(
-            CaseSpec::parse(invalid, &cited).is_err(),
+            CaseSpec::parse(invalid, &inputs).is_err(),
             "{invalid} must be rejected"
         );
     }
@@ -473,6 +530,42 @@ fn deferred_checks_assert_per_file_semantics() {
     let error = check(&auto_fixed, &allowed, &summary("clean", "clean", false)).unwrap_err();
     assert!(
         error.contains("expected auto-fixed, observed clean"),
+        "{error}"
+    );
+
+    // Non-cited files join the aggregate only when changed or blamed.
+    let workspace = |status: &str| {
+        serde_json::json!({"result": {"files": {
+            "/fixture/workspace/example.a.json": {"status": "clean"},
+            "/fixture/workspace/example.b.json": {"status": "clean"},
+            "/fixture/workspace/member/lib.json": {"status": status},
+        }}})
+    };
+    assert!(check(&clean, &allowed, &workspace("clean")).is_ok());
+    let error = check(&clean, &allowed, &workspace("auto-fixed")).unwrap_err();
+    assert!(
+        error.contains("expected clean, observed auto-fixed"),
+        "{error}"
+    );
+    assert!(check(&auto_fixed, &allowed, &workspace("auto-fixed")).is_ok());
+    let manual = CaseSpec::new(Outcome::Manual);
+    assert!(check(&manual, &blocked, &workspace("manual-fixes-needed")).is_ok());
+    let mut spread = CaseSpec::new(Outcome::AutoFixed);
+    for (file, outcome) in [
+        ("example.a.json", Outcome::Clean),
+        ("member/lib.json", Outcome::AutoFixed),
+    ] {
+        spread.files.insert(file.to_owned(), outcome);
+    }
+    assert!(check(&spread, &allowed, &workspace("auto-fixed")).is_ok());
+    let error = check(&spread, &blocked, &workspace("manual-fixes-needed")).unwrap_err();
+    assert!(
+        error.contains("member/lib.json: expected auto-fixed, observed manual"),
+        "{error}"
+    );
+    let error = check(&spread, &allowed, &summary("clean", "clean", false)).unwrap_err();
+    assert!(
+        error.contains("member/lib.json: expected auto-fixed, but summary.json does not report"),
         "{error}"
     );
 
@@ -1554,8 +1647,10 @@ fn run_hook(
 }
 
 /// Compares a deferred run's `summary.json` per-file statuses and operational
-/// problems with the case's expectation. Stop output is checked only for its
-/// coarse block decision; its wording belongs to the UX templates.
+/// problems with the case's expectation. The aggregate covers the cited files
+/// plus any non-cited file reported auto-fixed or manual-fixes-needed. Stop
+/// output is checked only for its coarse block decision; its wording belongs
+/// to the UX templates.
 fn check_deferred_run(
     expect: &CaseSpec,
     cited: &[String],
@@ -1622,10 +1717,22 @@ fn check_deferred_run(
                 continue;
             };
             worst = worst.max(Some(actual));
-            match expect.files.get(file) {
-                Some(expected) if *expected != actual => {
+        }
+        // A workspace tool may change or blame files the agent did not cite;
+        // those count toward the aggregate. Untouched clean files do not.
+        for (file, actual) in &observed {
+            if !cited.contains(file) && *actual > Outcome::Clean {
+                worst = worst.max(Some(*actual));
+            }
+        }
+        for (file, expected) in &expect.files {
+            match observed.get(file) {
+                Some(actual) if actual != expected => {
                     problems.push(format!("{file}: expected {expected}, observed {actual}"));
                 }
+                None if !cited.contains(file) => problems.push(format!(
+                    "{file}: expected {expected}, but summary.json does not report it changed or blamed"
+                )),
                 _ => {}
             }
         }
@@ -1788,12 +1895,14 @@ fn load_case(directory: &Path) -> Result<(Vec<String>, CaseSpec), String> {
             ));
         }
     }
-    let cited = cited_files(directory)?;
+    let inputs = input_files(directory)?
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
     let text = std::fs::read_to_string(directory.join(CASE_SPEC)).map_err(|error| {
         format!("read {CASE_SPEC} (every case declares its expected outcome there): {error}")
     })?;
-    let spec = CaseSpec::parse(&text, &cited)?;
-    Ok((cited, spec))
+    CaseSpec::parse(&text, &inputs)
 }
 
 fn is_legacy_golden(name: &str) -> bool {
@@ -1804,28 +1913,58 @@ fn is_legacy_golden(name: &str) -> bool {
     })
 }
 
-/// Top-level `example.*` inputs, or else the first top-level input file.
-fn cited_files(directory: &Path) -> Result<Vec<String>, String> {
-    let top_level = input_files(directory)?
-        .into_iter()
-        .filter(|path| path.components().count() == 1)
-        .map(|path| path.to_string_lossy().into_owned())
+/// Without `cite`: the top-level `example.*` inputs, or else the first
+/// top-level input file.
+fn default_cited(inputs: &[String]) -> Result<Vec<String>, String> {
+    let top_level = inputs
+        .iter()
+        .filter(|path| Path::new(path).components().count() == 1)
         .collect::<Vec<_>>();
     let examples = top_level
         .iter()
         .filter(|name| name.starts_with("example."))
-        .cloned()
+        .map(|name| (*name).clone())
         .collect::<Vec<_>>();
     if !examples.is_empty() {
         return Ok(examples);
     }
     top_level
-        .into_iter()
-        .next()
-        .map(|file| vec![file])
+        .first()
+        .map(|file| vec![(*file).clone()])
         .ok_or_else(|| {
-            format!("no input file in {directory:?}; add an `example.<ext>` at the case root")
+            "no top-level input file to cite; add an `example.<ext>` at the case root or \
+             list inputs in `cite`"
+                .to_owned()
         })
+}
+
+/// An explicit `cite`: distinct case-relative input files, never `expected/`.
+fn parse_cite(value: &JsonValue, inputs: &[String]) -> Result<Vec<String>, String> {
+    let entries = value
+        .as_array()
+        .filter(|entries| !entries.is_empty())
+        .ok_or_else(|| format!("{CASE_SPEC}: `cite` must be a non-empty list of case files"))?;
+    let mut cited = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let path = entry
+            .as_str()
+            .ok_or_else(|| format!("{CASE_SPEC}: `cite` entries must be strings"))?;
+        if Path::new(path).starts_with("expected") {
+            return Err(format!(
+                "{CASE_SPEC}: `cite` names {path:?}, but expected/ holds post-state, not inputs"
+            ));
+        }
+        if !inputs.iter().any(|input| input == path) {
+            return Err(format!(
+                "{CASE_SPEC}: `cite` names {path:?}, which is not an input file of the case"
+            ));
+        }
+        if cited.iter().any(|file| file == path) {
+            return Err(format!("{CASE_SPEC}: `cite` names {path:?} twice"));
+        }
+        cited.push(path.to_owned());
+    }
+    Ok(cited)
 }
 
 /// Case-relative paths of every fixture input: all files except

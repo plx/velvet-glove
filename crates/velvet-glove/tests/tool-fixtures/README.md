@@ -1,7 +1,8 @@
 # Tool fixture format
 
 Each fixture case runs one builtin tool against a small on-disk example and
-checks what a correct spec does with it: whether the cited files end up clean,
+checks what a correct spec does with it: whether the files the synthetic edit
+cites (and any other files the tool changes or blames) end up clean,
 auto-fixed, or needing manual fixes, or whether the tool failed operationally.
 The file contents after the run are checked too. `tool_fixtures.rs`
 auto-discovers every case.
@@ -17,7 +18,7 @@ and enforced by [`tests/guardrails.rs`](../guardrails.rs).
 ```
 tests/tool-fixtures/<tool-id>/<case-name>/
   case.json                    # required: the expected outcome (below)
-  example.<ext>                # input file(s) the synthetic tool call cites
+  example.<ext>                # input file(s) the synthetic tool call cites by default
   <supporting files>           # optional files copied as-is (configs, manifests)
   expected/<rel-path>          # optional: expected post-run content of <rel-path>
 ```
@@ -25,10 +26,13 @@ tests/tool-fixtures/<tool-id>/<case-name>/
 - `<tool-id>` is the tool's `id` in
   `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl`, for example
   `ruff` or `cargo-fmt`.
-- **Cited files.** The synthetic tool call cites every top-level `example.*`
-  file. With several examples, one Bash call writes them all, which exercises
-  invocation granularity and per-file attribution. With no `example.*`, the
-  first top-level input file is cited instead, for example `Dockerfile`.
+- **Cited files** are the files the synthetic tool call says the agent
+  edited. By default that is every top-level `example.*` file, or, with no
+  `example.*`, the first top-level input file (for example `Dockerfile`).
+  `cite` in `case.json` replaces the default with an explicit list, which may
+  name nested inputs such as `member/src/lib.rs`. With several cited files,
+  one Bash call writes them all, which exercises invocation granularity and
+  per-file attribution.
 - **Copied files.** Everything except `case.json`, a case `README.md` and
   `expected/` is copied into a temporary workspace at the same relative path.
   That includes subdirectories and a `.velvet-glove/post-tool-use.local.pkl`
@@ -44,14 +48,29 @@ tests/tool-fixtures/<tool-id>/<case-name>/
 
 | Key | Meaning |
 | --- | --- |
-| `outcome` | Required. The aggregate result for the cited files: `clean`, `auto-fixed`, `manual` or `operational`. |
-| `files` | Optional, for mixed multi-file cases. Maps a cited file to its exact outcome (`clean`, `auto-fixed` or `manual`). |
+| `outcome` | Required. The aggregate (worst) result: `clean`, `auto-fixed`, `manual` or `operational`. It covers the cited files plus any other file the run reports changed or blamed (see the deferred lane below). |
+| `cite` | Optional. The case-relative input files the synthetic tool call cites, replacing the default `example.*` citation. |
+| `files` | Optional, for mixed or workspace cases. Maps a file to its exact outcome (`clean`, `auto-fixed` or `manual`). A cited file may take any of the three. A non-cited file must be `auto-fixed` or `manual`, because it is reported only when the tool changes or blames it. |
 | `immediate`, `deferred` | Optional booleans, default `true`. Set one to `false` to skip that lane for the case; a `note` is then required. |
-| `note` | A free-text explanation. It becomes the reason shown for a skipped lane. |
+| `note` | A free-text explanation of the case. It becomes the reason shown for a skipped lane. |
 
-Discovery rejects unknown keys, per-file entries that are not cited files,
-per-file outcomes worse than the aggregate, and per-file entries in an
-`operational` case.
+For example, a workspace tool that rewrites a sibling crate while the edited
+file is already clean:
+
+```json
+{"outcome": "auto-fixed", "files": {"example.rs": "clean", "member/src/lib.rs": "auto-fixed"}}
+```
+
+Discovery rejects:
+- unknown keys;
+- a `cite` that is empty, repeats a path, or names anything other than an
+  input file (including `expected/` post-state and `case.json`);
+- `files` entries that are not input files, or that expect a non-cited file
+  to be `clean`;
+- per-file outcomes worse than the aggregate;
+- a `files` map that names every cited file but whose worst entry differs
+  from `outcome`, so name the non-cited files that set the aggregate too;
+- per-file entries in an `operational` case.
 
 ## What each lane asserts
 
@@ -64,8 +83,13 @@ files through `post-tool`, then `turn-completion` (Stop). The case gets its own
 - every hook exits 0;
 - for `operational`: at least one operational problem, and no cited file
   classified `manual-fixes-needed`;
-- otherwise: no operational problems, every cited file assessed, the worst
-  per-file status equal to `outcome`, and each `files` entry matched exactly;
+- otherwise: no operational problems, every cited file assessed, and each
+  `files` entry matched exactly. The worst status must equal `outcome`. That
+  aggregate is taken over the cited files plus every non-cited file that
+  `summary.json` reports `auto-fixed` or `manual-fixes-needed`. A workspace
+  tool that rewrites or blames another file therefore counts. An issue that
+  exists only in a file the agent did not touch is out of scope: the runtime
+  does not blame it, and it does not block;
 - Stop output is checked only for its block decision: `manual` must block
   (`decision=block`), and `clean` and `auto-fixed` must not.
 
@@ -76,6 +100,10 @@ candidates are the files the tool call cited.
 `post-tool-immediate`. They check that the hook exits 0 and that stdout has
 the right shape: `clean` must produce exactly `{}`, `auto-fixed` and `manual`
 must produce something other than `{}`, and `operational` is not checked.
+The immediate hook has no out-of-scope rule: it still reports an issue that
+exists only in an untouched file. A case that depends on that rule, such as
+`cargo-clippy/untouched-file-issue`, sets `"immediate": false` and explains
+why in its `note`.
 
 **Post-state (all lanes).** When `expected/` exists, each file in it must
 match the workspace file after the run. Without `expected/`, every input must
