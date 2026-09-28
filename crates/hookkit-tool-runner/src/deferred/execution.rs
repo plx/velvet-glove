@@ -349,7 +349,7 @@ fn record_check(
     }
 }
 
-fn command_phase_label(phase: CommandPhase) -> &'static str {
+pub(crate) fn command_phase_label(phase: CommandPhase) -> &'static str {
     match phase {
         CommandPhase::InitialCheck => "initial-check",
         CommandPhase::Recheck => "recheck",

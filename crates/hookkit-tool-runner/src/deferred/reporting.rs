@@ -1,3 +1,4 @@
+use super::execution::command_phase_label;
 use super::{DeferredRunResult, FileResult, FileStatus};
 use crate::excerpt;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -537,12 +538,18 @@ pub(crate) fn problem_entries(result: &DeferredRunResult) -> Vec<ProblemSummary>
             entry.count += 1;
             continue;
         }
-        let log_path = problem
+        // Point at the log of the command that failed (a failed remedy's,
+        // not the final check that ran after it) when it is known.
+        let artifacts = problem
             .artifact_ids
             .iter()
             .filter_map(|id| result.artifacts.get(id))
-            .map(|artifact| artifact.absolute_path.to_string_lossy().into_owned())
-            .next();
+            .collect::<Vec<_>>();
+        let log_path = artifacts
+            .iter()
+            .find(|artifact| problem.phase.as_deref() == Some(command_phase_label(artifact.phase)))
+            .or(artifacts.first())
+            .map(|artifact| artifact.absolute_path.to_string_lossy().into_owned());
         let reason = problem
             .message
             .lines()
@@ -833,6 +840,28 @@ mod tests {
         blocking.blocks.operational = true;
         let agent = reporter.render(&result, blocking).unwrap().agent.unwrap();
         assert!(agent.starts_with("velvet-glove could not run Ruff"));
+    }
+
+    #[test]
+    fn a_failed_remedy_points_at_its_own_log() {
+        let mut result = DeferredRunResult::default();
+        result.record_artifact(artifact("r-final-check", "r", "/logs/final-check.log", ""));
+        let mut remedy = artifact("r-remedy", "r", "/logs/remedy.log", "");
+        remedy.phase = CommandPhase::Remedy;
+        result.record_artifact(remedy);
+        result.record_operational_problem(OperationalProblem {
+            id: "r-remedy".into(),
+            tool_id: Some("clippy".into()),
+            tool_name: Some("Clippy".into()),
+            missing_tool: false,
+            install_hint: None,
+            phase: Some("remedy".into()),
+            affected_files: vec!["/repo/src/main.rs".into()],
+            message: "fix failed with exit code 101".into(),
+            artifact_ids: vec!["r-final-check".into(), "r-remedy".into()],
+        });
+        let entries = problem_entries(&result);
+        assert_eq!(entries[0].log_path.as_deref(), Some("/logs/remedy.log"));
     }
 
     #[test]

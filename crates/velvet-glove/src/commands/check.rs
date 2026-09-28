@@ -175,9 +175,16 @@ fn file_lines(report: &CheckReport) -> Vec<FileLine> {
             failed.entry(file).or_default().insert(tool.clone());
         }
     }
+    // Candidates, then any other file a remedy changed (a workspace-wide fix
+    // may rewrite files nobody named), so every write is reported.
+    let rewritten = result
+        .files
+        .keys()
+        .filter(|path| report.candidates.binary_search(path).is_err());
     report
         .candidates
         .iter()
+        .chain(rewritten)
         .map(|path| {
             let failed_tools = failed
                 .get(path.as_path())

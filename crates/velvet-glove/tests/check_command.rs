@@ -9,9 +9,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// A fake linter: `check` flags `messy` (fixable) and `FIXME` (not), `fix`
-/// rewrites `messy`, and `CRASH` makes the check fail operationally.
+/// rewrites `messy`, `fix-all` rewrites it in every top-level `.txt` file
+/// (a workspace-wide fixer), and `CRASH` makes the check fail operationally.
 const FAKE_LINT: &str = r#"#!/bin/sh
 mode=$1; shift
+if [ "$mode" = fix-all ]; then
+  for f in *.txt; do sed 's/messy/tidy/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+  exit 0
+fi
 status=0
 for f in "$@"; do
   case "$mode" in
@@ -65,6 +70,10 @@ impl Sandbox {
     }
 
     fn policy(&self, executable: &str) {
+        self.policy_with_remedy(executable, "fix", "target-files");
+    }
+
+    fn policy_with_remedy(&self, executable: &str, remedy: &str, writes: &str) {
         let command = |mode: &str, writes: &str| {
             format!(
                 "new WorkflowCommand {{ argv {{ \"{mode}\"; new Files {{}} }}; exitCodes {{ issues {{ 1 }}; failure {{ 2 }} }}{writes} }}"
@@ -91,7 +100,7 @@ tools {{
 run {{ "fakeLint" }}
 "#,
             command("check", ""),
-            command("fix", "; writes = \"target-files\""),
+            command(remedy, &format!("; writes = \"{writes}\"")),
         );
         fs::write(
             self.project().join(".velvet-glove/post-tool-use.pkl"),
@@ -299,4 +308,26 @@ fn check_defaults_to_git_changed_and_untracked_files() {
         !paths.iter().any(|path| path.contains("ignored")),
         "{paths:?}"
     );
+}
+
+#[test]
+fn check_lists_files_a_workspace_wide_remedy_rewrote() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let lint = sandbox.root.join("fake-lint");
+    sandbox.policy_with_remedy(&lint.to_string_lossy(), "fix-all", "matching-globs");
+    sandbox.write("a.txt", "messy\n");
+    sandbox.write("b.txt", "messy\n");
+
+    let output = sandbox.check(&["a.txt"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    let text = stdout(&output);
+    assert!(text.contains("a.txt: auto-fixed by FakeLint\n"), "{text}");
+    assert!(
+        text.contains("b.txt: auto-fixed by FakeLint\n"),
+        "a file the check did not name but the remedy rewrote is reported: {text}"
+    );
+    assert_eq!(sandbox.read("b.txt"), "tidy\n");
 }
