@@ -1,0 +1,64 @@
+/// zig fmt — Zig's bundled formatter.
+///
+/// `zig fmt --check` reports both an unformatted file and a file with a
+/// parse error through the same exit code (1); a parse error prints to
+/// stderr with no filename, while an unformatted file prints its own name
+/// to stdout, but our exit-code classification can't see that difference.
+/// The mutating `format` phase runs first and rewrites successfully-parsed
+/// files while leaving a broken file untouched; since it declares only
+/// `clean = 0`, a parse error there falls through to the default
+/// `unexpected = "failure"` before `verify` ever sees that file, so the
+/// two-phase order — not `verify` alone — is what makes the parse-error
+/// case classify as an operational failure instead of a source issue.
+/// Per-file invocation isolates that failure so a bad file next to a good
+/// one doesn't block the good one from being formatted.
+
+module velvet_glove.builtins.tools.ZigFmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "zig-fmt"
+  displayName = "zig fmt"
+  executable = "zig"
+  installHint = "install the Zig toolchain (zig fmt ships with it)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.zig"; "**/*.zig" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "zig-format"
+    default = true
+  }
+}
