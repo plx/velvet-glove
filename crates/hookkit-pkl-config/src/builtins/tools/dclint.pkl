@@ -1,4 +1,9 @@
 /// dclint — Docker Compose linter.
+///
+/// Malformed YAML is reported as an ordinary `invalid-yaml` finding (exit 1,
+/// same as any other lint issue), not a distinct crash exit code; a bad `-c`
+/// config path also exits 1. dclint does not expose a distinct exit status
+/// for operational failures.
 
 module velvet_glove.builtins.tools.Dclint
 
