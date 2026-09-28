@@ -3459,9 +3459,10 @@ run = new Listing { "ruff" }
         "hard-failure should fail the hook"
     );
     assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stderr.is_empty(),
-        "operational failures use the runtime diagnostics sink"
+        stderr.contains("failed"),
+        "a hook failure must explain itself on stderr: {stderr}"
     );
 }
 

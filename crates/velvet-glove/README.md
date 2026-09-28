@@ -53,7 +53,7 @@ The crate started from HookKit's `deferred_quality` Copier template
 (`.copier-answers.yml` records the answers), but the CLI, dispatch, and
 runner adapters have since diverged deliberately; do not re-apply the
 template blindly. The remaining HookKit framework crates are pinned to commit
-`83c49d46970602e8fb40a8afaeea521dfb7e9b61`; see
+`828d8d6feacf60015ae325d798b2bc3f32b2bf3b`; see
 [the migration guide](../../docs/migrating-from-agent-hook-kit.md).
 
 ## Validate

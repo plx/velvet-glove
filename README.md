@@ -8,7 +8,7 @@ for Claude Code, Codex, and Antigravity through
 
 HookKit is not yet published as a crate. All upstream HookKit dependencies are
 therefore pinned to Git commit
-`83c49d46970602e8fb40a8afaeea521dfb7e9b61`.
+`828d8d6feacf60015ae325d798b2bc3f32b2bf3b`.
 
 ## Quickstart: use Velvet Glove in another project
 
