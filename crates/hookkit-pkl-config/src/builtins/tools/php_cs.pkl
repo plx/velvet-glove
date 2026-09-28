@@ -1,7 +1,15 @@
-/// php-cs — PHP CodeSniffer (`phpcs`) style checker with `phpbcf` auto-fixer.
+/// php-cs — PHP CodeSniffer (`phpcs`) style checker with `phpcbf` auto-fixer.
 ///
-/// DRAFT: requires a PHP runtime and the PHP_CodeSniffer package; not
-/// verified against a fixture in this catalog.
+/// Verified against PHP_CodeSniffer 4.0.4 (PHPCSStandards/PHP_CodeSniffer,
+/// the maintained fork; `squizlabs/php_codesniffer` on Composer still
+/// resolves to the same current release). 4.x's exit code is a bitmask
+/// (see `src/Util/ExitCode.php`): bit 1 = fixable issues remain, bit 2 =
+/// non-fixable issues remain, bit 4 = (phpcbf only) a fix failed to apply,
+/// bit 16 = a process error (bad standard name, bad CLI args, missing
+/// file). `phpcs` never sets bit 4, so 1..3 covers every issue state and
+/// 16 is unambiguously operational. `phpcbf` can in principle set any of
+/// 1, 2, or 4, so 1..7 covers its issue states; this differs from 3.x,
+/// where `phpcs` used exit 1 for warnings-only and 2 for any error.
 
 module velvet_glove.builtins.tools.PhpCs
 
@@ -28,7 +36,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1 }
+        issues = new Listing<Int> { 1; 2; 3; 4; 5; 6; 7 }
       }
       writes = "target-files"
     }
@@ -40,7 +48,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1; 2 }
+        issues = new Listing<Int> { 1; 2; 3 }
       }
     }
   }
