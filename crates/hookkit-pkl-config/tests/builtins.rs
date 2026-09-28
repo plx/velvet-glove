@@ -477,6 +477,7 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("--allow-staged"),
             literal("--allow-no-vcs"),
             literal("--quiet"),
+            literal("--"),
             token(ArgToken::ExtraArgs),
         ],
     );
@@ -495,10 +496,10 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("--workspace"),
             literal("--all-targets"),
             literal("--quiet"),
-            token(ArgToken::ExtraArgs),
             literal("--"),
             literal("-D"),
             literal("warnings"),
+            token(ArgToken::ExtraArgs),
         ],
     );
     assert_exit_codes(&verify.exit_codes, &[0], &[101], &[]);
