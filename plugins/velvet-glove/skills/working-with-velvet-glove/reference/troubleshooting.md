@@ -9,12 +9,12 @@ the state directory, and exits nonzero when the hooks cannot work.
   `velvet-glove init`, or add tools listed by `velvet-glove tools`.
 - **A tool is reported missing:** hooks look for a bare program name in
   `settings.localBinDirs` (default `node_modules/.bin`, then `.venv/bin`,
-  searched from the file's workspace up to the project root) before `PATH`.
+  searched from the file's directory up to the project root) before `PATH`.
   `doctor` marks such tools `(project-local)`. A copy elsewhere, such as
   `venv/bin`, is reported as not searched: add its directory to
   `settings.localBinDirs`, or install the tool on `PATH`.
 - **Pkl errors:** install Pkl 0.31.1 or newer; `doctor` shows the evaluation
-  error for a broken policy.
+  error for a broken policy, naming the policy file that failed.
 - **Unexpected verdicts:** run `velvet-glove check FILES` (add `--json` for
   detail) to see what the Stop hook would report, and read the logs in the
   directory it prints. After a real Stop, the user message names the run

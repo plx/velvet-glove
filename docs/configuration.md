@@ -294,7 +294,7 @@ Git-ignored files return at once without evaluating any policy.
 | Issues remain | `velvet-glove: Ruff reports issues in src/a.py:` plus a bounded excerpt of the deciding check's output | `velvet-glove: Ruff: issues remain in src/a.py; diagnostics: <path>` |
 | Issues only in files the call did not change | nothing | `velvet-glove: not reporting issues outside the files this call changed: cargo clippy (src/lib.rs).` |
 | Tool missing, crashed, timed out | nothing | `velvet-glove could not run Ruff (ruff not found; <install hint>).` or `(<phase> failed with exit code N; log: <path>)`, as at Stop |
-| Policy error | nothing | `velvet-glove: configuration error; no tools ran (<policy file>: <first error line>). Details: <log>` |
+| Policy error | nothing | `velvet-glove: configuration error; no tools ran (pkl eval failed for <policy file>: <first error line>). Details: <log>` |
 
 Issues are blamed on the files the deciding output names, as at Stop: a
 workspace-wide check that reports a pre-existing issue in another file is not
