@@ -68,6 +68,9 @@ files through `post-tool`, then `turn-completion` (Stop). The case gets its own
   per-file status equal to `outcome`, and each `files` entry matched exactly;
 - Stop output is checked only for its block decision: `manual` must block
   (`decision=block`), and `clean` and `auto-fixed` must not.
+- Loop guard: after a block, a second Stop with `stop_hook_active: true`
+  and no edits in between (the agent's unsuccessful retry) must not block
+  again.
 
 The generated config disables the filesystem-mtime fallback, so the only
 candidates are the files the tool call cited.
@@ -150,9 +153,11 @@ are not a coverage claim for the enabled catalog.
 
 The `Real-tool fixtures` workflow runs weekly on Mondays at 07:23 UTC, and you
 can also start it manually from GitHub Actions. PRs that change the lane's
-workflow, installation or reporting configuration, run script, or harness also
-run it, so infrastructure changes are verified before merge. Other PRs run
-only the ordinary hermetic lane.
+workflow, installation or reporting configuration, run script, harness,
+fixture cases (`tests/tool-fixtures/**`), or builtin tool specs
+(`crates/hookkit-pkl-config/src/builtins/tools/**`) also run it, so those
+changes are verified before merge; it only runs the CI-selected tools, so
+this stays cheap. Other PRs run only the ordinary hermetic lane.
 
 The Ubuntu and macOS selection is `cargo-fmt`, `cargo-clippy`, `actionlint`,
 `jq` and `go-fmt`. All five are required, with no platform exceptions. Every
