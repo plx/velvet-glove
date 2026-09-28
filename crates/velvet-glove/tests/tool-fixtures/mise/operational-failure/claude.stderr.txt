@@ -1,0 +1,23 @@
+error: mise fmt: phase `format` failed; diagnostics: <workspace>/.velvet-glove/mise-agent-hook/test-session_mise-tool_mise-tool-failure.txt
+mise fmt failure diagnostics:
+== phase format failed (exit Some(1)) ==
+[format] command: mise fmt
+status: Some(1)
+classification: Some(Failure)
+stderr:
+mise WARN  Error loading settings file <workspace>/mise.toml: TOML parse error at line 1, column 7
+  |
+1 | [tools
+  |       ^
+unclosed table, expected `]`
+
+mise ERROR TOML parse error at line 1, column 7
+  |
+1 | [tools
+  |       ^
+unclosed table, expected `]`
+
+mise ERROR Version: 2026.9.1 macos-arm64 (2026-09-02)
+mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
+artifact: <workspace>/.velvet-glove/mise-agent-hook/test-session_mise-tool_mise-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
