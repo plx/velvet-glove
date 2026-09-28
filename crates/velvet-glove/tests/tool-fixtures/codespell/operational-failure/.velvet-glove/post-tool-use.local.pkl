@@ -1,0 +1,13 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["codespell"] = (Builtins.codespell) {
+    phases {
+      ["verify"] {
+        // Exercise codespell's fatal missing-dictionary exit through supported extra args.
+        extraArgs = new Listing<String> { "-D"; "nope-dictionary.txt" }
+      }
+    }
+  }
+}
