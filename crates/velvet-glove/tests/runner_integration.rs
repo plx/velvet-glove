@@ -2269,6 +2269,21 @@ fn turn_completion_loop_guard_stops_reblocking_unchanged_issues() {
         next_turn["decision"], "block",
         "a new turn starts a new chain"
     );
+    // The agent edits the blamed file but the issue remains: that is a new
+    // attempt, so it blocks again; an untouched retry does not.
+    std::fs::write(
+        project.join("src/manual.py"),
+        "print(manual_issue)  # tried\n",
+    )
+    .unwrap();
+    seed_pending_file(&state_dir, "claude", &project.join("src/manual.py"));
+    assert_eq!(
+        stop(true)["decision"],
+        "block",
+        "an edited file is a new attempt"
+    );
+    let untouched = stop(true);
+    assert!(untouched.get("decision").is_none(), "{untouched}");
 
     // Changing issues keep blocking until the consecutive-block cap.
     add_deferred_reporting_config(&project, "    maxConsecutiveBlocks = 2");

@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "go.mod has unparseable directives, so go mod tidy cannot load the module: the edited go.mod is the agent's to fix, so Stop blocks with the go error (the failed remedy is also reported to the user)."}

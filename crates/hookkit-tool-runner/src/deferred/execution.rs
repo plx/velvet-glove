@@ -71,6 +71,9 @@ struct WorkflowState {
     /// No authoritative result exists: a check failed, the remedy was
     /// skipped under failFast, or a check-less remedy failed.
     operational: bool,
+    /// A failed remedy whose problem is recorded once the final check is
+    /// known (see the report loop).
+    remedy_failure: Option<CommandFailure>,
 }
 
 #[derive(Debug)]
@@ -80,6 +83,7 @@ struct WriteImpact {
 }
 
 /// Why a command could not produce a usable result.
+#[derive(Debug)]
 struct CommandFailure {
     message: String,
     missing_tool: bool,
@@ -198,14 +202,16 @@ pub(crate) fn execute_deferred_workflows(
             .logs
             .push(deferred_log(scheduled, CommandPhase::Remedy, log));
         if let Some(failure) = failed {
-            // A failed remedy is an operational problem, but the final check
-            // that follows still decides the files: a compiler error that
-            // makes `clippy --fix` fail must still block as a manual issue.
-            // Only a remedy without a check has no other verdict.
+            // The final check that follows still decides the files: a
+            // compiler error that makes `clippy --fix` fail must still block
+            // as a manual issue. Only a remedy without a check has no other
+            // verdict.
             if scheduled.check.is_none() {
                 states[index].operational = true;
+                record_problem(&mut execution.result, scheduled, "remedy", failure);
+            } else {
+                states[index].remedy_failure = Some(failure);
             }
-            record_problem(&mut execution.result, scheduled, "remedy", failure);
             if fail_fast {
                 stopped_tools.insert(scheduled.tool_index);
             }
@@ -234,6 +240,12 @@ pub(crate) fn execute_deferred_workflows(
     }
 
     for (index, scheduled) in plan.iter().enumerate() {
+        // A remedy that failed on input its own final check blames on this
+        // run's files (typically a formatter that cannot parse a syntax
+        // error) is explained by those issues: the agent sees them, and the
+        // remedy log stays in the run bundle. Any other remedy failure (for
+        // example a broken tool config the check only names) is operational.
+        let remedy_failure = states[index].remedy_failure.take();
         let state = &states[index];
         // A user tool with only mutating phases (a formatter without a
         // verify phase) has no check to confirm its remedy, so the remedy's
@@ -260,6 +272,14 @@ pub(crate) fn execute_deferred_workflows(
         };
         report.normalize();
 
+        if report.final_check == Some(CheckOutcome::Issues) && !state.operational {
+            attribute_issues(&mut report, &state.last_output, scheduled);
+        }
+        if let Some(failure) = remedy_failure {
+            if report.issue_files.is_empty() {
+                record_problem(&mut execution.result, scheduled, "remedy", failure);
+            }
+        }
         if state.operational {
             execution.result.reports.insert(report.id.clone(), report);
             continue;
@@ -280,9 +300,6 @@ pub(crate) fn execute_deferred_workflows(
             );
             execution.result.reports.insert(report.id.clone(), report);
             continue;
-        }
-        if report.final_check == Some(CheckOutcome::Issues) {
-            attribute_issues(&mut report, &state.last_output, scheduled);
         }
         execution.result.record_report(report);
     }

@@ -96,8 +96,12 @@ writes then invalidate intersecting target-file or workspace checks for one
 authoritative final sweep. Glob- and workspace-wide remedies are snapshotted
 from the outermost directory holding the tool's workspace indicator, so a
 `cargo clippy --fix --workspace` write in a sibling crate is seen and
-reported as an auto-fix rather than made silently. A remedy that fails operationally is recorded as such, but
-the final check that follows still decides its files. Identical check
+reported as an auto-fix rather than made silently. The final check that
+follows a failed remedy still decides its files. When that check blames this
+run's files (a formatter that cannot parse a syntax error), the failure is
+explained by those issues and only its log is kept; otherwise (for example a
+broken tool config the check merely names) it is an operational problem.
+Identical check
 commands within one stage (the compatibility translation pairs several
 mutators with one verifier) run once.
 With `failFast`, an operational failure skips only the same tool's later

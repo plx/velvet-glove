@@ -926,7 +926,11 @@ fn run_turn_completion_view(
         .into_iter()
         .map(|path| normalize_path(path.as_std_path()))
         .collect::<Vec<_>>();
+    // Evidence can name one file through different spellings (for example
+    // macOS /var vs /private/var); canonical duplicates must not become
+    // duplicate jobs on the same file.
     candidates.sort();
+    candidates.dedup();
     // Build outputs and other Git-ignored paths are never lint candidates.
     let ignored = vcs::git_ignored_paths(&fallback_project_root, &candidates);
     if !ignored.is_empty() {

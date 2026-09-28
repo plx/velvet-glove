@@ -1,5 +1,6 @@
 use super::FileStatus;
 use super::execution::{DeferredExecution, ScheduledWorkflow, execute_deferred_workflows};
+use super::model::CommandPhase;
 use crate::{
     CheckScope, CommandArgTemplate, ExitCodePolicy, FileSelection, PhaseMode, ToolJob, ToolPhase,
     ToolSpec, UnexpectedExitPolicy, WriteBehavior,
@@ -875,13 +876,17 @@ fn a_failed_remedy_leaves_the_final_check_authoritative() {
         "the final check's issues must still need manual fixes"
     );
     assert!(execution.result.has_manual_fixes());
-    let problem = execution
-        .result
-        .operational_problems
-        .values()
-        .next()
-        .expect("remedy failure stays an operational problem");
-    assert!(problem.message.contains("failed with exit code 2"));
+    assert!(
+        execution.result.operational_problems.is_empty(),
+        "a remedy that fails on input its final check flags is explained by those issues"
+    );
+    assert!(
+        execution
+            .logs
+            .iter()
+            .any(|log| log.phase == CommandPhase::Remedy),
+        "the failed remedy's log is kept"
+    );
     assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
 }
 

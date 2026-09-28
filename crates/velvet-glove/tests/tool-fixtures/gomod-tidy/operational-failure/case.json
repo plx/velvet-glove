@@ -1,4 +1,0 @@
-{
-  "outcome": "operational",
-  "note": "go.mod has unparseable directives, so `go mod tidy` cannot even load the module. Both the check and the remedy report failure."
-}

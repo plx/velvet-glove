@@ -137,9 +137,14 @@ fn decide_with_flag(
 }
 
 /// Fingerprint the issues that would block: each manual report's tool,
-/// workflow, blamed files, and normalized decisive check output (with
-/// volatile numbers masked, see [`stable_output`]), plus any blocking
-/// operational problems and coverage gaps.
+/// workflow, and blamed files together with a digest of each blamed file's
+/// current bytes, plus any blocking operational problems and coverage gaps.
+///
+/// Hashing the blamed files rather than the check output means "the same
+/// issues remain" exactly when the agent left those files untouched. Tool
+/// output is too volatile to compare: timestamps, timings, seeds, and batch
+/// composition (a retry re-checks only the requeued files) all change it
+/// between identical Stops.
 pub(crate) fn issue_fingerprint(
     result: &DeferredRunResult,
     blocks: BlockReasons,
@@ -147,29 +152,23 @@ pub(crate) fn issue_fingerprint(
 ) -> String {
     let mut parts = Vec::<String>::new();
     if blocks.manual {
+        // A set: the same tool/workflow/file reported by several jobs is one
+        // issue for the guard.
+        let mut manual = std::collections::BTreeSet::new();
         for report in result.manual_reports() {
-            parts.push("manual".into());
-            parts.push(report.tool_id.clone());
-            parts.push(report.workflow_id.clone());
-            parts.extend(
-                report
-                    .issue_files
-                    .iter()
-                    .map(|path| excerpt::relativize(&path.to_string_lossy(), roots)),
-            );
-            if let Some(artifact) = result.latest_check_artifact(report) {
-                let names = report
-                    .issue_files
-                    .iter()
-                    .filter_map(|path| path.file_name())
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>();
-                parts.push(stable_output(
-                    &excerpt::normalize(&artifact.output, roots),
-                    &names,
+            for path in &report.issue_files {
+                let digest = std::fs::read(path)
+                    .map(|bytes| excerpt::fingerprint([bytes]))
+                    .unwrap_or_else(|_| "missing".into());
+                manual.insert(format!(
+                    "manual\0{}\0{}\0{}={digest}",
+                    report.tool_id,
+                    report.workflow_id,
+                    excerpt::relativize(&path.to_string_lossy(), roots)
                 ));
             }
         }
+        parts.extend(manual);
     }
     if blocks.operational {
         for problem in result.operational_problems.values() {
@@ -185,37 +184,6 @@ pub(crate) fn issue_fingerprint(
         }
     }
     excerpt::fingerprint(parts)
-}
-
-/// Check output with volatile numbers masked for fingerprinting: on every
-/// line that names none of `blamed_names`, each run of digits becomes `#`,
-/// so timings, random seeds, counters, and timestamps ("Finished in 0.08
-/// seconds", "Randomized with seed 51234") do not make identical issues look
-/// new. Lines naming a blamed file keep their line and column numbers.
-fn stable_output(output: &str, blamed_names: &[String]) -> String {
-    let mut stable = String::with_capacity(output.len());
-    for (index, line) in output.lines().enumerate() {
-        if index > 0 {
-            stable.push('\n');
-        }
-        if blamed_names.iter().any(|name| line.contains(name.as_str())) {
-            stable.push_str(line);
-            continue;
-        }
-        let mut in_digits = false;
-        for character in line.chars() {
-            if character.is_ascii_digit() {
-                if !in_digits {
-                    stable.push('#');
-                }
-                in_digits = true;
-            } else {
-                stable.push(character);
-                in_digits = false;
-            }
-        }
-    }
-    stable
 }
 
 #[cfg(test)]
@@ -296,16 +264,6 @@ mod tests {
         let same = decide(&later.next, None, true, "new-issues", 3);
         assert!(!same.block);
         assert_eq!(same.next, state("new-issues", 0));
-    }
-
-    #[test]
-    fn volatile_numbers_outside_blamed_lines_do_not_change_the_fingerprint_text() {
-        let names = vec!["foo_test.exs".to_string()];
-        let first = "test/foo_test.exs:12: test fails\nFinished in 0.08 seconds\nRandomized with seed 51234";
-        let second = "test/foo_test.exs:12: test fails\nFinished in 0.11 seconds\nRandomized with seed 88213";
-        assert_eq!(stable_output(first, &names), stable_output(second, &names));
-        let moved = "test/foo_test.exs:14: test fails\nFinished in 0.08 seconds";
-        assert_ne!(stable_output(first, &names), stable_output(moved, &names));
     }
 
     #[test]

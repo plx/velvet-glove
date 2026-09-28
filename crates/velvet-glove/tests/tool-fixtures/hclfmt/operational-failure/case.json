@@ -1,1 +1,0 @@
-{"outcome": "operational", "note": "terragrunt hcl fmt --check exits 1 for both a needs-formatting file and a parse error, so the deferred check's own classification cannot tell them apart; the remedy's stricter exit-code mapping (only 0 is clean) is what surfaces the parse failure as operational instead of a false auto-fix."}
