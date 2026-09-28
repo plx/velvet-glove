@@ -2,16 +2,15 @@
 ///
 /// No autofix: bandit only reports findings (SQL injection, shell=True,
 /// hardcoded secrets, etc.), so this is a plain checker like flake8. Exit
-/// codes (probed empirically, matching bandit's documented CLI): 0 clean,
-/// 1 issues found, 2 usage or config error (bad `-c` config, unrecognized
-/// flag) — 2 falls through to the default `unexpected = "failure"`
-/// classification. A missing target file is silently skipped rather than
-/// reported as an error, so that case is not a distinguishable operational
-/// failure; a broken `-c` config file is. Bandit's default screen report
-/// embeds a wall-clock "Run started:" banner and the running interpreter's
-/// version; the fixture harness masks both (see `mask_volatile_lines` in
-/// tool_fixtures.rs) so goldens don't hardcode a value that changes on every
-/// run or across installed Python versions.
+/// codes (probed with bandit 1.9.4, matching its documented CLI): 0 clean,
+/// 1 issues found, 2 usage or config error (unreadable or unparseable `-c`
+/// config, unrecognized flag); 2 falls through to the default
+/// `unexpected = "failure"` classification.
+///
+/// Known limitations of bandit itself: a missing or syntactically invalid
+/// target file is skipped with exit 0; `pyproject.toml` settings are read
+/// only with `-c pyproject.toml` (add it via `extraArgs`); and B101
+/// (`assert_used`) flags every pytest `assert` unless skipped.
 
 module velvet_glove.builtins.tools.Bandit
 
@@ -41,4 +40,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".bandit" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.bandit]" }
+  }
 }

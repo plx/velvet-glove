@@ -1,0 +1,17 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+// The documented recipe (docs/configuration.md) for keeping Ruff from
+// deleting imports the agent has not used yet: `--ignore F401` on the lint
+// workflow (deferred) and the lint phases (immediate), not on `format`.
+local hookOnly = new Listing<String> { "--ignore"; "F401" }
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    workflows { ["lint"] { extraArgs = hookOnly } }
+    phases {
+      ["fix"] { extraArgs = hookOnly }
+      ["verify"] { extraArgs = hookOnly }
+    }
+  }
+}

@@ -8,6 +8,8 @@
 /// a project config pointing at the right interpreter/venv, third-party
 /// imports outside the standard library may report as missing; this mirrors
 /// running pyright directly and is not something a hook spec can paper over.
+/// The PyPI `pyright` wrapper downloads Node and the npm package on first
+/// run; the npm install needs no network at check time.
 
 module velvet_glove.builtins.tools.Pyright
 
@@ -38,4 +40,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "pyrightconfig.json" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.pyright]" }
+    role = "python-typecheck"
+  }
 }

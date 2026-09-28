@@ -49,6 +49,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phaseOrder = new Listing<String> { "verify" }
 
   detect = new Config.Detect {
-    note = "opt-in only: draft spec"
+    note = "opt-in only: grep can flag strings; ruff rule T100 is syntax-aware"
   }
 }

@@ -4,13 +4,11 @@ import "Builtins.pkl"
 tools {
   ["bandit"] = (Builtins.bandit) {
     phases {
-      // A config file bandit can't read (missing or unparseable) exits 2,
-      // which the default `unexpected = "failure"` classification correctly
-      // reports as an operational failure rather than "no issues found" (a
-      // missing target file, by contrast, is silently skipped by bandit
-      // itself and is not distinguishable this way - see the spec comment).
+      // An unparseable `-c` config exits 2, which the default
+      // `unexpected = "failure"` classification reports as an operational
+      // failure rather than "no issues found".
       ["verify"] {
-        extraArgs = new Listing<String> { "-c" }
+        extraArgs = new Listing<String> { "-c"; "bandit.yaml" }
       }
     }
   }

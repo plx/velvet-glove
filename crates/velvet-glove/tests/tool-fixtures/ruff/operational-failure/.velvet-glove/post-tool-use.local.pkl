@@ -3,12 +3,9 @@ import "Builtins.pkl"
 
 tools {
   ["ruff"] = (Builtins.ruff) {
-    phases {
-      // An unrecognized CLI flag is a usage error (exit 2), which this spec
-      // already classifies as `failure`, not a lint issue.
-      ["fix"] {
-        extraArgs = new Listing<String> { "--bogus-flag" }
-      }
-    }
+    // An unrecognized flag is a usage error (exit 2, declared failure), not a lint issue.
+    // Tool-level extraArgs reach every command, so the immediate phases and
+    // the deferred check/remedy all hit the same exit-2 usage error.
+    extraArgs = new Listing<String> { "--bogus-flag" }
   }
 }
