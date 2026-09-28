@@ -1,4 +1,8 @@
 /// Biome — Rust-based formatter and linter for JS/TS/JSON.
+///
+/// A malformed `biome.json` and a real lint finding both exit 1 (verified on
+/// 2.5.14), so an operational failure is not distinguishable from "issues"
+/// here; no `operational-failure` fixture is claimed.
 
 module velvet_glove.builtins.tools.Biome
 
@@ -13,8 +17,12 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> {
       "*.js"; "**/*.js"
+      "*.mjs"; "**/*.mjs"
+      "*.cjs"; "**/*.cjs"
       "*.jsx"; "**/*.jsx"
       "*.ts"; "**/*.ts"
+      "*.mts"; "**/*.mts"
+      "*.cts"; "**/*.cts"
       "*.tsx"; "**/*.tsx"
       "*.json"; "**/*.json"
     }
