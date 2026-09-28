@@ -1,1 +1,5 @@
-{"outcome": "auto-fixed", "files": {"example.rs": "clean", "alpha/src/lib.rs": "auto-fixed", "beta/src/lib.rs": "auto-fixed"}}
+{
+  "outcome": "auto-fixed",
+  "cite": ["alpha/src/lib.rs", "beta/src/lib.rs"],
+  "note": "Cited files live in two different workspace members, so one hook call spans two invocations (one per member's own manifest); each is scoped to its own package and both get reformatted."
+}

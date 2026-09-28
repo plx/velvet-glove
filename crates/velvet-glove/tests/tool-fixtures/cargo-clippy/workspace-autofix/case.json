@@ -1,1 +1,5 @@
-{"outcome": "auto-fixed", "files": {"example.rs": "clean", "member/src/lib.rs": "auto-fixed"}}
+{
+  "outcome": "auto-fixed",
+  "cite": ["member/src/lib.rs"],
+  "note": "The edited file is a workspace member, not the root package; the untouched root package (example.rs) must stay clean and unwritten, proving the fix is scoped to the member, not the whole workspace."
+}
