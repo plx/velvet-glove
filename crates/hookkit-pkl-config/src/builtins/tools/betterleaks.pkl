@@ -1,6 +1,14 @@
 /// betterleaks — alternative secrets scanner with a gitleaks-compatible CLI.
 ///
-/// DRAFT: not exercised by a fixture in this catalog.
+/// Verified with betterleaks 1.8.1: unlike upstream gitleaks, `dir` correctly
+/// scans only the paths it's given (multiple explicit files are each scanned,
+/// with no whole-cwd expansion). Its default exit code for "leaks found" (1)
+/// collides with genuine operational failures (missing path, unreadable
+/// config), which also exit 1, so `--exit-code 2` reassigns the leaks-found
+/// exit code and leaves 1 exclusively for operational failure. Every log line
+/// is prefixed with a wall-clock timestamp even under `--no-color`, so
+/// `--log-level error` silences the non-deterministic info/warn chrome and
+/// keeps only the (already deterministic) finding report and fatal errors.
 
 module velvet_glove.builtins.tools.Betterleaks
 
@@ -25,12 +33,19 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--verbose"
         "--no-color"
         "--no-banner"
+        // Free up exit 1 for operational failures; see header comment.
+        "--exit-code"
+        "2"
+        // Drop timestamped info/warn logging so diagnostics are reproducible.
+        "--log-level"
+        "error"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1 }
+        issues = new Listing<Int> { 2 }
+        failure = new Listing<Int> { 1 }
       }
     }
   }
