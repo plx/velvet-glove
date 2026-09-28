@@ -1,0 +1,18 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["google-java-format"] = (Builtins.googleJavaFormat) {
+    phases {
+      // google-java-format exits 1 for both a real formatting issue and a
+      // file it can't parse, so force its distinct argv-parsing failure
+      // (exit 2) through a supported extra arg instead.
+      ["format"] {
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+      ["verify"] {
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}
