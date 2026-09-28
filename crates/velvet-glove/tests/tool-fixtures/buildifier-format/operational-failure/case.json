@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "unparseable Starlark makes buildifier exit 1 in both check and fix mode, which is neither the clean (0) nor issues (4) exit code declared for this tool, so it is classified as an operational failure rather than a formatting issue."}

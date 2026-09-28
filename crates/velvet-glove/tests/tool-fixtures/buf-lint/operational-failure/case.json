@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "buf.yaml names a module path that has no .proto files, which buf reports as a configuration failure (exit 1) rather than a lint issue (exit 100)."}

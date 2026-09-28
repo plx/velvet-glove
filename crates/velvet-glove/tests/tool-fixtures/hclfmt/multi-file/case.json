@@ -1,0 +1,1 @@
+{"outcome": "auto-fixed", "cite": ["example.hcl"], "files": {"example.hcl": "clean", "module/nested.hcl": "auto-fixed"}, "note": "terragrunt hcl fmt walks the whole cwd rather than the cited file alone, so it fixes module/nested.hcl even though only example.hcl was cited as edited."}

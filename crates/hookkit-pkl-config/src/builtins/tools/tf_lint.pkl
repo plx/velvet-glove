@@ -1,4 +1,17 @@
-/// tflint — Terraform linter (workspace-wide; uses .tflint.hcl).
+/// tflint — Terraform linter.
+///
+/// Without `--recursive`, tflint only inspects `.tf` files in its current
+/// working directory (here, the project root); a child module directory is
+/// invisible to it and a real issue there is silently missed rather than
+/// reported. `--recursive` makes each command walk every module directory
+/// under the project root, which is why the deferred check/remedy declare an
+/// explicit `workflows` entry scoped to the whole workspace instead of the
+/// `target-files` scope the phase-derived default would otherwise assume.
+///
+/// Under `--recursive`, tflint loads `.tflint.hcl` from each module directory
+/// it visits, not from the project root; a root config's rule toggles and
+/// plugins do not reach child modules. To share one config, add
+/// `--config <absolute path to .tflint.hcl>` to this tool's `extraArgs`.
 
 module velvet_glove.builtins.tools.Tflint
 
@@ -14,11 +27,42 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     include = new Listing<String> { "*.tf"; "**/*.tf" }
   }
 
+  workflows = new Mapping<String, Config.Workflow> {
+    ["lint"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "--recursive"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 2 }
+        }
+      }
+      remedy = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "--fix"
+          "--recursive"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 2 }
+        }
+        writes = "matching-globs"
+      }
+      checkScope = "workspace"
+      invocation = "workspace"
+    }
+  }
+  workflowOrder = new Listing<String> { "lint" }
+
   phases = new Mapping<String, Config.Phase> {
     ["fix"] = new Config.Phase {
       mode = "fix"
       argv = new Listing<String | Config.ArgToken> {
         "--fix"
+        "--recursive"
         new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {
@@ -30,6 +74,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
+        "--recursive"
         new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {

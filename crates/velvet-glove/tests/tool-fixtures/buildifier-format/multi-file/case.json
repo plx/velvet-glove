@@ -1,0 +1,1 @@
+{"outcome": "auto-fixed", "cite": ["BUILD.bazel", "pkg2/BUILD.bazel"], "files": {"BUILD.bazel": "auto-fixed", "pkg2/BUILD.bazel": "clean"}}

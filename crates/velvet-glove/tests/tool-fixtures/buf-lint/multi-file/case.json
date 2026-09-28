@@ -1,0 +1,1 @@
+{"outcome": "manual", "cite": ["test/v1/example.proto", "nested/other.proto"], "files": {"test/v1/example.proto": "clean", "nested/other.proto": "manual"}, "note": "one workspace-wide buf lint invocation must attribute its output back to the right cited file: only nested/other.proto has an issue, so test/v1/example.proto stays clean."}
