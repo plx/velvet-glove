@@ -1,0 +1,3 @@
+version: 2
+linters:
+  enable: [not-a-real-linter-xyz]
