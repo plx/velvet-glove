@@ -61,8 +61,8 @@ therefore pinned to Git commit
    is on `PATH`, and the project's config files point at it (or it is the
    standard choice, such as Ruff for Python). The file explains each choice
    and lists alternatives; `velvet-glove tools` shows the whole catalog.
-   Commit the policy, and keep personal tweaks in the git-ignored
-   `.velvet-glove/post-tool-use.local.pkl`.
+   Commit the policy, and keep personal tweaks in
+   `.velvet-glove/post-tool-use.local.pkl` (add it to `.gitignore`).
 
 4. **What you will see.** Clean edits produce no output. When the tools fix
    files automatically, the agent is told which files changed so it re-reads
