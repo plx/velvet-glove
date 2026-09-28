@@ -60,5 +60,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     indicators = new Listing<String> { "knip.json"; "knip.jsonc"; ".knip.json"; ".knip.jsonc"; "knip.config.*" }
     contains = new Mapping<String, String> { ["package.json"] = "\"knip\"" }
     role = "js-deadcode"
+    note = "config-only: its fix deletes unused exports and dependencies"
   }
 }
