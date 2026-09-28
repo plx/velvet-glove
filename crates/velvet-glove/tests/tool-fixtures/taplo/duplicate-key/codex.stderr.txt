@@ -1,4 +1,4 @@
-warning: taplo: issues remain; diagnostics: <workspace>/.velvet-glove/taplo-agent-hook/test-session_taplo-tool-issues.txt
+warning: taplo: issues remain; diagnostics: <workspace>/.velvet-glove/taplo-agent-hook/test-session_test-turn_taplo-tool_taplo-tool-issues.txt
 taplo diagnostics:
 [verify] command: taplo lint <workspace>/example.toml
 status: Some(1)
@@ -15,8 +15,5 @@ error: conflicting keys
 
 ERROR taplo:lint_files: invalid file error=semantic errors found path="<workspace>/example.toml"
 ERROR operation failed error=some files were not valid
-artifact: <workspace>/.velvet-glove/taplo-agent-hook/test-session_taplo-tool-issues.txt (text/plain)
-project-relative artifact: .velvet-glove/taplo-agent-hook/test-session_taplo-tool-issues.txt
-summary: taplo diagnostics
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
+artifact: <workspace>/.velvet-glove/taplo-agent-hook/test-session_test-turn_taplo-tool_taplo-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
