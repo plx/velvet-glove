@@ -1,8 +1,8 @@
 use super::FileStatus;
 use super::execution::{DeferredExecution, ScheduledWorkflow, execute_deferred_workflows};
 use crate::{
-    CheckScope, CommandArgTemplate, ExitCodePolicy, PhaseMode, ToolJob, ToolPhase, ToolSpec,
-    UnexpectedExitPolicy, WriteBehavior,
+    CheckScope, CommandArgTemplate, ExitCodePolicy, FileSelection, PhaseMode, ToolJob, ToolPhase,
+    ToolSpec, UnexpectedExitPolicy, WriteBehavior,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,6 +126,11 @@ case "$action" in
     ;;
   crash)
     exit 2
+    ;;
+  fix-members)
+    for file in "$1"/../*/*.rs; do
+      sed 's/DIRTY/CLEAN/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    done
     ;;
 esac
 exit 0
@@ -854,4 +859,96 @@ fn parallel_and_serial_jobs_produce_the_same_ordered_result() {
     }
     let parallel = execute_deferred_workflows(&plan, 4, true).result;
     assert_eq!(serial, parallel);
+}
+
+#[test]
+fn a_failed_remedy_leaves_the_final_check_authoritative() {
+    let fixture = Fixture::new("failed-remedy-final-check");
+    let file = fixture.file("broken.rs", "MANUAL\n");
+    let plan = vec![scheduled(&fixture, 0, file.clone(), "check", Some("crash"))];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(
+        only_status(&execution, &file),
+        Some(FileStatus::ManualFixesNeeded),
+        "the final check's issues must still need manual fixes"
+    );
+    assert!(execution.result.has_manual_fixes());
+    let problem = execution
+        .result
+        .operational_problems
+        .values()
+        .next()
+        .expect("remedy failure stays an operational problem");
+    assert!(problem.message.contains("failed with exit code 2"));
+    assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
+}
+
+#[test]
+fn issues_only_in_other_files_are_never_remedied() {
+    let fixture = Fixture::new("out-of-scope-no-remedy");
+    fixture.file("other.rs", "untouched\n");
+    let candidate = fixture.file("candidate.rs", "MANUAL DIRTY\n");
+    let plan = vec![scheduled(
+        &fixture,
+        0,
+        candidate.clone(),
+        "check-other",
+        Some("fix"),
+    )];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(fixture.trace_lines(), vec!["check-other"]);
+    assert_eq!(
+        std::fs::read_to_string(&candidate).expect("read candidate"),
+        "MANUAL DIRTY\n"
+    );
+    assert_eq!(only_status(&execution, &candidate), Some(FileStatus::Clean));
+    assert_eq!(execution.result.out_of_scope_reports().count(), 1);
+}
+
+#[test]
+fn workspace_wide_remedies_report_writes_in_sibling_members() {
+    let fixture = Fixture::new("sibling-members");
+    for member in ["a", "b"] {
+        std::fs::create_dir_all(fixture.root.join(member)).expect("member dir");
+        fixture.file(&format!("{member}/ws.marker"), "");
+    }
+    fixture.file("ws.marker", "");
+    let candidate = fixture.file("a/x.rs", "DIRTY\n");
+    let sibling = fixture.file("b/y.rs", "DIRTY\n");
+    let mut workflow = scheduled(&fixture, 0, candidate.clone(), "check", None);
+    workflow.spec = Arc::new(
+        ToolSpec::new("tool-0", "Tool 0", fixture.executable.to_string_lossy())
+            .with_workspace_indicator("ws.marker")
+            .with_file_selection(FileSelection::include(["**/*.rs"])),
+    );
+    workflow.job.workspace_dir = fixture.root.join("a");
+    let mut remedy = command(
+        &fixture,
+        "remedy",
+        "fix-members",
+        WriteBehavior::MatchingGlobs,
+        true,
+    );
+    remedy.writes = WriteBehavior::MatchingGlobs;
+    workflow.remedy = Some(remedy);
+
+    let execution = execute_deferred_workflows(&[workflow], 1, true);
+
+    assert_eq!(
+        std::fs::read_to_string(&sibling).expect("read sibling"),
+        "CLEAN\n"
+    );
+    assert_eq!(
+        only_status(&execution, &candidate),
+        Some(FileStatus::AutoFixed)
+    );
+    assert_eq!(
+        only_status(&execution, &sibling),
+        Some(FileStatus::AutoFixed),
+        "a write outside the job's own member must be seen and reported"
+    );
 }

@@ -3446,47 +3446,76 @@ impl Snapshot {
     }
 }
 
+/// Every file an enabled phase of the tool may write.
 fn snapshot_scope(job: &ToolJob, context: &ToolContext<'_>) -> BTreeSet<PathBuf> {
-    let mut scope = BTreeSet::new();
-    let mut include_target_files = false;
-    let mut include_matching_globs = false;
-    let mut include_workspace = false;
-
-    for phase in &context.spec.phases {
-        if !phase.enabled {
-            continue;
-        }
-        match phase.writes {
-            WriteBehavior::None => {}
-            WriteBehavior::TargetFiles => include_target_files = true,
-            WriteBehavior::MatchingGlobs => include_matching_globs = true,
-            WriteBehavior::Workspace => include_workspace = true,
-        }
-    }
-
-    if include_target_files {
-        scope.extend(job.files.iter().cloned());
-    }
-    if include_matching_globs {
-        scope.extend(collect_matching_files(
-            &job.workspace_dir,
-            &context.spec.file_selection,
-        ));
-    }
-    if include_workspace {
-        scope.extend(collect_workspace_files(&job.workspace_dir));
-    }
-    scope
+    let mut writes = context
+        .spec
+        .phases
+        .iter()
+        .filter(|phase| phase.enabled)
+        .map(|phase| phase.writes)
+        .collect::<Vec<_>>();
+    writes.sort_by_key(|writes| *writes as u8);
+    writes.dedup();
+    writes
+        .into_iter()
+        .flat_map(|writes| write_scope(writes, job, context))
+        .collect()
 }
 
-fn collect_matching_files(base: &Path, selection: &FileSelection) -> BTreeSet<PathBuf> {
+/// Files a command declaring `writes` may change, snapshotted around it to
+/// learn what it changed. Glob- and workspace-wide writers are snapshotted
+/// from [`write_root`], so a workspace-wide fixer's writes in sibling
+/// packages are seen and reported too.
+fn write_scope(
+    writes: WriteBehavior,
+    job: &ToolJob,
+    context: &ToolContext<'_>,
+) -> BTreeSet<PathBuf> {
+    match writes {
+        WriteBehavior::None => BTreeSet::new(),
+        WriteBehavior::TargetFiles => job.files.iter().cloned().collect(),
+        WriteBehavior::MatchingGlobs => collect_matching_files(
+            &write_root(job, context),
+            context.project_root,
+            &context.spec.file_selection,
+        ),
+        WriteBehavior::Workspace => collect_workspace_files(&write_root(job, context)),
+    }
+}
+
+/// Where a workspace-wide command can reach: the outermost directory from
+/// the job's workspace up to the project root that holds the tool's
+/// workspace indicator. `cargo --workspace`, Go workspaces, and npm
+/// workspaces act on every member from there even when the job's workspace
+/// is one member. Without an indicator, the job's workspace.
+fn write_root(job: &ToolJob, context: &ToolContext<'_>) -> PathBuf {
+    let Some(indicator) = &context.spec.workspace_indicator else {
+        return job.workspace_dir.clone();
+    };
+    job.workspace_dir
+        .ancestors()
+        .take_while(|dir| dir.starts_with(context.project_root))
+        .filter(|dir| dir.join(indicator).is_file())
+        .last()
+        .unwrap_or(&job.workspace_dir)
+        .to_path_buf()
+}
+
+/// Files under `base` that the selection matches, with globs applied to
+/// project-relative paths exactly as for candidates.
+fn collect_matching_files(
+    base: &Path,
+    project_root: &Path,
+    selection: &FileSelection,
+) -> BTreeSet<PathBuf> {
     let matcher = match FileMatcher::new(selection) {
         Ok(matcher) => matcher,
         Err(_) => return BTreeSet::new(),
     };
     walk_files(base)
         .into_iter()
-        .filter(|path| matcher.matches(path, base))
+        .filter(|path| matcher.matches(path, project_root))
         .collect()
 }
 

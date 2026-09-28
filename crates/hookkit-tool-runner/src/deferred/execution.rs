@@ -1,9 +1,9 @@
-use super::attribution::{Attribution, attribute};
+use super::attribution::{Attribution, attribute, resolution_bases};
 use super::{CheckOutcome, DeferredRunResult, OperationalProblem, ToolReport};
 use crate::{
     CheckScope, CommandPhase, PhaseLog, PhaseStatus, RenderedCommand, Snapshot, ToolContext,
-    ToolJob, ToolPhase, ToolSpec, WriteBehavior, collect_matching_files, collect_workspace_files,
-    render_command, resolve_worker_count, run_phase_command,
+    ToolJob, ToolPhase, ToolSpec, render_command, resolve_worker_count, run_phase_command,
+    write_scope,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -68,6 +68,8 @@ struct WorkflowState {
     checked_at: usize,
     fix_attempted: bool,
     changed_files: BTreeSet<PathBuf>,
+    /// No authoritative result exists: a check failed, the remedy was
+    /// skipped under failFast, or a check-less remedy failed.
     operational: bool,
 }
 
@@ -145,7 +147,8 @@ pub(crate) fn execute_deferred_workflows(
                 continue;
             }
         }
-        let needs_remedy = states[index].last_check == Some(CheckOutcome::Issues)
+        let needs_remedy = (states[index].last_check == Some(CheckOutcome::Issues)
+            && !out_of_scope_only(&states[index], scheduled))
             || (scheduled.check.is_none()
                 && scheduled.compatibility_translation
                 && scheduled.remedy.is_some());
@@ -172,11 +175,11 @@ pub(crate) fn execute_deferred_workflows(
 
         states[index].fix_attempted = true;
         let context = scheduled.context();
-        let scope = command_write_scope(remedy.writes, &scheduled.job, &context);
+        let scope = write_scope(remedy.writes, &scheduled.job, &context);
         let before = Snapshot::read(&scope);
         let command = render_command(remedy, &scheduled.job, &context);
         let log = run_phase_command(remedy, &command, &scheduled.job.workspace_dir);
-        let after_scope = command_write_scope(remedy.writes, &scheduled.job, &context);
+        let after_scope = write_scope(remedy.writes, &scheduled.job, &context);
         let after = Snapshot::read(&after_scope);
         let changed_files = before
             .changed_files(&after)
@@ -196,7 +199,13 @@ pub(crate) fn execute_deferred_workflows(
             .logs
             .push(deferred_log(scheduled, CommandPhase::Remedy, log));
         if let Some(failure) = failed {
-            states[index].operational = true;
+            // A failed remedy is an operational problem, but the final check
+            // that follows still decides the files: a compiler error that
+            // makes `clippy --fix` fail must still block as a manual issue.
+            // Only a remedy without a check has no other verdict.
+            if scheduled.check.is_none() {
+                states[index].operational = true;
+            }
             record_problem(&mut execution.result, scheduled, "remedy", failure);
             if fail_fast {
                 stopped_tools.insert(scheduled.tool_index);
@@ -285,6 +294,24 @@ pub(crate) fn execute_deferred_workflows(
     execution
 }
 
+/// Whether the most recent check's issues name only files outside this
+/// workflow's candidates. Such issues are reported but never remedied: a
+/// workspace-wide fixer would otherwise rewrite files nobody touched.
+fn out_of_scope_only(state: &WorkflowState, scheduled: &ScheduledWorkflow) -> bool {
+    let scope = scheduled
+        .job
+        .files
+        .iter()
+        .chain(state.changed_files.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let bases = resolution_bases(&scheduled.job.workspace_dir, &scheduled.project_root);
+    matches!(
+        attribute(&state.last_output, &scope, &bases),
+        Attribution::OutOfScope(_)
+    )
+}
+
 /// Attribute remaining issues to the candidate (or remedy-changed) files the
 /// check output names; blame nothing in this run when it names only other
 /// files; otherwise conservatively blame every candidate.
@@ -295,10 +322,7 @@ fn attribute_issues(report: &mut ToolReport, output: &str, scheduled: &Scheduled
         .chain(report.changed_files.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
-    let bases = [
-        scheduled.job.workspace_dir.as_path(),
-        scheduled.project_root.as_path(),
-    ];
+    let bases = resolution_bases(&scheduled.job.workspace_dir, &scheduled.project_root);
     match attribute(output, &scope, &bases) {
         Attribution::Named(files) => report.issue_files = files,
         Attribution::OutOfScope(files) => report.out_of_scope_files = files,
@@ -497,21 +521,6 @@ fn command_failed(log: &PhaseLog) -> Option<CommandFailure> {
         message,
         missing_tool: false,
     })
-}
-
-fn command_write_scope(
-    writes: WriteBehavior,
-    job: &ToolJob,
-    context: &ToolContext<'_>,
-) -> BTreeSet<PathBuf> {
-    match writes {
-        WriteBehavior::None => BTreeSet::new(),
-        WriteBehavior::TargetFiles => job.files.iter().cloned().collect(),
-        WriteBehavior::MatchingGlobs => {
-            collect_matching_files(&job.workspace_dir, &context.spec.file_selection)
-        }
-        WriteBehavior::Workspace => collect_workspace_files(&job.workspace_dir),
-    }
 }
 
 /// Whether any write recorded at or after `since` invalidates this check.
