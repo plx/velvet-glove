@@ -1,0 +1,6 @@
+{
+  "outcome": "manual",
+  "cite": ["lib/demo.ex", "test/demo_test.exs"],
+  "files": {"lib/demo.ex": "clean", "test/demo_test.exs": "manual"},
+  "note": "mix test exits 2 for a failing test. ExUnit reports the failure at the assertion in test/demo_test.exs, so the deferred runner blames that file and not the lib/demo.ex change that broke it; had the agent edited only lib/demo.ex, the failure would be out of scope and Stop would not block."
+}

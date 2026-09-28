@@ -1,3 +1,2 @@
-local function broken(
-	print("oops")
-end
+local x = 1
+print(x)

@@ -3,8 +3,7 @@
 /// Verified against selene 0.31.0: lint warnings, parse errors, and a
 /// malformed `selene.toml` all exit 1, so there is no exit code that
 /// distinguishes an operational failure from a source issue; both are
-/// reported as issues (see the fixture README's guidance for tools without a
-/// distinguishable failure mode).
+/// reported as issues and there is no `operational-failure` fixture.
 
 module velvet_glove.builtins.tools.Selene
 

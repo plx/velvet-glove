@@ -1,0 +1,1 @@
+{"outcome": "operational", "cite": ["lib/broken.ex"], "note": "The project does not compile, so mix test exits 1 (a Mix error) rather than 2 (failing tests)."}

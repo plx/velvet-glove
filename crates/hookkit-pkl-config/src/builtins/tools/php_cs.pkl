@@ -1,15 +1,12 @@
 /// php-cs — PHP CodeSniffer (`phpcs`) style checker with `phpcbf` auto-fixer.
 ///
-/// Verified against PHP_CodeSniffer 4.0.4 (PHPCSStandards/PHP_CodeSniffer,
-/// the maintained fork; `squizlabs/php_codesniffer` on Composer still
-/// resolves to the same current release). 4.x's exit code is a bitmask
-/// (see `src/Util/ExitCode.php`): bit 1 = fixable issues remain, bit 2 =
-/// non-fixable issues remain, bit 4 = (phpcbf only) a fix failed to apply,
-/// bit 16 = a process error (bad standard name, bad CLI args, missing
-/// file). `phpcs` never sets bit 4, so 1..3 covers every issue state and
-/// 16 is unambiguously operational. `phpcbf` can in principle set any of
-/// 1, 2, or 4, so 1..7 covers its issue states; this differs from 3.x,
-/// where `phpcs` used exit 1 for warnings-only and 2 for any error.
+/// PHP_CodeSniffer 4.x (probed with 4.0.4) exits with a bitmask: 1 = fixable
+/// issues remain, 2 = non-fixable issues remain, 4 = phpcbf failed to fix a
+/// file, 16 = process error (unknown standard, bad arguments, missing file).
+/// A file with both kinds of violation makes `phpcs` exit 3, and `phpcbf`
+/// exits 2 when only non-fixable violations remain after fixing. 3.x (probed
+/// with 3.13.5) used 1 = non-fixable only, 2 = fixable present, 3 = process
+/// error, so on 3.x a process error is reported as an issue, not a failure.
 
 module velvet_glove.builtins.tools.PhpCs
 

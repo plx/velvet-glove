@@ -1,1 +1,1 @@
-{"outcome": "operational"}
+{"outcome": "operational", "note": "No dialect is configured (no .sqlfluff), so sqlfluff fix and lint both exit 2 with a User Error."}
