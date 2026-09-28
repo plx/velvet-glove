@@ -73,7 +73,7 @@ directly without normalization.
 
 ## Running the lanes
 
-Pkl 0.31.1 is a required prerequisite for both lanes. Run the hermetic
+Pkl 0.31.1 or newer is a required prerequisite for both lanes. Run the hermetic
 inventory and probe gates with:
 
 ```sh

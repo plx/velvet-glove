@@ -12,7 +12,7 @@ therefore pinned to Git commit
 
 ## Install
 
-Install Pkl 0.31.1, then build locally or install the public Git source:
+Install Pkl 0.31.1 or newer, then build locally or install the public Git source:
 
 ```sh
 cargo install --locked --git https://github.com/plx/velvet-glove velvet-glove
@@ -29,7 +29,7 @@ registers the deferred SessionStart, PostToolUse, and Stop workflow and includes
 the `working-with-velvet-glove` skill skeleton.
 
 The plugin does not bundle prebuilt executables yet. Install `velvet-glove` and
-Pkl 0.31.1 separately; if `velvet-glove` is not on `PATH`, its launcher warns at
+Pkl 0.31.1 or newer separately; if `velvet-glove` is not on `PATH`, its launcher warns at
 session start and otherwise exits as a protocol-safe no-op.
 
 ```sh
@@ -70,7 +70,7 @@ PostToolUse event supplies the best available lower bound instead.
 
 ## Configuration
 
-Velvet Glove requires Pkl 0.31.1. Pass `--config PATH` to use one policy file
+Velvet Glove requires Pkl 0.31.1 or newer. Pass `--config PATH` to use one policy file
 and bypass discovery. Without it, configuration is merged in this order:
 
 1. legacy `~/.agent-hook-kit/post-tool-use.pkl`, then

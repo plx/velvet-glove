@@ -1546,7 +1546,7 @@ fn require_pkl(timeout: Duration) -> Result<(), String> {
     command.arg("--version");
     let result = run_with_timeout(&mut command, &[], timeout, &root);
     let _ = std::fs::remove_dir_all(&root);
-    let output = result.map_err(|error| format!("required Pkl 0.31.1 unavailable: {error}"))?;
+    let output = result.map_err(|error| format!("required Pkl >= 0.31.1 unavailable: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "required Pkl prerequisite failed with {:?}: {}",
@@ -1555,13 +1555,31 @@ fn require_pkl(timeout: Duration) -> Result<(), String> {
         ));
     }
     let version = String::from_utf8_lossy(&output.stdout);
-    if !version.starts_with("Pkl 0.31.1 ") {
+    if !pkl_version_is_supported(&version) {
         return Err(format!(
-            "required Pkl version is 0.31.1; found {}",
+            "required Pkl version is 0.31.1 or newer; found {}",
             version.trim()
         ));
     }
     Ok(())
+}
+
+/// Accepts `Pkl <major>.<minor>.<patch> ...` at or above 0.31.1.
+fn pkl_version_is_supported(banner: &str) -> bool {
+    let Some(version) = banner
+        .strip_prefix("Pkl ")
+        .and_then(|rest| rest.split_whitespace().next())
+    else {
+        return false;
+    };
+    let parts: Vec<u64> = version
+        .split('.')
+        .map_while(|part| part.parse().ok())
+        .collect();
+    let [major, minor, patch] = parts[..] else {
+        return false;
+    };
+    (major, minor, patch) >= (0, 31, 1)
 }
 
 fn configured_timeout() -> Result<Duration, String> {

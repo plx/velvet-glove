@@ -4,8 +4,10 @@ set -eu
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repository_root"
 
-if ! pkl --version 2>/dev/null | grep '^Pkl 0\.31\.1 ' >/dev/null; then
-  echo "error: Pkl 0.31.1 is required for non-skipping Velvet Glove validation" >&2
+pkl_version=$(pkl --version 2>/dev/null | awk '/^Pkl /{print $2; exit}')
+if [ -z "$pkl_version" ] ||
+  [ "$(printf '%s\n' 0.31.1 "$pkl_version" | sort -V | head -n 1)" != 0.31.1 ]; then
+  echo "error: Pkl 0.31.1 or newer is required for non-skipping Velvet Glove validation" >&2
   exit 1
 fi
 
