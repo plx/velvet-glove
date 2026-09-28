@@ -26,7 +26,10 @@ jobs:
   fixtures:
     name: Real tools (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The broad tier installs ~90 best-effort tools (npm/pipx/gem/cargo/
+    # go-install backends plus several language runtimes), which takes
+    # longer than the small core tier alone.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -42,16 +45,56 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/real-tool-fixtures"
           echo "VELVET_GLOVE_FIXTURE_ARTIFACT_DIR=$RUNNER_TEMP/real-tool-fixtures" >> "$GITHUB_ENV"
-      - name: Install CI tools
+      - name: Select fixture tools
+        # Select every fixture tool. Only the core tier's tools are
+        # REQUIRED (set via .github/real-tools/mise.toml's [env]); anything
+        # else that isn't installed reports a structured skip instead of
+        # failing the job. Computed portably (no GNU-only `find` flags)
+        # since this runs on both ubuntu-latest and macos-latest.
+        run: |
+          tools=""
+          for dir in crates/velvet-glove/tests/tool-fixtures/*/; do
+            name=$(basename "$dir")
+            tools="${tools:+$tools,}$name"
+          done
+          echo "VELVET_GLOVE_FIXTURE_TOOLS=$tools" >> "$GITHUB_ENV"
+      - name: Install Rosetta 2 (macOS)
+        # A handful of broad-tier tools (e.g. hlint) ship only an x86_64
+        # macOS release asset; GitHub's macos-latest runners are arm64.
+        if: runner.os == 'macOS'
+        run: softwareupdate --install-rosetta --agree-to-license
+      - name: Install OS packages (Linux)
+        # xmllint has no mise/aqua backend; macOS already ships it, but
+        # ubuntu-latest needs libxml2-utils from apt.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-utils
+      - name: Install CI tools (core, required)
         uses: jdx/mise-action@v4
         with:
           working_directory: .github/real-tools
           # Resolve floating patches afresh; do not restore stale tool installs.
           cache: false
+      - name: Install CI tools (broad, best-effort)
+        # A tool here that fails to resolve or install must not fail the
+        # job: it becomes a structured executable-unavailable skip when its
+        # fixture runs, instead of blocking every other broad-tier tool.
+        continue-on-error: true
+        uses: jdx/mise-action@v4
+        with:
+          working_directory: .github/real-tools/broad
+          cache: false
       - uses: Swatinem/rust-cache@v2
       - name: Run real-tool fixtures
-        # Resolve tool paths explicitly before Cargo/fixtures change directories.
-        run: mise -C .github/real-tools exec -- bash ../../scripts/run-real-tool-fixtures.sh
+        # Resolve both tiers' tool paths explicitly before Cargo/fixtures
+        # change directories: `mise env` only adds absolute paths already
+        # on disk, so it survives the script's later `cd`, unlike a shim
+        # directory that re-resolves the active mise.toml from cwd.
+        run: |
+          eval "$(mise -C .github/real-tools env -s bash)"
+          eval "$(mise -C .github/real-tools/broad env -s bash)"
+          bash scripts/run-real-tool-fixtures.sh
       - name: Summarize results
         if: always()
         run: python3 .github/real-tools/summary.py "$VELVET_GLOVE_FIXTURE_ARTIFACT_DIR" >> "$GITHUB_STEP_SUMMARY"

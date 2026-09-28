@@ -188,48 +188,87 @@ fixture cases (`tests/tool-fixtures/**`), or builtin tool specs
 changes are verified before merge; it only runs the CI-selected tools, so
 this stays cheap. Other PRs run only the ordinary hermetic lane.
 
-The Ubuntu and macOS selection is `cargo-fmt`, `cargo-clippy`, `actionlint`,
-`jq` and `go-fmt`. All five are required, with no platform exceptions. Every
-selected case runs on the deferred and immediate lanes. Other fixture tools
-report `not-selected` while v2 validation rolls out, and the twelve enabled
-tools without fixture directories are outside the lane's coverage. The lane
-does not yet test repeated-run idempotence. Antigravity is covered only by the
+The Ubuntu and macOS selection is every fixture tool (computed by the
+workflow, not hand-maintained). Installation splits into two tiers:
+
+- **Core** ([`.github/real-tools/mise.toml`](../../../../.github/real-tools/mise.toml)):
+  a small set of tools with simple, prebuilt aqua/mise-registry binaries (or
+  that are subcommands of a toolchain already declared there), stable enough
+  to require. Core tools are listed in that file's
+  `VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS`; a broken install or a fixture
+  failure there fails the job.
+- **Broad** ([`.github/real-tools/broad/mise.toml`](../../../../.github/real-tools/broad/mise.toml)):
+  everything else that has a reachable mise backend — npm, pipx, gem, cargo
+  and go-install backends, extra language runtimes (Node, Python, Ruby,
+  Java, Erlang/Elixir, Deno, Zig, Dart, Gleam, Cue), and `hk` for the
+  hk-util fixture tools. It installs with `continue-on-error` and is never
+  required, so one flaky or unavailable install there becomes a structured
+  skip for that tool's fixture instead of failing the job.
+
+A few fixture tools need no installation at all: `detect-private-key`,
+`check-merge-conflict` and `python-debug-statements` shell out to `grep`,
+and `mise` exercises the mise binary the lane already bootstraps.
+
+Documented platform skips (see the workflow for the exact mechanism): both
+`swiftlint` and `swift-format` only run on macOS (`swiftlint` has no Linux
+release; `swift-format` needs the Xcode/Swift toolchain macos-latest
+preinstalls, absent on ubuntu-latest); `alejandra` and `luacheck` only run
+on Linux (their release assets are Linux-only); `xmllint` needs
+`libxml2-utils` from apt on Linux but ships with the OS on macOS; `hlint`'s
+macOS leg runs an x86_64 asset under Rosetta 2 (no arm64 release), so the
+workflow pre-installs Rosetta 2 on macOS runners.
+
+A handful of fixture tools have no reachable mise/aqua/npm/pipx/gem/cargo/
+go-install backend at all and stay permanently unprovisioned, reporting
+`executable-unavailable`: `nil` and `nixf-diagnose` (Nix-flake-only
+distribution), `nixfmt` (no crates.io package and no per-platform release
+asset) and `php-cs` (no aqua-registry entry; upstream needs a PHP toolchain
+this lane doesn't otherwise provision). See
+[`.github/real-tools/broad/mise.toml`](../../../../.github/real-tools/broad/mise.toml)
+for the full reasoning on each.
+
+Every selected case runs on the deferred and immediate lanes. The lane does
+not yet test repeated-run idempotence. Antigravity is covered only by the
 hermetic protocol probe.
 
-CI-only installation and selection live in
-[`.github/real-tools/mise.toml`](../../../../.github/real-tools/mise.toml).
-Tool versions float within their configured major/minor series. Pkl stays at
-the runner's required 0.31.1. There is no mise lockfile and CI does not cache
-tool installations, so each run resolves patch versions afresh. Rust build
-dependencies are cached separately. None of this affects users' tool
-installations.
+Tool versions float within their configured major/minor series (or `latest`
+in the broad tier). Pkl stays at the runner's required 0.31.1. There is no
+mise lockfile and CI does not cache tool installations, so each run resolves
+versions afresh. Rust build dependencies are cached separately. None of this
+affects users' tool installations.
 
 To reproduce the selected lane locally with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise trust .github/real-tools/mise.toml
+mise trust .github/real-tools/mise.toml .github/real-tools/broad/mise.toml
 mise -C .github/real-tools install
-mise -C .github/real-tools exec -- bash ../../scripts/run-real-tool-fixtures.sh
+mise -C .github/real-tools/broad install   # best-effort; some tools may fail here
+eval "$(mise -C .github/real-tools env -s bash)"
+eval "$(mise -C .github/real-tools/broad env -s bash)"
+bash scripts/run-real-tool-fixtures.sh
 ```
 
 The script prints its artifact directory. To choose it, set
 `VELVET_GLOVE_FIXTURE_ARTIFACT_DIR` to an absolute directory, and use a fresh
-directory for each run. CI keeps versions, full logs, JSON results and failure
-workspaces (including hidden generated policy and state) for 14 days. The job
-summary shows per-surface counts for each tool and lists failure reasons.
-Missing required tools and fixture failures fail the job. Setup, build and
-probe failures stay failures even when there is no complete report.
+directory for each run. CI keeps versions (from `mise ls` on both tiers),
+full logs, JSON results and failure workspaces (including hidden generated
+policy and state) for 14 days. The job summary shows per-surface counts for
+each tool and lists failure reasons. Missing required tools and fixture
+failures fail the job. Setup, build and probe failures stay failures even
+when there is no complete report.
 
 To add a tool:
 1. Validate its contract following
    [`docs/validation-architecture.md`](../../../../docs/validation-architecture.md).
-2. Add its normal installation and version series, and its fixture ID, to the
-   mise configuration.
-3. Add its version command to `scripts/run-real-tool-fixtures.sh`.
-4. Verify it on both hosted platforms.
+2. Add its normal installation and version series, and its fixture ID, to
+   the core or broad mise configuration (core only if it is a small,
+   reliable, prebuilt-binary install; broad otherwise).
+3. Verify it on both hosted platforms.
+4. Promote it to core's `VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS` only once it
+   is proven stable in the broad tier across both platforms.
 
 If normal installation is unavailable on a platform, document the skip reason
-in the workflow and summary rather than adding bespoke provisioning. Update the
-coverage list above as it grows. When a patch release breaks a case, check the
-spec or the case's outcome and record any version-specific limitation; do not
-tighten binary pins.
+as a comment in the mise configuration (and in the platform-skip list above)
+rather than adding bespoke provisioning. When a patch release breaks a case,
+check the spec or the case's outcome and record any version-specific
+limitation; do not tighten binary pins.
