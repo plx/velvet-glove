@@ -1,0 +1,1 @@
+{"outcome": "manual", "files": {"example.unformatted.ts": "auto-fixed", "example.broken.ts": "manual"}, "note": "deno fmt formats every parseable file in the batch even when a sibling fails to parse; the parse failure and a plain formatting issue share exit code 1, so it also stands in for an operational-failure case (see deno.pkl)"}
