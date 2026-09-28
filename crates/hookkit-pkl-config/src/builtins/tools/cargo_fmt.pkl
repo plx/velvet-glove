@@ -1,4 +1,12 @@
-/// cargo fmt — runs rustfmt on a Cargo workspace.
+/// cargo fmt — runs rustfmt on a Cargo package.
+///
+/// `--manifest-path <WorkspaceIndicator>` names the *member* package nearest
+/// the touched file; neither phase adds `--all`, so cargo formats only that
+/// package's own targets instead of treating the flag as "every package in
+/// the enclosing workspace" (which is what `--all` means once a manifest
+/// path is given, even a member's own manifest). This also holds for the
+/// root package of a non-virtual workspace (its own manifest doubles as the
+/// workspace root): `--manifest-path` alone still scopes to that package.
 
 module velvet_glove.builtins.tools.CargoFmt
 
@@ -20,7 +28,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "format"
       argv = new Listing<String | Config.ArgToken> {
         "fmt"
-        "--all"
         "--manifest-path"
         new Config.WorkspaceIndicator {}
         new Config.ExtraArgs {}
@@ -34,7 +41,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "fmt"
-        "--all"
         "--check"
         "--manifest-path"
         new Config.WorkspaceIndicator {}
