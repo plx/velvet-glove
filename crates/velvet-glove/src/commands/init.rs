@@ -188,16 +188,12 @@ pub fn detect(
         .iter_mut()
         .filter(|candidate| !candidate.selected)
     {
-        candidate.reason = unselected_reason(candidate, &selected_roles, &configured_roles);
+        candidate.reason = unselected_reason(candidate, &selected_roles);
     }
     candidates
 }
 
-fn unselected_reason(
-    candidate: &Candidate,
-    selected_roles: &BTreeMap<String, String>,
-    configured_roles: &BTreeSet<String>,
-) -> String {
+fn unselected_reason(candidate: &Candidate, selected_roles: &BTreeMap<String, String>) -> String {
     let role = candidate.detect.role.as_deref();
     match &candidate.resolution {
         Resolution::ProjectLocal(path) => {
@@ -219,28 +215,11 @@ fn unselected_reason(
     if let Some(chosen) = role.and_then(|role| selected_roles.get(role)) {
         return format!("alternative to {chosen} for {}", role.unwrap_or_default());
     }
-    if let Some(note) = &candidate.detect.note {
-        return note.clone();
-    }
-    if candidate.detect.default && role.is_some_and(|role| configured_roles.contains(role)) {
-        return format!(
-            "another {} tool is configured here",
-            role.unwrap_or_default()
-        );
-    }
-    let mut looked_for: Vec<&str> = candidate
+    candidate
         .detect
-        .indicators
-        .iter()
-        .chain(candidate.detect.contains.keys())
-        .map(String::as_str)
-        .collect();
-    looked_for.dedup();
-    if looked_for.is_empty() {
-        "not selected automatically".to_string()
-    } else {
-        format!("no project config found ({})", looked_for.join(", "))
-    }
+        .note
+        .clone()
+        .unwrap_or_else(|| "not selected automatically".to_string())
 }
 
 fn find_indicator(
