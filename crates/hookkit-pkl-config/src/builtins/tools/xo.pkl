@@ -1,4 +1,8 @@
 /// xo — JavaScript/TypeScript linter built on ESLint with strong defaults.
+///
+/// A parse error in the target file reports through the same exit 1 as an
+/// ordinary lint finding (verified on 5.0.1), so no `operational-failure`
+/// fixture is claimed.
 
 module velvet_glove.builtins.tools.Xo
 
