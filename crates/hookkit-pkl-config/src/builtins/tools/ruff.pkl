@@ -81,8 +81,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       invocation = "batch"
     }
   }
-  // Lint fixes can change layout, so when both checks are initially dirty the
-  // bounded remedy pass runs lint before formatting, then verifies both.
+  // Lint fixes can change layout, so the remedy pass runs lint before
+  // formatting; a format check that a lint fix dirtied is rerun first.
   workflowOrder = new Listing<String> { "lint"; "format" }
 
   phases = new Mapping<String, Config.Phase> {
@@ -132,5 +132,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
     }
   }
-  phaseOrder = new Listing<String> { "format"; "fix"; "verify" }
+  // Lint fixes can leave layout behind (e.g. removed imports), so fix first.
+  phaseOrder = new Listing<String> { "fix"; "format"; "verify" }
 }
