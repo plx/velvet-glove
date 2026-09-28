@@ -3330,11 +3330,12 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     // exactly, as at Stop, not by everything else their output mentions.
     let mut attributable_output = Vec::new();
     let mut located = BTreeSet::new();
-    // A mutating phase that failed on a source problem in a job file (a
-    // formatter that cannot parse a syntax error): as at Stop, later phases
-    // still run, and the failure stands only if they report no issues in the
-    // job's files to explain it.
-    let mut source_failure = None;
+    // A mutating phase that exited with a failure code, typically a
+    // formatter that cannot parse a syntax error (some, like `ruff format
+    // --quiet` before Ruff 0.16, say nothing). As a failed remedy at Stop,
+    // it does not end the tool: later phases still run, and the failure
+    // stands only if they blame none of the job's files.
+    let mut failed_mutation = None;
 
     for phase in &context.spec.phases {
         if !phase.enabled {
@@ -3343,15 +3344,23 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
 
         let command = render_command(phase, job, context);
         let mut log = run_phase_command(phase, &command, &job.workspace_dir);
-        // A failure naming a job file at a source location (mypy's or
-        // `ruff format`'s exit 2 on a syntax error) is that file's problem.
-        let source_files = source_failure_files(&log, &job_files, &bases);
+        if !phase.is_verifier()
+            && log.error.is_none()
+            && log.status.is_some()
+            && log.classification == Some(PhaseStatus::Failure)
+        {
+            failed_mutation.get_or_insert((phase.id.clone(), log.status));
+            logs.push(log);
+            continue;
+        }
+        // A verifier failing while naming a job file at a source location
+        // (mypy's exit 2 on a syntax error) reports issues in that file.
+        let source_files = if phase.is_verifier() {
+            source_failure_files(&log, &job_files, &bases)
+        } else {
+            Vec::new()
+        };
         if !source_files.is_empty() {
-            if !phase.is_verifier() {
-                source_failure.get_or_insert((phase.id.clone(), log.status));
-                logs.push(log);
-                continue;
-            }
             log.classification = Some(PhaseStatus::Issues);
         }
 
@@ -3451,7 +3460,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
             }
         }
     };
-    if let Some((phase, exit_code)) = source_failure {
+    if let Some((phase, exit_code)) = failed_mutation {
         let explained =
             issues == IssueState::Issues && files.iter().any(|file| job_files.contains(file));
         if !explained {

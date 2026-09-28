@@ -49,7 +49,10 @@ for both audiences. Remaining issues are attributed with Stop's
 `deferred/attribution.rs` and reach the agent as the named files plus a
 bounded excerpt (`excerpt.rs`) of the output of the phases that decided them,
 dividing the same `deferredReporting.excerptMax*` budget as Stop the same
-way; issues naming only unchanged files become a user note. Full command
+way; issues naming only unchanged files become a user note. A mutating
+phase that exits with a failure code is judged like a failed remedy at
+Stop: later phases still run, and the failure is operational only if none
+of them blames the call's files. Full command
 output goes only to diagnostics files, which default to
 `$TMPDIR/velvet-glove/state/post-tool-immediate`. Policy load errors, message
 templates that fail to render, and unwritable diagnostics directories become

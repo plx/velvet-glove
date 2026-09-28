@@ -240,6 +240,10 @@ if [[ "$mode" == "format" ]]; then
     echo "error: Failed to parse ${file}:1:19: Expected ')', found newline" >&2
     exit 2
   fi
+  if grep -q "silent_syntax" "$file"; then
+    # `ruff format --quiet` before Ruff 0.16 fails without a word.
+    exit 2
+  fi
   if grep -q "needs_format" "$file"; then
     if [[ "$check" == "1" ]]; then
       echo "Would reformat: $file"
@@ -282,7 +286,7 @@ if [[ "$mode" == "check" ]]; then
     exit 2
   fi
 
-  if grep -q "syntax_error" "$file"; then
+  if grep -qE "syntax_error|silent_syntax" "$file"; then
     echo "${file}:1:19: SyntaxError: Expected ')', found newline"
     exit 1
   fi
@@ -3273,14 +3277,30 @@ fn post_tool_use_syntax_error_reports_the_diagnostic_not_a_formatter_failure() {
         &["--claude"],
     );
 
-    // `ruff format` fails at the syntax error; the verify phase still runs
-    // and its diagnostic explains the failure.
+    // `ruff format` fails at the syntax error, with or without saying where;
+    // the verify phase still runs and its diagnostic explains the failure.
     let (json, user) = immediate_response(&output);
     let context = json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap_or_default();
     assert!(
         context.contains("src/broken.py:1:19: SyntaxError"),
+        "{json}"
+    );
+    assert!(!user.contains("failed"), "{user}");
+
+    std::fs::write(project.join("src/silent.py"), "print(silent_syntax\n").unwrap();
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("codex", &project, "src/silent.py"),
+        &["--codex"],
+    );
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        context.contains("src/silent.py:1:19: SyntaxError"),
         "{json}"
     );
     assert!(!user.contains("failed"), "{user}");

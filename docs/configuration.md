@@ -151,9 +151,10 @@ exception: a failure whose output names a checked file at a source location
 `ruff format` print for a syntax error) is a source problem in that file, so
 it counts as issues in the files it names. A failure naming no checked file
 at a location (a usage error, a crash, a broken config file) stays
-operational. In immediate mode, a mutating phase failing this way does not
-stop the tool; the failure stands only if no later phase reports issues in
-the file.
+operational. In immediate mode, as for a failed remedy at Stop, a mutating
+phase that exits with a failure code does not stop the tool: later phases
+still run, and the failure stands only if none of them reports issues in the
+call's files.
 `writes` (`none`, `target-files`, `matching-globs`, `workspace`) tells the
 runner which files to snapshot so it can report what a command changed; every
 mutating phase and remedy needs one, and every check must be `none`.
