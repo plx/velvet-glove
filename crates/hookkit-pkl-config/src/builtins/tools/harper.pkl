@@ -1,10 +1,17 @@
 /// Harper — grammar checker for prose and documentation (harper-cli).
 ///
-/// DRAFT: harper-cli prints a "Note: ... user dictionary at <HOME>/..." line
-/// on every invocation that leaks the user's home directory, which makes
-/// goldens environment-fragile. The spec is correct and the runner exercises
-/// it; we don't ship a fixture until harper-cli grows a way to silence that
-/// note (or `--user-dict-path` stops emitting it).
+/// Verified empirically against real harper-cli 2.11.0: `lint --format
+/// compact` exits 0 clean / 1 with findings on stdout, and batched files are
+/// each attributed by name. It does print a "Note: ... user dictionary at
+/// <HOME>/..." line on every invocation (stderr) that would make a byte-level
+/// golden environment-fragile, but the v2 fixture format asserts semantics
+/// (outcome, post-state), never stdout/stderr transcripts, so that no longer
+/// blocks a fixture.
+///
+/// Known limitation: `INPUTS` accepts either a file path or literal text, and
+/// a nonexistent path silently falls back to linting the argument string
+/// itself as prose rather than failing — so a missing input file is not a
+/// distinguishable operational failure with this tool.
 
 module velvet_glove.builtins.tools.Harper
 
@@ -44,6 +51,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phaseOrder = new Listing<String> { "verify" }
 
   detect = new Config.Detect {
-    note = "opt-in only: draft prose checker"
+    role = "prose-lint"
+    note = "opt-in only: harper is zero-config and has no project indicator, so init never auto-suggests it"
   }
 }

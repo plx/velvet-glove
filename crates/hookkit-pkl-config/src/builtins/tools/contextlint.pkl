@@ -1,9 +1,12 @@
 /// contextlint — rule-based linter for structured Markdown documents.
 ///
-/// DRAFT: shipped without a vetted fixture because contextlint requires a
-/// project-local `contextlint.config.json` and is not commonly installed.
-/// Verified against jdx/hk's reference; not exercised by Velvet Glove's
-/// fixtures yet.
+/// Verified empirically against real contextlint 1.1.1 (`@contextlint/cli`):
+/// `lint` is the default command, so bare file args work; exits 0 clean / 1
+/// on rule violations / 2 on a missing or malformed `contextlint.config.json`
+/// (a distinguishable operational failure). `workspaceIndicator` means the
+/// tool is skipped entirely when no config is discoverable, so the missing-
+/// config path is not normally reachable. The npm package named plain
+/// `contextlint` does not exist; the real package is `@contextlint/cli`.
 
 module velvet_glove.builtins.tools.Contextlint
 
@@ -13,7 +16,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "contextlint"
   displayName = "contextlint"
   executable = "contextlint"
-  installHint = "install contextlint with `npm install -g contextlint`"
+  installHint = "install contextlint with `npm install -g @contextlint/cli` (not the nonexistent `contextlint` package)"
   workspaceIndicator = "contextlint.config.json"
 
   files = new Config.FileSelection {

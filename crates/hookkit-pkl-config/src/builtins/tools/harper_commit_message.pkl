@@ -1,9 +1,15 @@
 /// Harper — grammar checker for commit messages (harper-cli on COMMIT_EDITMSG).
 ///
-/// DRAFT: post-tool-use hooks operate on file edits, not the prepare-commit-msg
-/// lifecycle, so this spec is wired up but won't typically be triggered by the
-/// runner unless a workflow explicitly edits a commit message file. Verified
-/// against jdx/hk's reference; not exercised by Velvet Glove fixtures.
+/// Disabled: not applicable to this product's hook model. Velvet Glove's
+/// PostToolUse/deferred pipeline runs against files a coding agent edited
+/// through its file-editing tools; `git commit` does not go through those
+/// tools (an agent typically shells out to `git commit -m`, and even an
+/// editor-driven commit writes `.git/COMMIT_EDITMSG`, a transient file well
+/// outside any project the agent is editing). Confirmed empirically that
+/// `harper-cli --no-color lint --format compact` is otherwise a correct
+/// invocation (exits 0 clean / 1 with findings, same as `harper`), so this is
+/// shipped as a catalog entry only, following the `cocogitto-commit-msg`
+/// precedent, until a commit-message hook lifecycle exists.
 
 module velvet_glove.builtins.tools.HarperCommitMessage
 
@@ -14,34 +20,12 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "Harper (commit message)"
   executable = "harper-cli"
   installHint = "install harper with `brew install harper`"
+  enabled = false
 
   files = new Config.FileSelection {
-    include = new Listing<String> {
-      "COMMIT_EDITMSG"
-      "**/COMMIT_EDITMSG"
-    }
+    include = new Listing<String> {}
   }
 
-  phases = new Mapping<String, Config.Phase> {
-    ["verify"] = new Config.Phase {
-      mode = "verify"
-      argv = new Listing<String | Config.ArgToken> {
-        "--no-color"
-        "lint"
-        "--format"
-        "compact"
-        new Config.ExtraArgs {}
-        new Config.Files {}
-      }
-      exitCodes = new Config.ExitCodes {
-        clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1 }
-      }
-    }
-  }
-  phaseOrder = new Listing<String> { "verify" }
-
-  detect = new Config.Detect {
-    note = "opt-in only: checks commit messages, not edits"
-  }
+  phases = new Mapping<String, Config.Phase> {}
+  phaseOrder = new Listing<String> {}
 }

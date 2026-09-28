@@ -1,4 +1,11 @@
 /// Vale — syntax-aware prose linter for Markdown, AsciiDoc, reST, HTML, etc.
+///
+/// Verified empirically against real vale 3.23.0: exits 0 clean / 1 with
+/// alerts on stdout (`--output=line`), and a bad `StylesPath` or malformed
+/// `.vale.ini` exits 2 — distinct from both, so it already falls through to
+/// `exitCodes.failure` by default. Vale has no autofix, so this tool only
+/// ever reports; batched files are each attributed by name in the line
+/// output.
 
 module velvet_glove.builtins.tools.Vale
 
