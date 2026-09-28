@@ -96,17 +96,25 @@ pub fn run(dir: &Path, config: Option<&Path>, state_dir: &Path) -> ExitCode {
                 warnings.push(format!("{key} is in `run` but disabled, so it never runs"));
                 continue;
             }
-            let (program, resolution) = resolve_tool(spec, &loaded.project_root);
+            let local_bin_dirs = &loaded.config.settings.local_bin_dirs;
+            let (program, resolution) = resolve_tool(spec, &loaded.project_root, local_bin_dirs);
             match &resolution {
                 Resolution::Path(path) => println!("  {key:<20} {program} -> {}", path.display()),
                 Resolution::ProjectLocal(path) => {
                     println!(
-                        "  {key:<20} {program} only at {} (not on PATH)",
+                        "  {key:<20} {program} -> {} (project-local)",
+                        path.display()
+                    );
+                }
+                Resolution::Unconfigured(path) => {
+                    println!(
+                        "  {key:<20} {program} only at {} (not searched)",
                         path.display()
                     );
                     warnings.push(format!(
-                        "{key}: {program} is only at {}; hooks look up executables on PATH",
-                        path.display()
+                        "{key}: {program} is only at {}, which settings.localBinDirs ({}) does not include; add its directory there or put it on PATH",
+                        path.display(),
+                        local_bin_dirs.join(", ")
                     ));
                 }
                 Resolution::Missing => {
@@ -116,7 +124,7 @@ pub fn run(dir: &Path, config: Option<&Path>, state_dir: &Path) -> ExitCode {
                         .unwrap_or_else(|| format!("install {program}"));
                     println!("  {key:<20} {program} missing; {hint}");
                     warnings.push(format!(
-                        "{key}: {program} is not on PATH, so it will be skipped; {hint}"
+                        "{key}: {program} is neither on PATH nor in settings.localBinDirs, so it will be skipped; {hint}"
                     ));
                 }
             }

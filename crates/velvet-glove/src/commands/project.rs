@@ -12,9 +12,11 @@ pub const MIN_PKL_VERSION: (u64, u64, u64) = (0, 31, 1);
 /// Upper bound on files listed when inspecting a project.
 const MAX_PROJECT_FILES: usize = 100_000;
 
-/// Directories that hold project-local tool installs. Hooks do not search
-/// them; they are reported so users know why a tool is "missing".
-const PROJECT_BIN_DIRS: &[&str] = &["node_modules/.bin", ".venv/bin", "venv/bin", "vendor/bin"];
+/// Other conventional project-local install directories. Hooks search them
+/// only when `settings.localBinDirs` names them; a tool found only there is
+/// reported so users know why the hooks cannot run it.
+const OTHER_PROJECT_BIN_DIRS: &[&str] =
+    &["node_modules/.bin", ".venv/bin", "venv/bin", "vendor/bin"];
 
 /// Directories never worth scanning when `git ls-files` is unavailable.
 const WALK_SKIP_DIRS: &[&str] = &[
@@ -34,8 +36,12 @@ const WALK_SKIP_DIRS: &[&str] = &[
 pub enum Resolution {
     /// Found on `PATH` (or an explicit path); hooks can run it.
     Path(PathBuf),
-    /// Found only in a project-local bin directory, which hooks do not search.
+    /// Found in one of `settings.localBinDirs` at the project root; hooks
+    /// prefer it over `PATH`.
     ProjectLocal(PathBuf),
+    /// Found only in a conventional project-local directory that
+    /// `settings.localBinDirs` does not name, so hooks cannot run it.
+    Unconfigured(PathBuf),
     /// Not found anywhere.
     Missing,
 }
@@ -43,7 +49,7 @@ pub enum Resolution {
 impl Resolution {
     /// Whether the hook runner can execute this program as configured.
     pub fn runnable(&self) -> bool {
-        matches!(self, Self::Path(_))
+        matches!(self, Self::Path(_) | Self::ProjectLocal(_))
     }
 
     /// Short machine-readable status.
@@ -51,6 +57,7 @@ impl Resolution {
         match self {
             Self::Path(_) => "found",
             Self::ProjectLocal(_) => "project-local",
+            Self::Unconfigured(_) => "not-in-local-bin-dirs",
             Self::Missing => "missing",
         }
     }
@@ -58,7 +65,7 @@ impl Resolution {
     /// Resolved path, if any.
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Self::Path(path) | Self::ProjectLocal(path) => Some(path),
+            Self::Path(path) | Self::ProjectLocal(path) | Self::Unconfigured(path) => Some(path),
             Self::Missing => None,
         }
     }
@@ -89,10 +96,14 @@ pub fn required_programs(spec: &ToolSpec) -> Vec<String> {
 }
 
 /// Resolve every program a tool needs; the first unrunnable one decides.
-pub fn resolve_tool(spec: &ToolSpec, project_dir: &Path) -> (String, Resolution) {
+pub fn resolve_tool(
+    spec: &ToolSpec,
+    project_dir: &Path,
+    local_bin_dirs: &[String],
+) -> (String, Resolution) {
     let mut first = None;
     for program in required_programs(spec) {
-        let resolution = resolve_program(&program, project_dir);
+        let resolution = resolve_program(&program, project_dir, local_bin_dirs);
         if !resolution.runnable() {
             return (program, resolution);
         }
@@ -101,9 +112,12 @@ pub fn resolve_tool(spec: &ToolSpec, project_dir: &Path) -> (String, Resolution)
     first.unwrap_or_else(|| (spec.executable.clone(), Resolution::Missing))
 }
 
-/// Resolve one program the way the hook runner does (`PATH`, or a path with a
-/// separator), then fall back to project-local bin directories for reporting.
-pub fn resolve_program(program: &str, project_dir: &Path) -> Resolution {
+/// Resolve one program the way the hook runner does for a file at the project
+/// root: a path with a separator as given; a bare name in each
+/// `local_bin_dirs` entry, then on `PATH`. (At run time the runner also tries
+/// those directories in nested workspaces, nearest first.) Other conventional
+/// project-local directories are checked last, for reporting only.
+pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[String]) -> Resolution {
     if program.is_empty() {
         return Resolution::Missing;
     }
@@ -115,6 +129,13 @@ pub fn resolve_program(program: &str, project_dir: &Path) -> Resolution {
             Resolution::Missing
         };
     }
+    if let Some(path) = local_bin_dirs
+        .iter()
+        .map(|dir| project_dir.join(dir).join(program))
+        .find(|candidate| is_executable(candidate))
+    {
+        return Resolution::ProjectLocal(path);
+    }
     if let Some(path) = std::env::var_os("PATH")
         .iter()
         .flat_map(std::env::split_paths)
@@ -123,11 +144,12 @@ pub fn resolve_program(program: &str, project_dir: &Path) -> Resolution {
     {
         return Resolution::Path(path);
     }
-    PROJECT_BIN_DIRS
+    OTHER_PROJECT_BIN_DIRS
         .iter()
+        .filter(|dir| !local_bin_dirs.iter().any(|configured| configured == *dir))
         .map(|dir| project_dir.join(dir).join(program))
         .find(|candidate| is_executable(candidate))
-        .map_or(Resolution::Missing, Resolution::ProjectLocal)
+        .map_or(Resolution::Missing, Resolution::Unconfigured)
 }
 
 #[cfg(unix)]
@@ -323,6 +345,45 @@ mod tests {
         assert!(parse_version("0.100.0").unwrap() > MIN_PKL_VERSION);
         assert!(parse_version("0.31.0").unwrap() < MIN_PKL_VERSION);
         assert_eq!(parse_version("garbage"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_local_bins_are_runnable_and_others_are_only_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("vg-resolve-{}", std::process::id()));
+        for dir in ["node_modules/.bin", "venv/bin"] {
+            let bin = root.join(dir);
+            std::fs::create_dir_all(&bin).unwrap();
+            let tool = bin.join("vg-test-tool");
+            std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let defaults = hookkit_pkl_config::schema::default_local_bin_dirs();
+
+        let local = resolve_program("vg-test-tool", &root, &defaults);
+        assert_eq!(
+            local,
+            Resolution::ProjectLocal(root.join("node_modules/.bin/vg-test-tool"))
+        );
+        assert!(local.runnable());
+
+        let unconfigured = resolve_program("vg-test-tool", &root, &[".venv/bin".to_string()]);
+        assert_eq!(
+            unconfigured,
+            Resolution::Unconfigured(root.join("node_modules/.bin/vg-test-tool"))
+        );
+        assert!(!unconfigured.runnable());
+        let venv = resolve_program("vg-test-tool", &root, &["venv/bin".to_string()]);
+        assert_eq!(
+            venv,
+            Resolution::ProjectLocal(root.join("venv/bin/vg-test-tool"))
+        );
+        assert_eq!(
+            resolve_program("vg-absent-tool", &root, &defaults),
+            Resolution::Missing
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

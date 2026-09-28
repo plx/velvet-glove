@@ -117,15 +117,20 @@ fn selected_keys(candidates: &[Candidate]) -> Vec<String> {
 
 /// Decide which enabled builtins fit the project whose files are `files`.
 ///
-/// A tool is selected when its globs match a project file, its executable
-/// resolves on `PATH`, and either one of its indicators is present or it is
-/// its role's default and no tool in that role has an indicator.
+/// A tool is selected when its globs match a project file, its programs
+/// resolve the way the hooks resolve them (the default `localBinDirs` at the
+/// project root, then `PATH`), and either one of its indicators is present or
+/// it is its role's default and no tool in that role has an indicator.
 pub fn detect(
     root: &Path,
     files: &[String],
     catalog: &BTreeMap<String, ToolSpec>,
 ) -> Vec<Candidate> {
-    let global_exclude = Settings::default().exclude;
+    let Settings {
+        exclude: global_exclude,
+        local_bin_dirs,
+        ..
+    } = Settings::default();
     let mut contents = BTreeMap::<String, Option<String>>::new();
     let mut candidates: Vec<Candidate> = catalog
         .iter()
@@ -137,7 +142,7 @@ pub fn detect(
             let file_count = 1 + matching.count();
             let detect = spec.detect.clone().unwrap_or_default();
             let indicator = find_indicator(root, files, &detect, &mut contents);
-            let (program, resolution) = resolve_tool(spec, root);
+            let (program, resolution) = resolve_tool(spec, root, &local_bin_dirs);
             Some(Candidate {
                 key: key.clone(),
                 display_name: spec.display_name.clone(),
@@ -196,9 +201,9 @@ pub fn detect(
 fn unselected_reason(candidate: &Candidate, selected_roles: &BTreeMap<String, String>) -> String {
     let role = candidate.detect.role.as_deref();
     match &candidate.resolution {
-        Resolution::ProjectLocal(path) => {
+        Resolution::Unconfigured(path) => {
             return format!(
-                "{} is only at {}; hooks look up executables on PATH",
+                "{} is only at {}; add that directory to settings.localBinDirs",
                 candidate.program,
                 path.display()
             );
@@ -208,9 +213,12 @@ fn unselected_reason(candidate: &Candidate, selected_roles: &BTreeMap<String, St
                 .install_hint
                 .clone()
                 .unwrap_or_else(|| format!("install {}", candidate.program));
-            return format!("{} not found on PATH; {hint}", candidate.program);
+            return format!(
+                "{} not found on PATH or in project-local bin directories; {hint}",
+                candidate.program
+            );
         }
-        Resolution::Path(_) => {}
+        Resolution::Path(_) | Resolution::ProjectLocal(_) => {}
     }
     if let Some(chosen) = role.and_then(|role| selected_roles.get(role)) {
         return format!("alternative to {chosen} for {}", role.unwrap_or_default());

@@ -7,9 +7,12 @@ the state directory, and exits nonzero when the hooks cannot work.
 
 - **Nothing happens:** no policy was found or `run` is empty. Run
   `velvet-glove init`, or add tools listed by `velvet-glove tools`.
-- **A tool is reported missing:** hooks resolve executables on `PATH` only.
-  A copy under `node_modules/.bin` or `.venv/bin` is not used; put it on
-  `PATH` for the agent's session or install it globally.
+- **A tool is reported missing:** hooks look for a bare program name in
+  `settings.localBinDirs` (default `node_modules/.bin`, then `.venv/bin`,
+  searched from the file's workspace up to the project root) before `PATH`.
+  `doctor` marks such tools `(project-local)`. A copy elsewhere, such as
+  `venv/bin`, is reported as not searched: add its directory to
+  `settings.localBinDirs`, or install the tool on `PATH`.
 - **Pkl errors:** install Pkl 0.31.1 or newer; `doctor` shows the evaluation
   error for a broken policy.
 - **Wrong harness:** the plugin launcher picks Codex when `PLUGIN_ROOT` and

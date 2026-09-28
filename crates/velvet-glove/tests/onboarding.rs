@@ -302,6 +302,65 @@ fn doctor_reports_setup_and_fails_on_hard_problems() {
 }
 
 #[test]
+fn project_local_executables_are_selected_and_reported_as_runnable() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(sandbox) = Sandbox::new(&[]) else {
+        eprintln!("skipping: pkl is not on PATH");
+        return;
+    };
+    sandbox.write(
+        "package.json",
+        "{\"devDependencies\": {\"prettier\": \"^3\"}}\n",
+    );
+    sandbox.write(".prettierrc", "{}\n");
+    sandbox.write("web/index.ts", "export const answer = 42;\n");
+    sandbox.write("node_modules/.bin/prettier", "#!/bin/sh\nexit 0\n");
+    // `venv/` is not a default localBinDirs entry, so Ruff there is reported
+    // but not selected.
+    sandbox.write("app.py", "print('hi')\n");
+    sandbox.write("venv/bin/ruff", "#!/bin/sh\nexit 0\n");
+    for tool in ["node_modules/.bin/prettier", "venv/bin/ruff"] {
+        fs::set_permissions(
+            sandbox.project().join(tool),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+
+    let init = sandbox.run(&["init"]);
+    assert!(init.status.success(), "{}", describe(&init));
+    assert!(
+        stdout(&init).contains("Enabled: prettier."),
+        "{}",
+        describe(&init)
+    );
+    let policy =
+        fs::read_to_string(sandbox.project().join(".velvet-glove/post-tool-use.pkl")).unwrap();
+    assert!(
+        policy.contains("add that directory to settings.localBinDirs"),
+        "{policy}"
+    );
+
+    let doctor = sandbox.run(&["doctor"]);
+    assert!(doctor.status.success(), "{}", describe(&doctor));
+    let text = stdout(&doctor);
+    assert!(text.contains("(project-local)"), "{text}");
+    assert!(text.contains("OK: 0 warning(s)."), "{text}");
+
+    let tools = sandbox.run(&["tools", "--json"]);
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&tools.stdout).unwrap();
+    let status = |key: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["key"] == key)
+            .map(|entry| entry["resolution"]["status"].clone())
+            .unwrap()
+    };
+    assert_eq!(status("prettier"), "project-local");
+    assert_eq!(status("ruff"), "not-in-local-bin-dirs");
+}
+
+#[test]
 fn every_enabled_builtin_declares_detection_metadata() {
     if which("pkl").is_none() {
         eprintln!("skipping: pkl is not on PATH");

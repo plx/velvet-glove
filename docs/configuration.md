@@ -293,7 +293,8 @@ translation. The generated [built-in workflow audit](builtin-deferred-workflow-a
 is the authoritative inventory of commands, scopes, invocation granularity,
 and known limitations. `velvet-glove tools [--json]` lists every entry's Pkl
 key (the name used in `tools` and `run`, e.g. `cargoFmt`), id, file globs, and
-whether its executable resolves on `PATH`.
+where its executable resolves (`project-local` under the default
+`localBinDirs`, `found` on `PATH`, or `missing`).
 
 ## Generating and checking a policy
 
@@ -303,7 +304,8 @@ whether its executable resolves on `PATH`.
 patterns) and selects an enabled builtin when all of these hold:
 
 - its `files` globs match at least one project file;
-- every program it runs resolves on `PATH`; and
+- every program it runs resolves as the hooks would resolve it (the default
+  `localBinDirs` at the project root, then `PATH`); and
 - one of its detection indicators is present, or it is the default tool for
   its role and no tool sharing that role has an indicator.
 
@@ -329,8 +331,9 @@ as commented-out entries. `init` evaluates the file with Pkl before writing it
 and refuses to overwrite an existing policy without `--force`.
 
 `velvet-glove doctor [--dir DIR]` prints the discovered policy files in merge
-order, the evaluated `run` list with each tool's resolved executable or
-install hint, the Pkl version, and the state directory. It exits nonzero when
+order, the evaluated `run` list with each tool's resolved executable (marked
+`(project-local)` when it comes from `settings.localBinDirs`) or install hint,
+the Pkl version, and the state directory. It exits nonzero when
 Pkl is missing or older than 0.31.1, the policy fails to evaluate, or `run`
 names a tool that no `tools` entry defines; an empty `run` list, disabled
 entries, and missing executables are warnings.
