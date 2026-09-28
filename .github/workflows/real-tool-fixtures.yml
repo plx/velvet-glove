@@ -52,46 +52,18 @@ jobs:
         # job. Computed portably (no GNU-only `find` flags) since this runs
         # on both ubuntu-latest and macos-latest.
         #
-        # The exclusions below are *fixture failures*, not missing-tool
-        # skips: the executable installed and ran, but the outcome didn't
-        # match the case's contract. A failure fails the whole test run
-        # regardless of required-ness, so the broad tier's best-effort
-        # install can't paper over these the way it does a missing
-        # executable. Found by running every fixture tool's real binary in
-        # CI for the first time (2026-09-28, runs
-        # https://github.com/plx/velvet-glove/actions/runs/36451989208 and
-        # .../36456123824); recorded for spec/harness review, not fixed
-        # here per this lane's scope (workflow/provisioning only, not tool
-        # specs or fixtures).
+        # Exclusions are fixture tools whose case cannot pass on hosted
+        # runners for environmental reasons, each with its reason:
+        #   - tsserver: mise's npm backend installs tsc-files with an
+        #     isolated node_modules layout, under which tsc-files cannot find
+        #     tsc and exits 0 (a documented tsc-files limitation; see
+        #     tools/tsserver.pkl). Project-local npm installs work.
+        # The first CI runs of the full catalog (2026-09-28, runs 36451989208
+        # and 36456123824) also surfaced a loop-guard fingerprint bug and
+        # syntax-error fixtures mislabelled as operational; both were fixed
+        # in the runner and fixtures, so those tools are selected again.
         run: |
-          # Fails identically on both ubuntu-latest and macos-latest.
-          # Two failure shapes recur across these, both look like a
-          # harness/spec interaction gap rather than a per-tool bug:
-          #   - "format phase disambiguates operational-vs-manual" tools
-          #     (cue-fmt, gleam-format, gomod-tidy, hclfmt, mise, oxfmt,
-          #     zig-fmt): the deferred report records an operational
-          #     problem *and* still classifies the cited file
-          #     manual-fixes-needed, which case.json's "operational"
-          #     contract (docs/validation-architecture.md) forbids.
-          #   - a "manual" (block) case (deno, ghalint-action,
-          #     ghalint-workflow, mypy, reek, rubocop, tsserver, vacuum)
-          #     blocks again on the loop-guard's stop_hook_active=true
-          #     retry, which the no-double-block contract forbids. taplo
-          #     hits this same shape too, but flakily on *both* platforms
-          #     (failed on ubuntu-latest in run 36451989208, then on
-          #     macos-latest instead in run 36456123824 — not a clean
-          #     per-OS split), so it is excluded unconditionally rather
-          #     than per-`$RUNNER_OS`. This matches the tool-validation
-          #     sweep's own note that taplo "is not run on hosted Linux";
-          #     it turns out hosted macOS isn't reliable either.
-          #     taplo-format is unaffected on both platforms so far and
-          #     stays selected and required.
-          exclude="cue-fmt,deno,ghalint-action,ghalint-workflow,gleam-format,gomod-tidy,hclfmt,mise,mypy,oxfmt,reek,rubocop,taplo,tsserver,vacuum,zig-fmt"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            # gosec and lychee only failed their "manual" loop-guard case
-            # on macos-latest; both passed cleanly on ubuntu-latest.
-            exclude="$exclude,gosec,lychee"
-          fi
+          exclude="tsserver"
 
           tools=""
           for dir in crates/velvet-glove/tests/tool-fixtures/*/; do
@@ -104,7 +76,7 @@ jobs:
           echo "VELVET_GLOVE_FIXTURE_TOOLS=$tools" >> "$GITHUB_ENV"
 
           # The core tier (.github/real-tools/mise.toml), minus gomod-tidy
-          # and taplo (both excluded above, on every platform).
+          # (needs the network) and taplo (lint only; taplo-format is required).
           required="actionlint,buf-format,buf-lint,cargo-check,cargo-clippy,cargo-fmt,go-fmt,go-vet,gofumpt,golangci-lint,hadolint,jq,pkl,pkl-format,ruff,ruff-format,rustfmt,shellcheck,shfmt,staticcheck,stylua,taplo-format,terraform,typos,yq"
           echo "VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS=$required" >> "$GITHUB_ENV"
       - name: Install Rosetta 2 (macOS)
