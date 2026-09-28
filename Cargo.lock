@@ -425,6 +425,7 @@ name = "hookkit-pkl-config"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "globset",
  "hookkit-core",
  "include_dir",
  "proptest",

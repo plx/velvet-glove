@@ -560,3 +560,34 @@ run = new Listing<String> { "ruff"; "cargoFmt" }
     );
     assert_eq!(defaults.settings.diagnostics_directory, None);
 }
+
+#[test]
+fn evaluation_errors_name_the_policy_file_not_its_staged_copy() {
+    require_pkl!();
+    let dir = std::env::temp_dir().join(format!(
+        "vg-eval-error-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let policy = dir.join("post-tool-use.pkl");
+    std::fs::write(
+        &policy,
+        "amends \"Config.pkl\"\nsettings { jobs = \"not a number\" }\n",
+    )
+    .unwrap();
+
+    let error = hookkit_pkl_config::evaluate_pkl_file_patch(&policy)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.starts_with(&format!("pkl eval failed for {}:", policy.display())),
+        "{error}"
+    );
+    assert!(!error.contains("velvet-glove-pkl-stage"), "{error}");
+    let _ = std::fs::remove_dir_all(dir);
+}

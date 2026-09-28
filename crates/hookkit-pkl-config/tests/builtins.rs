@@ -690,3 +690,47 @@ fn builtin_catalog_audit_is_current() {
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     assert_eq!(checked_in, generated, "regenerate {}", path.display());
 }
+
+#[test]
+fn run_config_accepts_immediate_only_tools_and_rejects_bad_globs() {
+    require_pkl!();
+    let immediate_only = hookkit_pkl_config::evaluate_pkl_source(
+        r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    workflows { ["lint"] { enabled = false } ["format"] { enabled = false } }
+  }
+}
+run = new Listing<String> { "ruff" }
+"#,
+    )
+    .expect("evaluate immediate-only policy");
+    hookkit_pkl_config::validate_run_config(&immediate_only)
+        .expect("a tool with every workflow disabled runs only in immediate mode");
+
+    let bad_globs = hookkit_pkl_config::evaluate_pkl_source(
+        r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings { exclude { "src/{gen,build" } }
+tools {
+  ["ruff"] = (Builtins.ruff) { files { include { "**/*.{py" } } }
+}
+run = new Listing<String> { "ruff" }
+"#,
+    )
+    .expect("evaluate bad-glob policy");
+    let error = hookkit_pkl_config::validate_run_config(&bad_globs)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("settings.exclude has an invalid glob `src/{gen,build`"),
+        "{error}"
+    );
+    assert!(
+        error.contains("ruff (ruff): files.include has an invalid glob `**/*.{py`"),
+        "{error}"
+    );
+}
