@@ -1,0 +1,62 @@
+/// dart format — the Dart SDK's bundled formatter.
+///
+/// Unlike most formatters here, dart format has a real three-way exit code:
+/// 0 clean, 1 changed-but-parsed (`--set-exit-if-changed`), 65 a source file
+/// failed to parse. `--output=none` makes the check read-only. Per-file
+/// invocation still matters for the mutating phase: a batch invocation
+/// formats every parseable file but exits 65 for the whole batch when one
+/// file fails to parse, which would misclassify the files it did fix.
+
+module velvet_glove.builtins.tools.DartFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "dart-format"
+  displayName = "dart format"
+  executable = "dart"
+  installHint = "install the Dart SDK (dart format ships with it)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.dart"; "**/*.dart" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 65 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "--output=none"
+        "--set-exit-if-changed"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 65 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "pubspec.yaml" }
+    role = "dart-format"
+    default = true
+  }
+}

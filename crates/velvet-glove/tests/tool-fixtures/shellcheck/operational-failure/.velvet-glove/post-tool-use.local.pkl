@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["shellcheck"] = (Builtins.shellcheck) {
+    phases {
+      ["verify"] {
+        // shellcheck exits 2 when it cannot open an input file at all; that
+        // is distinct from exit 1 (source issues found) and must not be
+        // read as a lint finding.
+        extraArgs = new Listing<String> { "missing-operational.sh" }
+      }
+    }
+  }
+}

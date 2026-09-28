@@ -1,4 +1,13 @@
 /// pinact — pin GitHub Actions references to commit SHAs.
+///
+/// `--verify` calls the GitHub API to resolve each pinned action's version
+/// comment to a commit SHA, on every invocation, including an already-fully
+/// pinned "clean" file: pinact has no offline mode that preserves this check
+/// (`--no-api` exists but drops to a purely syntactic 40-hex-char check and
+/// cannot resolve refs to fix them, changing what "clean"/"issues" mean), so
+/// this tool needs network access and is rate-limited without a token. A
+/// bad `-c` config path also exits 1, the same code as a real pin issue;
+/// pinact does not expose a distinct exit status for the two.
 
 module velvet_glove.builtins.tools.Pinact
 

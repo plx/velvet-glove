@@ -1,14 +1,11 @@
-/// check-added-large-files — block commits that add files above a size limit.
+/// check-added-large-files — flag files above a size limit.
 ///
-// DRAFT: hk's implementation walks the git index (or the candidate file list)
-// and rejects anything above 500 KB by default. The check is conceptually
-// per-file but practically a repo-scope guard: it wants `git ls-files` /
-// `git diff --cached` output and a size-threshold flag, neither of which fit
-// cleanly into our post-tool-use Phase model (single executable + argv over
-// a list of paths). It is also fundamentally a *pre*-commit hook concern;
-// a post-tool-use hook fires after every edit and would re-warn on the same
-// large file repeatedly. Left as DRAFT until we either add a repo-scope
-// hook kind or ship a hookkit-native helper.
+/// Backed by hk's (jdx/hk) `hk util check-added-large-files --maxkb <N>`
+/// (default 500). Unlike hk's own pre-commit usage (which walks the staged
+/// git index), our post-tool-use hook only ever sees the files the agent
+/// just edited in this turn, so this checks those files' current size, not
+/// the whole repository. A missing path is silently treated as clean
+/// (exit 0); a malformed invocation (bad flag) exits 2.
 
 module velvet_glove.builtins.tools.CheckAddedLargeFiles
 
@@ -17,14 +14,32 @@ import "../Config.pkl" as Config
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "check-added-large-files"
   displayName = "check-added-large-files"
-  executable = "git"
-  installHint = "install git from your platform's package manager"
-  enabled = false
+  executable = "hk"
+  installHint = "install hk, e.g. `brew install hk` or `mise use -g hk`"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "**/*" }
   }
 
-  phases = new Mapping<String, Config.Phase> {}
-  phaseOrder = new Listing<String> {}
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "util"
+        "check-added-large-files"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    note = "opt-in only: flags large edited files, not a full repository scan"
+  }
 }

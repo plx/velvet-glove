@@ -1,0 +1,4 @@
+name: app
+services:
+  web:
+    image: nginx:1.27

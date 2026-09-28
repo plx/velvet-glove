@@ -1,11 +1,10 @@
 /// cocogitto-commit-msg — validate a commit message with `cog verify`.
 ///
-// DRAFT: like `check_conventional_commit`, this is a `commit-msg` hook that
-// takes the commit-message *file* path as its argument (`cog --quiet verify
-// --file <path>`). It does not consume the list of project files that
-// post-tool-use produces, and it only makes sense at commit time. Our
-// Phase model has no commit-message mode yet, so this is shipped as a
-// catalog entry only. Reactivate once a commit-message phase kind exists.
+// NOT APPLICABLE to agent file hooks: like `check_conventional_commit`,
+// this is a `commit-msg` hook that takes the commit-message *file* path as
+// its argument (`cog --quiet verify --file <path>`), not the list of
+// project files a post-tool-use hook produces, and it only makes sense at
+// commit time. Listed here for catalog completeness; kept disabled.
 
 module velvet_glove.builtins.tools.CocogittoCommitMsg
 

@@ -1,4 +1,12 @@
 /// ghalint — GitHub Actions action.yml linter (run-action mode).
+///
+/// Unlike `ghalint run`, `run-action` does accept file arguments and lints
+/// exactly the given `action.yml`(s), so target-files scope and batch
+/// invocation are accurate here. Operational failures (unreadable/unparsable
+/// action file) also exit 1, the same code as a policy violation; ghalint
+/// does not expose a distinct exit status for the two. `--log-color never`
+/// keeps ANSI escapes out of diagnostics piped to a non-TTY, which ghalint
+/// otherwise emits unconditionally.
 
 module velvet_glove.builtins.tools.GhalintAction
 
@@ -25,6 +33,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "run-action"
+        "--log-color"; "never"
         new Config.ExtraArgs {}
         new Config.Files {}
       }

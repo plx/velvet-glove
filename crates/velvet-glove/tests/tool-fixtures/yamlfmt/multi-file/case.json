@@ -1,0 +1,8 @@
+{
+  "outcome": "auto-fixed",
+  "files": {
+    "example.1-clean.yaml": "clean",
+    "example.2-unformatted.yaml": "auto-fixed"
+  },
+  "note": "yamlfmt rewrites each path to itself in a batched invocation; assert no cross-file mixing"
+}

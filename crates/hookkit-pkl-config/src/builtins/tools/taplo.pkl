@@ -1,4 +1,8 @@
 /// taplo — TOML linter (the `taplo` step in hk; see `taplo_format.pkl` for the formatter).
+///
+/// taplo logs every file it collects at INFO level, so a batched run names
+/// clean files in its output and the runner would blame them too (see the
+/// `multi-file` fixture). `RUST_LOG=warn` keeps only the diagnostics.
 
 module velvet_glove.builtins.tools.Taplo
 
@@ -9,6 +13,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "taplo"
   executable = "taplo"
   installHint = "install taplo with `brew install taplo` or `cargo install taplo-cli`"
+  env = new Mapping<String, String> { ["RUST_LOG"] = "warn" }
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*.toml"; "**/*.toml" }

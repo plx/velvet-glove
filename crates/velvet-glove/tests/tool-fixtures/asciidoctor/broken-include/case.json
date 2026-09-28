@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "No operational-failure case: Asciidoctor promotes CLI errors, missing input, and document problems to the same exit 1 under --failure-level=WARNING (see the spec's doc comment), so there is no distinguishable operational exit code to exercise."}

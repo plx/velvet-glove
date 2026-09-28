@@ -1,12 +1,11 @@
 /// just-format — format a Justfile with `just --fmt --unstable`.
 ///
-/// `just --fmt` only accepts a single justfile per invocation and is gated
-/// behind `--unstable`. The post-tool-use runner fires per modified file,
-/// so the typical job's `Files` expansion is exactly one path — which fits
-/// `--justfile <path>`. If a future job ever batches multiple justfiles
-/// into one invocation, this phase will fail loudly rather than silently
-/// formatting only the first; that is the right behavior until we add a
-/// per-file loop primitive to the schema.
+/// `just --fmt --justfile <path>` formats exactly one justfile. Batching two
+/// cited justfiles into one `Files` expansion makes `just` read the extra
+/// paths as recipe arguments and exit 1 ("Path-prefixed recipes may not be
+/// used with `--justfile`", just 1.45) without formatting anything, which
+/// the format phase reports as an operational failure (see the `multi-file`
+/// fixture). `phaseInvocation = "per-file"` runs one invocation per file.
 
 module velvet_glove.builtins.tools.JustFormat
 
@@ -17,6 +16,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "just --fmt"
   executable = "just"
   installHint = "install just with `brew install just` or `cargo install just`"
+  phaseInvocation = "per-file"
 
   files = new Config.FileSelection {
     include = new Listing<String> {

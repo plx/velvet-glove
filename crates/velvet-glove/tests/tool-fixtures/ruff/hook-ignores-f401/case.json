@@ -1,0 +1,1 @@
+{"outcome": "clean", "note": "The --ignore F401 hook recipe keeps an unused import in place and unreported on both lanes; compare unused-import, where it is removed."}

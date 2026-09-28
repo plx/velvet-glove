@@ -2,11 +2,15 @@
 ///
 /// `hk` ships this behind `hk util check-merge-conflict --assume-in-merge`,
 /// which is a small native scanner. The semantics are simple enough that a
-/// portable `grep -lE` invocation produces the same result for the standard
-/// markers (`<<<<<<< `, `=======`, `>>>>>>> `, plus the rarer `||||||| `
-/// hunk separator), so we translate this one directly. grep's exit codes
-/// map cleanly: `0` = matches found (issues), `1` = no matches (clean),
-/// `2` = read or regex error (failure).
+/// portable `grep -lE` invocation produces the same result for the
+/// unambiguous marker lines (`<<<<<<< `, `>>>>>>> `, plus the rarer
+/// `||||||| ` hunk separator), so we translate this one directly. The bare
+/// `=======` separator is deliberately excluded: it is also a valid Markdown
+/// setext H1 underline (`Heading\n=======`), which produced a confirmed false
+/// positive when included, and a real conflict is never left with only that
+/// line and no `<<<<<<<`/`>>>>>>>` around it. grep's exit codes map cleanly:
+/// `0` = matches found (issues), `1` = no matches (clean), `2` = read or
+/// regex error (failure).
 
 module velvet_glove.builtins.tools.CheckMergeConflict
 
@@ -27,7 +31,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "-lE"
-        #"^(<{7} |\|{7} |={7}$|>{7} )"#
+        #"^(<{7} |\|{7} |>{7} )"#
         new Config.ExtraArgs {}
         new Config.Files {}
       }
@@ -41,6 +45,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phaseOrder = new Listing<String> { "verify" }
 
   detect = new Config.Detect {
-    note = "opt-in only: flags Markdown setext headings"
+    note = "opt-in only: pattern scan of every edited file"
   }
 }

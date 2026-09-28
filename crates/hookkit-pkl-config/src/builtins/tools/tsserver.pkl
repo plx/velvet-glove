@@ -2,6 +2,13 @@
 ///
 /// Uses `tsc-files` (a thin shim around `tsc`) so individual files can be
 /// checked while still respecting the nearest `tsconfig.json`.
+///
+/// Known upstream limitation (tsc-files 1.1.4): it spawns
+/// `<typescript-package-dir>/../.bin/tsc` and exits 0 when that path is
+/// missing, which is the case under pnpm's default isolated `node_modules`
+/// (verified with pnpm 10.26.2 and TypeScript 5 and 7). Type errors are then
+/// silently reported clean. npm's hoisted layout works; prefer the `tsc`
+/// builtin in pnpm projects.
 
 module velvet_glove.builtins.tools.Tsserver
 

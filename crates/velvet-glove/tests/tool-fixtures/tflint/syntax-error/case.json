@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.tf has an unclosed block, so tflint cannot load the module: it exits 1 in check and fix mode with `example.tf:1,11-12: Unclosed configuration block`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

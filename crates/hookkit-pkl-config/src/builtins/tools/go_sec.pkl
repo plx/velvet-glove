@@ -1,4 +1,10 @@
 /// gosec — Go security scanner.
+///
+/// No `-quiet`: with it, a package that fails to type-check (for example a
+/// syntax error introduced mid-edit) makes gosec exit 0 with no output at
+/// all, silently reporting "clean" for a broken build. Without `-quiet`,
+/// the same package exits 1 (gosec still can't tell a build failure from a
+/// real finding — both are exit 1 — but at least it stops claiming success).
 
 module velvet_glove.builtins.tools.GoSec
 
@@ -19,7 +25,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
-        "-quiet"
         new Config.ExtraArgs {}
         "./..."
       }

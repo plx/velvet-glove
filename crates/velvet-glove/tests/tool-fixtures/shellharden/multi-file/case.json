@@ -1,0 +1,7 @@
+{
+  "outcome": "auto-fixed",
+  "files": {
+    "example.1-clean.sh": "clean",
+    "example.2-unquoted.sh": "auto-fixed"
+  }
+}

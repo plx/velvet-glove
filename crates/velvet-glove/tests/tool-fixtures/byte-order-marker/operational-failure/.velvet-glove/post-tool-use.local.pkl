@@ -1,0 +1,16 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["byte-order-marker"] = (Builtins.byteOrderMarker) {
+    phases {
+      ["fix"] {
+        // Exercise hk's usage-error exit (2) through supported extra args.
+        extraArgs = new Listing<String> { "--nonexistent-flag" }
+      }
+      ["verify"] {
+        extraArgs = new Listing<String> { "--nonexistent-flag" }
+      }
+    }
+  }
+}

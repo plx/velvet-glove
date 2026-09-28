@@ -1,0 +1,63 @@
+/// codespell — common-misspelling finder with autofix support.
+///
+/// Verified empirically against real codespell 2.4.3: exits 0 clean / 65
+/// with findings on stdout; `-w` fixes every finding it has exactly one
+/// confident suggestion for and leaves multi-suggestion findings (e.g.
+/// `abbort ==> abort, abbot`) unwritten, still reported at exit 65 — a
+/// genuine partial-fix "manual" case, not merely a probe artifact. A bad
+/// `-D`/`--dictionary` path exits 64, a third code distinct from both, so it
+/// already falls through to `exitCodes.failure` by default.
+///
+/// Same identifier-rename risk as `typos`: codespell can "fix" a
+/// misspelled standalone identifier (confirmed: `let lenght = 5` becomes
+/// `let length = 5`) in the one file it is pointed at, which breaks any
+/// other file that still references the old name. Unlike `typos`, it
+/// matches whole words only (confirmed it does not touch `langauge` inside
+/// `fooBarBaz_langauge`), which narrows but does not eliminate the risk.
+/// Users scope it with `.codespellrc`/`pyproject.toml` `ignore-words-list`
+/// the same way they would for any other project-wide spelling fixer.
+
+module velvet_glove.builtins.tools.Codespell
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "codespell"
+  displayName = "codespell"
+  executable = "codespell"
+  installHint = "install codespell with `pipx install codespell` or `brew install codespell`"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--write-changes"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 65 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 65 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".codespellrc" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.codespell]" }
+    note = "config-only: its fix can rename a misspelled identifier in one file"
+  }
+}

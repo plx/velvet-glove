@@ -1,4 +1,11 @@
 /// ryl — Rust-based YAML linter (https://github.com/owenlamont/ryl).
+///
+/// ryl enables zero rules without a config (its own `.ryl.toml`/`ryl.toml`,
+/// or a discovered legacy `.yamllint`/`.yamllint.yml`) and exits 2 refusing
+/// to run rather than passing silently. That exit is left in `exitCodes`'
+/// default failure bucket (not `issues`): it is a configuration error, and a
+/// project with no lint config configured is not "clean". `--strict` would
+/// reuse the same exit 2 for "only warnings", so this spec does not pass it.
 
 module velvet_glove.builtins.tools.Ryl
 

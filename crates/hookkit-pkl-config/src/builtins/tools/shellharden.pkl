@@ -1,0 +1,61 @@
+/// shellharden — a corrective bash syntax highlighter for ShellCheck-style
+/// quoting safety (https://github.com/anordal/shellharden).
+///
+/// `--check` exits 2 when changes are suggested and 0 when clean, so issues
+/// and clean are cleanly separated from failures (missing/unreadable file
+/// exits 1). `--replace` rewrites the listed files in place.
+
+module velvet_glove.builtins.tools.Shellharden
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "shellharden"
+  displayName = "shellharden"
+  executable = "shellharden"
+  installHint = "install shellharden with `cargo install shellharden`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.sh"; "**/*.sh"
+      "*.bash"; "**/*.bash"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "--replace"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 2 }
+        failure = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    // Rewrites quoting to close off word-splitting and pathname expansion;
+    // this can change a script's behavior when those were used on purpose
+    // (shellharden's own `--help` says so). Distinct from shfmt's `shell-
+    // format` role: the two rewrite different things and can both run.
+    note = "opt-in only: rewriting quoting can change script behavior"
+  }
+}

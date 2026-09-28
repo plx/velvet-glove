@@ -23,7 +23,7 @@ use deferred::{
     Attribution, BlockReasons, DEFAULT_BLOCK_REASON, DeferredLog, DeferredReporter, LoopGuardState,
     RenderedBuckets, RenderedMessages, ScheduledWorkflow, StopLoweringMetadata, TemplateRun,
     attribute, combined_output, decide_loop_guard, execute_deferred_workflows, issue_fingerprint,
-    plan_stop_lowering, resolution_bases,
+    plan_stop_lowering, resolution_bases, source_failure_files,
 };
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -74,6 +74,8 @@ pub struct ToolSpec {
     pub file_selection: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Where files with no workspace indicator above them run.
+    pub workspace_fallback: WorkspaceFallback,
     /// Granularity used by the immediate pipeline and phase-derived workflows.
     pub phase_invocation: InvocationGranularity,
     /// Deferred workflows executed at turn completion.
@@ -108,6 +110,7 @@ impl ToolSpec {
             install_hint: None,
             file_selection: FileSelection::default(),
             workspace_indicator: None,
+            workspace_fallback: WorkspaceFallback::default(),
             phase_invocation: InvocationGranularity::default(),
             workflows: Vec::new(),
             phases: Vec::new(),
@@ -138,6 +141,12 @@ impl ToolSpec {
         self
     }
 
+    /// Sets where files with no workspace indicator above them run.
+    pub fn with_workspace_fallback(mut self, fallback: WorkspaceFallback) -> Self {
+        self.workspace_fallback = fallback;
+        self
+    }
+
     /// Appends a phase to the execution order.
     pub fn with_phase(mut self, phase: ToolPhase) -> Self {
         self.phases.push(phase);
@@ -155,6 +164,17 @@ impl ToolSpec {
         self.messages = messages;
         self
     }
+}
+
+/// Where a tool runs a file with no workspace indicator between it and the
+/// project root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkspaceFallback {
+    /// Leave the file out: the tool needs its workspace.
+    #[default]
+    Skip,
+    /// Run the file from the project root, as without an indicator.
+    ProjectRoot,
 }
 
 /// One Stop-time non-mutating check and optional automatic remedy.
@@ -926,7 +946,11 @@ fn run_turn_completion_view(
         .into_iter()
         .map(|path| normalize_path(path.as_std_path()))
         .collect::<Vec<_>>();
+    // Evidence can name one file through different spellings (for example
+    // macOS /var vs /private/var); canonical duplicates must not become
+    // duplicate jobs on the same file.
     candidates.sort();
+    candidates.dedup();
     // Build outputs and other Git-ignored paths are never lint candidates.
     let ignored = vcs::git_ignored_paths(&fallback_project_root, &candidates);
     if !ignored.is_empty() {
@@ -2764,6 +2788,10 @@ fn convert_tool_spec(spec: &pkl::ToolSpec, settings: &pkl::Settings) -> ToolSpec
             exclude,
         },
         workspace_indicator: spec.workspace_indicator.clone(),
+        workspace_fallback: match spec.workspace_fallback {
+            pkl::WorkspaceFallback::Skip => WorkspaceFallback::Skip,
+            pkl::WorkspaceFallback::ProjectRoot => WorkspaceFallback::ProjectRoot,
+        },
         phase_invocation: convert_invocation(spec.phase_invocation),
         workflows,
         phases,
@@ -3094,26 +3122,30 @@ struct ToolJob {
     files: Vec<PathBuf>,
 }
 
+/// Group `paths` into jobs: by nearest workspace indicator when the tool has
+/// one, where a file with no indicator above it is skipped or, with the
+/// project-root fallback, grouped at the project root without a marker.
 fn build_jobs(paths: &[PathBuf], project_root: &Path, spec: &ToolSpec) -> Vec<ToolJob> {
     if let Some(indicator) = &spec.workspace_indicator {
         let mut grouped = BTreeMap::<PathBuf, ToolJob>::new();
         for path in paths {
-            if let Some(indicator_path) = nearest_workspace_indicator(path, project_root, indicator)
-            {
-                let workspace_dir = indicator_path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| project_root.to_path_buf());
-                grouped
-                    .entry(workspace_dir.clone())
-                    .or_insert_with(|| ToolJob {
-                        workspace_dir,
-                        workspace_indicator: Some(indicator_path),
-                        files: Vec::new(),
-                    })
-                    .files
-                    .push(path.clone());
-            }
+            let (workspace_dir, indicator_path) =
+                match nearest_workspace_indicator(path, project_root, indicator) {
+                    Some((workspace_dir, indicator_path)) => (workspace_dir, Some(indicator_path)),
+                    None if spec.workspace_fallback == WorkspaceFallback::ProjectRoot => {
+                        (project_root.to_path_buf(), None)
+                    }
+                    None => continue,
+                };
+            grouped
+                .entry(workspace_dir.clone())
+                .or_insert_with(|| ToolJob {
+                    workspace_dir,
+                    workspace_indicator: indicator_path,
+                    files: Vec::new(),
+                })
+                .files
+                .push(path.clone());
         }
         grouped.into_values().collect()
     } else {
@@ -3125,11 +3157,18 @@ fn build_jobs(paths: &[PathBuf], project_root: &Path, spec: &ToolSpec) -> Vec<To
     }
 }
 
+/// Finds the nearest ancestor of `path` (up to `project_root`) whose
+/// `indicator`-relative file exists, returning both that ancestor (the
+/// workspace root) and the indicator file itself. `indicator` may be a
+/// multi-component relative path (e.g. `sorbet/config`), so the workspace
+/// root is the directory the search matched *from*, not simply the
+/// indicator file's immediate parent — that would land inside `sorbet/`
+/// instead of the app root for a nested indicator like that one.
 fn nearest_workspace_indicator(
     path: &Path,
     project_root: &Path,
     indicator: &str,
-) -> Option<PathBuf> {
+) -> Option<(PathBuf, PathBuf)> {
     // Never look above the project root, or outside it for an outside file.
     if !path.starts_with(project_root) {
         return None;
@@ -3138,7 +3177,7 @@ fn nearest_workspace_indicator(
     while let Some(dir) = current {
         let candidate = dir.join(indicator);
         if candidate.is_file() {
-            return Some(candidate);
+            return Some((dir.to_path_buf(), candidate));
         }
         if dir == project_root {
             break;
@@ -3279,11 +3318,24 @@ fn resolve_worker_count(jobs_setting: u32, job_count: usize) -> usize {
 fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     let before_scope = snapshot_scope(job, context);
     let before = Snapshot::read(&before_scope);
+    let bases = resolution_bases(&job.workspace_dir, context.project_root);
+    let job_files = job.files.iter().cloned().collect::<BTreeSet<_>>();
     let mut logs = Vec::new();
     let mut saw_issues = false;
     let mut verify_state = None;
     let mut verifier_issue_output = Vec::new();
     let mut phase_issue_output = Vec::new();
+    // Verifier output that blames files by mentioning them, and the job files
+    // that verifiers failing at a source location named: those are blamed
+    // exactly, as at Stop, not by everything else their output mentions.
+    let mut attributable_output = Vec::new();
+    let mut located = BTreeSet::new();
+    // A mutating phase that exited with a failure code, typically a
+    // formatter that cannot parse a syntax error (some, like `ruff format
+    // --quiet` before Ruff 0.16, say nothing). As a failed remedy at Stop,
+    // it does not end the tool: later phases still run, and the failure
+    // stands only if they blame none of the job's files.
+    let mut failed_mutation = None;
 
     for phase in &context.spec.phases {
         if !phase.enabled {
@@ -3291,7 +3343,26 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
         }
 
         let command = render_command(phase, job, context);
-        let log = run_phase_command(phase, &command, &job.workspace_dir);
+        let mut log = run_phase_command(phase, &command, &job.workspace_dir);
+        if !phase.is_verifier()
+            && log.error.is_none()
+            && log.status.is_some()
+            && log.classification == Some(PhaseStatus::Failure)
+        {
+            failed_mutation.get_or_insert((phase.id.clone(), log.status));
+            logs.push(log);
+            continue;
+        }
+        // A verifier failing while naming a job file at a source location
+        // (mypy's exit 2 on a syntax error) reports issues in that file.
+        let source_files = if phase.is_verifier() {
+            source_failure_files(&log, &job_files, &bases)
+        } else {
+            Vec::new()
+        };
+        if !source_files.is_empty() {
+            log.classification = Some(PhaseStatus::Issues);
+        }
 
         if let Some(error) = &log.error {
             if error == "not found" {
@@ -3327,6 +3398,11 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 if phase.is_verifier() {
                     verify_state = Some(IssueState::Issues);
                     verifier_issue_output.push(combined_output(&log));
+                    if source_files.is_empty() {
+                        attributable_output.push(combined_output(&log));
+                    } else {
+                        located.extend(source_files);
+                    }
                 }
             }
             Some(PhaseStatus::Failure) | None => {
@@ -3352,10 +3428,10 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     } else {
         IssueState::Clean
     });
-    let issue_output = match (issues, verify_state) {
-        (IssueState::Clean, _) => Vec::new(),
-        (IssueState::Issues, Some(_)) => verifier_issue_output,
-        (IssueState::Issues, None) => phase_issue_output,
+    let (issue_output, attributable_output) = match (issues, verify_state) {
+        (IssueState::Clean, _) => (Vec::new(), Vec::new()),
+        (IssueState::Issues, Some(_)) => (verifier_issue_output, attributable_output),
+        (IssueState::Issues, None) => (phase_issue_output.clone(), phase_issue_output),
     };
     let issue_output = issue_output.join("\n");
     // As at Stop, blame the files the deciding output names: a workspace-wide
@@ -3363,6 +3439,9 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     // file this call changed.
     let (files, out_of_scope) = match issues {
         IssueState::Clean => (job.files.clone(), Vec::new()),
+        IssueState::Issues if attributable_output.is_empty() => {
+            (located.into_iter().collect(), Vec::new())
+        }
         IssueState::Issues => {
             let scope = job
                 .files
@@ -3370,14 +3449,30 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 .chain(&changed_files)
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            let bases = resolution_bases(&job.workspace_dir, context.project_root);
-            match attribute(&issue_output, &scope, &bases) {
-                Attribution::Named(files) => (files, Vec::new()),
-                Attribution::OutOfScope(others) => (Vec::new(), others),
+            match attribute(&attributable_output.join("\n"), &scope, &bases) {
+                Attribution::Named(files) => {
+                    located.extend(files);
+                    (located.into_iter().collect(), Vec::new())
+                }
+                Attribution::OutOfScope(others) if located.is_empty() => (Vec::new(), others),
+                Attribution::OutOfScope(_) => (located.into_iter().collect(), Vec::new()),
                 Attribution::Unnamed => (job.files.clone(), Vec::new()),
             }
         }
     };
+    if let Some((phase, exit_code)) = failed_mutation {
+        let explained =
+            issues == IssueState::Issues && files.iter().any(|file| job_files.contains(file));
+        if !explained {
+            return ToolRunOutcome::ToolFailed {
+                phase,
+                exit_code,
+                error: None,
+                diagnostics: format_logs(&logs),
+                changed_files,
+            };
+        }
+    }
     let changes = if changed_files.is_empty() {
         ChangeState::Unchanged
     } else {
@@ -4861,6 +4956,64 @@ mod tests {
             "velvet-glove-runner-{label}-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn nearest_workspace_indicator_resolves_nested_indicators_to_their_own_directory() {
+        // A single-component indicator (e.g. "Cargo.toml") sitting directly in
+        // the workspace root, and a nested one (e.g. "sorbet/config") one
+        // level deeper, must both resolve `workspace_dir` to the same app
+        // root — not to the indicator's immediate parent, which for the
+        // nested case would be the "sorbet" directory itself.
+        let root = unique_test_directory("nearest-workspace-indicator");
+        std::fs::create_dir_all(root.join("sorbet")).unwrap();
+        std::fs::write(root.join("Gemfile"), "source 'https://rubygems.org'\n").unwrap();
+        std::fs::write(root.join("sorbet/config"), "--dir\n.\n").unwrap();
+        let file = root.join("example.rb");
+        std::fs::write(&file, "# typed: true\n").unwrap();
+
+        let (single_dir, single_indicator) =
+            nearest_workspace_indicator(&file, &root, "Gemfile").expect("Gemfile found");
+        assert_eq!(single_dir, root);
+        assert_eq!(single_indicator, root.join("Gemfile"));
+
+        let (nested_dir, nested_indicator) =
+            nearest_workspace_indicator(&file, &root, "sorbet/config").expect("config found");
+        assert_eq!(nested_dir, root);
+        assert_eq!(nested_indicator, root.join("sorbet/config"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn files_without_an_indicator_run_from_the_project_root_only_with_the_fallback() {
+        let root = unique_test_directory("workspace-fallback");
+        std::fs::create_dir_all(root.join("frontend/src")).unwrap();
+        std::fs::write(root.join("frontend/package.json"), "{}\n").unwrap();
+        let nested = root.join("frontend/src/x.js");
+        let loose = root.join("README.md");
+        let paths = [nested.clone(), loose.clone()];
+        let spec = ToolSpec::new("tool", "Tool", "tool").with_workspace_indicator("package.json");
+
+        let skipped = build_jobs(&paths, &root, &spec);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].workspace_dir, root.join("frontend"));
+        assert_eq!(skipped[0].files, std::slice::from_ref(&nested));
+
+        let spec = spec.with_workspace_fallback(WorkspaceFallback::ProjectRoot);
+        let jobs = build_jobs(&paths, &root, &spec);
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].workspace_dir, root);
+        assert_eq!(jobs[0].workspace_indicator, None);
+        assert_eq!(jobs[0].files, [loose]);
+        assert_eq!(jobs[1].workspace_dir, root.join("frontend"));
+        assert_eq!(
+            jobs[1].workspace_indicator,
+            Some(root.join("frontend/package.json"))
+        );
+        assert_eq!(jobs[1].files, [nested]);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

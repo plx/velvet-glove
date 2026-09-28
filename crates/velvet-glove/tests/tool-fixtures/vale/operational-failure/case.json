@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "StylesPath points at a directory that does not exist, which vale exits 2 for (neither the tool's clean 0 nor issues 1)."}

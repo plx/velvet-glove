@@ -1,0 +1,6 @@
+{
+  "outcome": "manual",
+  "cite": ["lib/example.ex"],
+  "deferred": false,
+  "note": "mix compile --warnings-as-errors exits 1 for the unused variable. Deferred lane skipped: only the first build prints \"Compiling 1 file (.ex)\", so the loop guard's fingerprint of the unchanged retry differs and Stop blocks a second time (runtime fingerprinting limitation, not a spec issue)."
+}

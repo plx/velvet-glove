@@ -1,0 +1,4 @@
+{
+  "outcome": "operational",
+  "note": "example.go has a syntax error. golines can't format it and exits 1 with a fatal error, which this catalog's default unexpected=failure classification (no exit code is declared clean or an issue) maps to an operational failure."
+}

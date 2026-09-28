@@ -1,4 +1,10 @@
 /// Alejandra — opinionated Nix formatter.
+///
+/// Verified with Alejandra 4.0.0: `--check` exits 0 clean, 2 when a file
+/// needs formatting, and 1 on a parse error (never mutates on that path);
+/// plain invocation mirrors the same 0/1 split and only rewrites files that
+/// parse. Multiple explicit file args are each reported individually and no
+/// extra files are scanned.
 
 module velvet_glove.builtins.tools.Alejandra
 
@@ -23,6 +29,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 1 }
       }
       writes = "target-files"
     }
@@ -36,6 +43,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 2 }
+        failure = new Listing<Int> { 1 }
       }
     }
   }

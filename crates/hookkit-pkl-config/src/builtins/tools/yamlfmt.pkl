@@ -1,4 +1,10 @@
 /// yamlfmt — YAML formatter from Google.
+///
+/// Known limitation: `-lint`/format exit 1 for both a formatting diff and a
+/// genuine parse/config error (invalid `-conf`, malformed input); only a
+/// flag-parsing error (exit 2) is distinguishable as an operational failure.
+/// A path that matches no file is silently treated as clean (exit 0) rather
+/// than reported missing.
 
 module velvet_glove.builtins.tools.Yamlfmt
 

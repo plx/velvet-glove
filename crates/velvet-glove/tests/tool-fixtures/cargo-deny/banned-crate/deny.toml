@@ -1,0 +1,5 @@
+[licenses]
+allow = ["MIT"]
+
+[bans]
+deny = [{ name = "fixture" }]

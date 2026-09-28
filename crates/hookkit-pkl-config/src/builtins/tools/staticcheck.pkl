@@ -1,4 +1,10 @@
 /// staticcheck — comprehensive Go static analysis.
+///
+/// staticcheck exits 1 both for reported findings and for a package that
+/// fails to compile, and also for a malformed `staticcheck.conf` (reported
+/// as a "(config)" finding on the same exit code). None of those are
+/// distinguishable from a real lint issue by exit code alone, so no
+/// operational-failure fixture is included.
 
 module velvet_glove.builtins.tools.Staticcheck
 

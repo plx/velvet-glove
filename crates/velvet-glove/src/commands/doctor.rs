@@ -1,6 +1,9 @@
 //! `velvet-glove doctor`: explain what the hooks would do in a directory.
 
-use super::project::{MIN_PKL_VERSION, Resolution, pkl_version, resolve_tool};
+use super::project::{
+    MIN_PKL_VERSION, Resolution, as_path_refs, list_project_files, pkl_version, resolve_tool,
+    tool_search_dirs,
+};
 use hookkit_pkl_config::discovery::{self, DiscoveredKind, LEGACY_CONFIG_DIR};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -83,6 +86,11 @@ pub fn run(dir: &Path, config: Option<&Path>, state_dir: &Path) -> ExitCode {
             run.len(),
             if run.len() == 1 { "" } else { "s" }
         );
+        // Listed once and reused for every tool below: resolution searches
+        // from the directories of each tool's own matching files, the same
+        // way `init` and the runner do, so a tool that lives in a nested
+        // workspace (e.g. `frontend/node_modules/.bin/eslint`) is found.
+        let files = list_project_files(&loaded.project_root);
         // Loading validated that every `run` entry names a `tools` entry; an
         // unknown one is reported above as a load error.
         for (key, spec) in run
@@ -95,7 +103,18 @@ pub fn run(dir: &Path, config: Option<&Path>, state_dir: &Path) -> ExitCode {
                 continue;
             }
             let local_bin_dirs = &loaded.config.settings.local_bin_dirs;
-            let (program, resolution) = resolve_tool(spec, &loaded.project_root, local_bin_dirs);
+            let search_dirs = tool_search_dirs(
+                &loaded.project_root,
+                &spec.files,
+                &loaded.config.settings.exclude,
+                &files,
+            );
+            let (program, resolution) = resolve_tool(
+                spec,
+                &loaded.project_root,
+                local_bin_dirs,
+                &as_path_refs(&search_dirs),
+            );
             match &resolution {
                 Resolution::Path(path) => println!("  {key:<20} {program} -> {}", path.display()),
                 Resolution::ProjectLocal(path) => {

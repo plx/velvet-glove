@@ -1,0 +1,21 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["swiftformat"] = (Builtins.swiftformat) {
+    phases {
+      // Exercise SwiftFormat's argv-validation failure (exit 70) through a
+      // supported extra arg, distinct from a lint issue (exit 1). An
+      // unrecognized flag (e.g. --this-flag-does-not-exist) is unreliable:
+      // SwiftFormat silently ignores it when it immediately follows --lint
+      // (verified at 0.63.0), so this uses a recognized option with an
+      // invalid value instead, which errors regardless of position.
+      ["fix"] {
+        extraArgs = new Listing<String> { "--symlinks"; "bogus" }
+      }
+      ["verify"] {
+        extraArgs = new Listing<String> { "--symlinks"; "bogus" }
+      }
+    }
+  }
+}

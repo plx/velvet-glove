@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "The todo rule is warning-severity and not autocorrectable; without --strict, swiftlint lint exits 0 on it and the file would read as clean."}

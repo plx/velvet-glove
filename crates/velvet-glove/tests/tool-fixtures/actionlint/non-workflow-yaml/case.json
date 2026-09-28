@@ -1,0 +1,1 @@
+{"outcome": "clean", "deferred": false, "note": "Non-workflow YAML is outside the glob, so immediate emits nothing (the old all-YAML glob reported missing jobs/on sections); deferred reports an unmatched file as not assessed, which case outcomes cannot express."}

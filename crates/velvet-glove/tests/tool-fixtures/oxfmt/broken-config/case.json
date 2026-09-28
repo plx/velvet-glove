@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "oxfmt exits 1 for both a formatting diff and an unparseable .oxfmtrc.json, so the edited file is blamed; the Stop excerpt quotes \"Failed to parse configuration\", which points the agent at the real problem, and the failed remedy is reported to the user."}

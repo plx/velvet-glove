@@ -1,7 +1,13 @@
 /// erb_lint — ERB template linter (Shopify).
 ///
 /// Tool id is `erb` to keep the public hook name short; the underlying
-/// executable is `erb_lint`.
+/// executable is `erb_lint`. `.erb-lint.yml` is erb_lint's own deprecated
+/// alias for `.erb_lint.yml`; both are real config filenames it still loads
+/// (with a deprecation warning for the hyphenated one), so both remain
+/// `detect` indicators. Batch invocation attributes multiple files correctly
+/// (verified against erb_lint 0.9.0). Limitation: an invalid config file
+/// exits 1, the same code used for "issues found", so an operational failure
+/// there is not distinguishable from a lint result through the exit code.
 
 module velvet_glove.builtins.tools.Erb
 

@@ -1,10 +1,14 @@
 /// lychee — fast async link checker for Markdown, HTML, and friends.
 ///
 /// `hk` ships `lychee` as a `check`-only step over text files. The CLI is
-/// straightforward — pass the input paths and inspect the exit code. Empirically
-/// (lychee 0.24), `0` is returned when every link is reachable and `2` is
-/// returned when any link is broken; `1` is reserved for argument and config
-/// errors. We map those onto our phase model accordingly.
+/// straightforward — pass the input paths and inspect the exit code. Verified
+/// empirically against real lychee 0.24.2: `0` on every link reachable, `2`
+/// on any broken link, `1` on a bad/missing input argument, and `3` on a
+/// malformed `--config` file; `3` isn't listed explicitly but still falls
+/// through to `exitCodes.unexpected`'s "failure" default. Local (non-http)
+/// links are checked without network access, which is what the fixtures
+/// exercise; the tool still needs the network for real `https://` targets,
+/// which is why it stays opt-in (`detect` requires a project indicator).
 
 module velvet_glove.builtins.tools.Lychee
 

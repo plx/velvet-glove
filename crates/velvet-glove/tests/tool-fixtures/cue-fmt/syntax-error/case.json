@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "A syntax error in the edited file is the agent's to fix: the check flags it and the formatter cannot parse it, so Stop blocks with the parser error (the failed remedy is also reported to the user)."}

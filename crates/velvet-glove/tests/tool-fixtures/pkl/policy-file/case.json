@@ -1,0 +1,1 @@
+{"outcome": "clean", "cite": [".velvet-glove/post-tool-use.local.pkl"], "note": "Policy files amend Config.pkl, which exists only in the runner's staging directory, so pkl eval cannot resolve them and the spec excludes them. An excluded file is uncovered, which the deferred lane cannot assert, so only the immediate lane (expecting no output) runs.", "deferred": false}

@@ -1,4 +1,12 @@
 /// RuboCop — Ruby linter with auto-correct.
+///
+/// `--autocorrect` is rubocop's `-a` (safe autocorrections only); the
+/// unsafe/all mode is the separate `-A`/`--autocorrect-all` flag, which this
+/// spec never passes. Batch invocation is safe: multiple file arguments are
+/// each attributed correctly. An invalid `.rubocop.yml` raises
+/// `RuboCop::CLI::STATUS_ERROR` (exit 2), distinct from both `clean` and
+/// `issues` (verified against rubocop 1.91.0), so it is already classified as
+/// a failure by the default `unexpected` policy.
 
 module velvet_glove.builtins.tools.Rubocop
 

@@ -30,11 +30,12 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       writes = "target-files"
     }
+    // Not `--quiet`: before Ruff 0.16 it also hides the parse error that
+    // makes the check exit 2, and with it where the syntax error is.
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "format"
-        "--quiet"
         "--force-exclude"
         "--check"
         new Config.ExtraArgs {}

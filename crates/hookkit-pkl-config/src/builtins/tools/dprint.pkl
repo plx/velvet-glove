@@ -2,7 +2,10 @@
 ///
 /// dprint relies on a project-local `dprint.json` config to decide which
 /// plugins handle which extensions. The spec mirrors hk's broad glob and
-/// lets dprint decide what to actually format.
+/// lets dprint decide what to actually format. dprint finds its config from
+/// the working directory upward, so files run from their nearest
+/// `package.json` directory (a nested package's own `dprint.json` applies)
+/// and files outside every package from the project root.
 
 module velvet_glove.builtins.tools.Dprint
 
@@ -13,6 +16,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "dprint"
   executable = "dprint"
   installHint = "install dprint with `brew install dprint`"
+  workspaceIndicator = "package.json"
+  workspaceFallback = "project-root"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*"; "**/*" }

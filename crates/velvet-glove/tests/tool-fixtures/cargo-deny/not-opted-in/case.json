@@ -1,0 +1,1 @@
+{"outcome": "clean", "cite": ["Cargo.toml"], "note": "No deny.toml up to the project root, so the workspace indicator yields no cargo-deny job and the edited Cargo.toml is uncovered; the deferred lane requires an assessed file, so only the immediate lane (expecting no output) runs.", "deferred": false}

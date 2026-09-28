@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "abbort has two equally-confident corrections (abort, abbot), which codespell -w declines to write, leaving the file unchanged and still reporting the finding."}

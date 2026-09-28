@@ -1,7 +1,12 @@
-/// php-cs — PHP CodeSniffer (`phpcs`) style checker with `phpbcf` auto-fixer.
+/// php-cs — PHP CodeSniffer (`phpcs`) style checker with `phpcbf` auto-fixer.
 ///
-/// DRAFT: requires a PHP runtime and the PHP_CodeSniffer package; not
-/// verified against a fixture in this catalog.
+/// PHP_CodeSniffer 4.x (probed with 4.0.4) exits with a bitmask: 1 = fixable
+/// issues remain, 2 = non-fixable issues remain, 4 = phpcbf failed to fix a
+/// file, 16 = process error (unknown standard, bad arguments, missing file).
+/// A file with both kinds of violation makes `phpcs` exit 3, and `phpcbf`
+/// exits 2 when only non-fixable violations remain after fixing. 3.x (probed
+/// with 3.13.5) used 1 = non-fixable only, 2 = fixable present, 3 = process
+/// error, so on 3.x a process error is reported as an issue, not a failure.
 
 module velvet_glove.builtins.tools.PhpCs
 
@@ -28,7 +33,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1 }
+        issues = new Listing<Int> { 1; 2; 3; 4; 5; 6; 7 }
       }
       writes = "target-files"
     }
@@ -40,7 +45,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1; 2 }
+        issues = new Listing<Int> { 1; 2; 3 }
       }
     }
   }

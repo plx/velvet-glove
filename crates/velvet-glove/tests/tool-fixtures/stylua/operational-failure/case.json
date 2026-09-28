@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "An invalid stylua.toml makes both the format and --check phases exit 2 (a Lua parse error exits 2 as well), distinct from --check's exit 1 for unformatted code."}

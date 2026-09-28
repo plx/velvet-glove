@@ -1,0 +1,2 @@
+clean file
+no trailing space

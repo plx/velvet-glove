@@ -1,0 +1,1 @@
+{"outcome": "manual", "cite": ["example-openapi.yaml", "example-swagger.yaml"], "files": {"example-openapi.yaml": "clean", "example-swagger.yaml": "manual"}, "note": "vacuum lints multiple files in one invocation and prints a `> filename` header per file; this checks that a clean file among several cited files is not blamed for another file's issues."}

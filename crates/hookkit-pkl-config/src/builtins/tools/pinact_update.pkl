@@ -1,4 +1,10 @@
 /// pinact (update mode) — pin GitHub Actions and update to latest versions.
+///
+/// `--update` additionally bumps each action to its latest release, which is
+/// a more disruptive rewrite than plain pinning (it can pull in breaking
+/// changes). Like plain pinact, `--verify` requires GitHub API access on
+/// every run, including an already up-to-date "clean" file, and a bad `-c`
+/// config path shares pinact's exit 1 with a real pin/update issue.
 
 module velvet_glove.builtins.tools.PinactUpdate
 

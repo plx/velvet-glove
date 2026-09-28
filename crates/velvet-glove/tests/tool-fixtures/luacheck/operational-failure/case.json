@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "An unknown std in .luacheckrc is a critical error: luacheck exits 4, outside the spec's issue codes 1 (warnings) and 2 (syntax errors)."}

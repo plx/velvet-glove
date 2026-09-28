@@ -1,11 +1,11 @@
 /// no-commit-to-branch — block direct commits to protected branches.
 ///
-// DRAFT: this is fundamentally a *pre-commit* guard — it checks the result
-// of `git symbolic-ref HEAD` against a configured branch list and refuses
-// the commit. A post-tool-use hook is the wrong shape for it: we run after
-// every edit, we have no commit-stage context, and the check has nothing
-// to do with the file the agent just modified. Listed here for catalog
-// completeness; left as DRAFT.
+// NOT APPLICABLE to agent file hooks: this is fundamentally a *pre-commit*
+// guard (`hk util no-commit-to-branch`) — it checks the current branch
+// against a configured protected list and refuses the commit. A
+// post-tool-use hook fires after every edit, has no commit-stage context,
+// and the check has nothing to do with the file the agent just modified.
+// Listed here for catalog completeness; kept disabled.
 
 module velvet_glove.builtins.tools.NoCommitToBranch
 

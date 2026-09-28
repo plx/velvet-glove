@@ -4,6 +4,29 @@
 /// flags for clippy-driver (e.g. `-A unused_imports`) and apply identically to
 /// the fix and the verify pass. Verify puts `-D warnings` first so a later
 /// `-A <lint>` still silences that lint.
+///
+/// `--manifest-path <WorkspaceIndicator>` names the *member* package nearest
+/// the touched file (the runner groups touched files by their nearest
+/// `Cargo.toml`); neither phase adds `--workspace`, so cargo scopes the
+/// invocation to that one package instead of treating the flag as "the whole
+/// enclosing workspace". `--no-deps` keeps that scoping intact once cargo
+/// also has to build the package's own path dependencies: without it, a
+/// sibling workspace member's pre-existing, unrelated clippy debt (ordinary
+/// warnings, not fixed because it was never selected) gets re-linted as part
+/// of the touched package's own build and, under verify's `-D warnings`,
+/// turns those warnings into hard compile errors that fail the touched
+/// package's own check — the same cross-crate leak this scoping is meant to
+/// prevent, just surfacing as a false block instead of a silent rewrite (see
+/// the `sibling-untouched` fixture). `--no-deps` does not affect linting or
+/// fixing of the touched package's own code.
+///
+/// cargo exits 101 for every error it reports: a compile error in the code
+/// being edited, a denied lint, and a malformed `clippy.toml` or `Cargo.toml`
+/// alike. Both phases therefore classify 101 as `issues`, so a mid-edit
+/// compile error surfaces as a source issue rather than aborting `fix` as an
+/// operational failure (see the `compile-error` fixture); the diagnostics
+/// still show which kind of error it was. Other non-zero exits, such as
+/// rustup failing to resolve the toolchain (exit 1), remain `failure`.
 
 module velvet_glove.builtins.tools.CargoClippy
 
@@ -27,8 +50,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "clippy"
         "--manifest-path"
         new Config.WorkspaceIndicator {}
-        "--workspace"
         "--all-targets"
+        "--no-deps"
         "--fix"
         "--allow-dirty"
         "--allow-staged"
@@ -39,7 +62,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        failure = new Listing<Int> { 101 }
+        issues = new Listing<Int> { 101 }
         unexpected = "failure"
       }
       writes = "matching-globs"
@@ -50,8 +73,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "clippy"
         "--manifest-path"
         new Config.WorkspaceIndicator {}
-        "--workspace"
         "--all-targets"
+        "--no-deps"
         "--quiet"
         "--"
         "-D"

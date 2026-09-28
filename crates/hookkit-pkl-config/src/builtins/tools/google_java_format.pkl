@@ -1,5 +1,13 @@
 /// google-java-format — Google's Java code formatter.
-
+///
+/// Verified at 1.36.1: an unrecognized flag exits 2, a genuine operational
+/// signal. A source file google-java-format can't parse and formatting
+/// changes needed both exit 1 in verify; that pairing is a real ambiguity
+/// this spec can't resolve by exit code (an agent-edited file is normally
+/// syntactically valid, so this mainly affects the `operational-failure`
+/// fixture, which uses the distinguishable flag error instead). `--replace`
+/// itself only ever exits nonzero for that same parse failure, so the
+/// unclassified default (operational) is the right read for the fix phase.
 module velvet_glove.builtins.tools.GoogleJavaFormat
 
 import "../Config.pkl" as Config
@@ -24,6 +32,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
       }
       writes = "target-files"
     }
@@ -38,6 +47,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
       }
     }
   }

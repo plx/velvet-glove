@@ -1,4 +1,11 @@
 /// deno fmt — Deno's built-in formatter for JS/TS sources.
+///
+/// `deno fmt` exits 1 both for a plain formatting issue and for a file it
+/// cannot parse at all (or a broken `deno.json`), so an operational failure
+/// is not distinguishable from a source issue via exit code; no
+/// operational-failure fixture is provided (verified against deno 2.9.7).
+/// A batch that mixes a fixable and an unparseable file still formats the
+/// fixable one (see the `multi-file` fixture).
 
 module velvet_glove.builtins.tools.Deno
 

@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "terragrunt hcl fmt --check exits 1 for both a needs-formatting file and a parse error, and the formatter cannot parse this file: a syntax error in the edited file is the agent's to fix, so Stop blocks with the parser error (the failed remedy is also reported to the user)."}

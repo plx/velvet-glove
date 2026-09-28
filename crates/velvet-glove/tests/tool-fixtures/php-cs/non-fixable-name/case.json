@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "A fixable brace violation plus a non-fixable method name: phpcs 4.x exits 3 (both bitmask bits) and phpcbf exits 2 after fixing the brace; the old issue codes classified both as operational failures."}

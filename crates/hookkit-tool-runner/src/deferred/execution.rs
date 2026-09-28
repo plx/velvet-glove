@@ -1,4 +1,4 @@
-use super::attribution::{Attribution, attribute, resolution_bases};
+use super::attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 use super::{CheckOutcome, DeferredRunResult, OperationalProblem, ToolReport};
 use crate::{
     CheckScope, CommandPhase, PhaseLog, PhaseStatus, RenderedCommand, Snapshot, ToolContext,
@@ -34,6 +34,11 @@ impl ScheduledWorkflow {
         )
     }
 
+    /// The failFast scope: one workflow of one tool, across its jobs.
+    fn workflow_key(&self) -> (usize, usize) {
+        (self.tool_index, self.workflow_index)
+    }
+
     fn context(&self) -> ToolContext<'_> {
         ToolContext {
             spec: &self.spec,
@@ -64,6 +69,10 @@ struct WorkflowState {
     /// Outcome and combined output of the most recent check.
     last_check: Option<CheckOutcome>,
     last_output: String,
+    /// Candidates the most recent check named at a source location while
+    /// exiting with a failure code (a parser error), which made it an issues
+    /// result for exactly these files.
+    last_located: Vec<PathBuf>,
     /// Number of write impacts that the most recent check already observed.
     checked_at: usize,
     fix_attempted: bool,
@@ -71,6 +80,9 @@ struct WorkflowState {
     /// No authoritative result exists: a check failed, the remedy was
     /// skipped under failFast, or a check-less remedy failed.
     operational: bool,
+    /// A failed remedy whose problem is recorded once the final check is
+    /// known (see the report loop).
+    remedy_failure: Option<CommandFailure>,
 }
 
 #[derive(Debug)]
@@ -80,6 +92,7 @@ struct WriteImpact {
 }
 
 /// Why a command could not produce a usable result.
+#[derive(Debug)]
 struct CommandFailure {
     message: String,
     missing_tool: bool,
@@ -91,7 +104,8 @@ struct CommandFailure {
 /// check a remedy may have invalidated.
 ///
 /// With `fail_fast`, an operational failure stops later remedies of the same
-/// tool only; other tools still run their remedies.
+/// tool workflow only: other workflows of that tool (Ruff's lint when its
+/// format check cannot run) and other tools still run their remedies.
 pub(crate) fn execute_deferred_workflows(
     plan: &[ScheduledWorkflow],
     jobs_setting: u32,
@@ -102,7 +116,8 @@ pub(crate) fn execute_deferred_workflows(
         .map(|_| WorkflowState::default())
         .collect::<Vec<_>>();
     let mut impacts = Vec::<WriteImpact>::new();
-    let mut stopped_tools = BTreeSet::new();
+    // `(tool_index, workflow_index)` of workflows stopped under failFast.
+    let mut stopped = BTreeSet::new();
 
     let initial_indices = plan
         .iter()
@@ -120,7 +135,7 @@ pub(crate) fn execute_deferred_workflows(
         );
         states[index].initial_check = outcome;
         if outcome.is_none() && fail_fast {
-            stopped_tools.insert(plan[index].tool_index);
+            stopped.insert(plan[index].workflow_key());
         }
     }
 
@@ -142,7 +157,7 @@ pub(crate) fn execute_deferred_workflows(
             );
             if outcome.is_none() {
                 if fail_fast {
-                    stopped_tools.insert(scheduled.tool_index);
+                    stopped.insert(scheduled.workflow_key());
                 }
                 continue;
             }
@@ -157,15 +172,16 @@ pub(crate) fn execute_deferred_workflows(
         let Some(remedy) = scheduled.remedy.as_ref() else {
             continue;
         };
-        if stopped_tools.contains(&scheduled.tool_index) {
+        if stopped.contains(&scheduled.workflow_key()) {
             states[index].operational = true;
             record_problem(
                 &mut execution.result,
                 scheduled,
                 "remedy",
                 CommandFailure {
-                    message: "remedy skipped after an earlier failure of this tool under failFast"
-                        .into(),
+                    message:
+                        "remedy skipped after an earlier failure of this workflow under failFast"
+                            .into(),
                     missing_tool: false,
                 },
             );
@@ -198,16 +214,18 @@ pub(crate) fn execute_deferred_workflows(
             .logs
             .push(deferred_log(scheduled, CommandPhase::Remedy, log));
         if let Some(failure) = failed {
-            // A failed remedy is an operational problem, but the final check
-            // that follows still decides the files: a compiler error that
-            // makes `clippy --fix` fail must still block as a manual issue.
-            // Only a remedy without a check has no other verdict.
+            // The final check that follows still decides the files: a
+            // compiler error that makes `clippy --fix` fail must still block
+            // as a manual issue. Only a remedy without a check has no other
+            // verdict.
             if scheduled.check.is_none() {
                 states[index].operational = true;
+                record_problem(&mut execution.result, scheduled, "remedy", failure);
+            } else {
+                states[index].remedy_failure = Some(failure);
             }
-            record_problem(&mut execution.result, scheduled, "remedy", failure);
             if fail_fast {
-                stopped_tools.insert(scheduled.tool_index);
+                stopped.insert(scheduled.workflow_key());
             }
         }
     }
@@ -234,6 +252,12 @@ pub(crate) fn execute_deferred_workflows(
     }
 
     for (index, scheduled) in plan.iter().enumerate() {
+        // A remedy that failed on input its own final check blames on this
+        // run's files (typically a formatter that cannot parse a syntax
+        // error) is explained by those issues: the agent sees them, and the
+        // remedy log stays in the run bundle. Any other remedy failure (for
+        // example a broken tool config the check only names) is operational.
+        let remedy_failure = states[index].remedy_failure.take();
         let state = &states[index];
         // A user tool with only mutating phases (a formatter without a
         // verify phase) has no check to confirm its remedy, so the remedy's
@@ -260,6 +284,18 @@ pub(crate) fn execute_deferred_workflows(
         };
         report.normalize();
 
+        if report.final_check == Some(CheckOutcome::Issues) && !state.operational {
+            if state.last_located.is_empty() {
+                attribute_issues(&mut report, &state.last_output, scheduled);
+            } else {
+                report.issue_files = state.last_located.clone();
+            }
+        }
+        if let Some(failure) = remedy_failure {
+            if report.issue_files.is_empty() {
+                record_problem(&mut execution.result, scheduled, "remedy", failure);
+            }
+        }
         if state.operational {
             execution.result.reports.insert(report.id.clone(), report);
             continue;
@@ -280,9 +316,6 @@ pub(crate) fn execute_deferred_workflows(
             );
             execution.result.reports.insert(report.id.clone(), report);
             continue;
-        }
-        if report.final_check == Some(CheckOutcome::Issues) {
-            attribute_issues(&mut report, &state.last_output, scheduled);
         }
         execution.result.record_report(report);
     }
@@ -319,9 +352,23 @@ fn record_check(
     state: &mut WorkflowState,
     scheduled: &ScheduledWorkflow,
     phase: CommandPhase,
-    log: PhaseLog,
+    mut log: PhaseLog,
     checked_at: usize,
 ) -> Option<CheckOutcome> {
+    // A check that fails while naming a candidate at a source location
+    // (`x.py:3: error: invalid syntax`) found a source problem in it.
+    let scope = scheduled
+        .job
+        .files
+        .iter()
+        .chain(state.changed_files.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let bases = resolution_bases(&scheduled.job.workspace_dir, &scheduled.project_root);
+    state.last_located = source_failure_files(&log, &scope, &bases);
+    if !state.last_located.is_empty() {
+        log.classification = Some(PhaseStatus::Issues);
+    }
     let outcome = check_outcome(&log);
     state.checked_at = checked_at;
     match &outcome {

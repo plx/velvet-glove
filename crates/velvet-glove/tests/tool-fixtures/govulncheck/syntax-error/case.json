@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.go has a syntax error, so govulncheck can't load the package: it exits 1 (no network call is made), distinct from its clean (0) and issues (3) exit codes, and reports `example.go:5:1: expected operand`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

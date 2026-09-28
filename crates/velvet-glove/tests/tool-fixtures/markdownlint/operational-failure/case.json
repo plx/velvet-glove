@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "extraArgs point --config at malformed JSON, which markdownlint-cli exits 4 for (neither the tool's clean 0 nor issues 1)."}

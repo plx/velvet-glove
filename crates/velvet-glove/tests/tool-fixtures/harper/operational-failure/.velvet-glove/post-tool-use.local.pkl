@@ -1,0 +1,13 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["harper"] = (Builtins.harper) {
+    phases {
+      ["verify"] {
+        // Exercise harper-cli's clap argument-parse exit through a bad flag value.
+        extraArgs = new Listing<String> { "--format"; "bogus" }
+      }
+    }
+  }
+}

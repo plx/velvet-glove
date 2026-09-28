@@ -1,4 +1,14 @@
 /// Standard Ruby — opinionated RuboCop preset.
+///
+/// `--fix` is standardrb's safe autocorrect (it forwards to rubocop's `-a`).
+/// A Ruby syntax error is reported as a normal `Lint/Syntax` offense (exit 1),
+/// not silently ignored. Batch invocation attributes multiple files
+/// correctly. Limitation: unlike plain rubocop, standardrb's own CLI does not
+/// wrap `RuboCop::CLI#run`'s error handling, so an invalid `.standard.yml` (or
+/// a missing file) raises an uncaught exception that also exits 1 — the same
+/// code used for "issues found" (verified against standard 1.56.0). No
+/// `operational-failure` fixture case is included because no input reliably
+/// produces a distinguishable failure.
 
 module velvet_glove.builtins.tools.StandardRb
 

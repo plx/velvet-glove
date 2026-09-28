@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["check-added-large-files"] = (Builtins.checkAddedLargeFiles) {
+    phases {
+      ["verify"] {
+        // hk's default threshold is 500 KB; fixtures are capped at 64 KiB
+        // per file, so lower the threshold to exercise the "large" path
+        // with a small fixture file.
+        extraArgs = new Listing<String> { "--maxkb"; "1" }
+      }
+    }
+  }
+}

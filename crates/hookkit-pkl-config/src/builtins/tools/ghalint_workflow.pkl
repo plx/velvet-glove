@@ -1,4 +1,17 @@
 /// ghalint — GitHub Actions workflow linter (run mode; workspace-wide).
+///
+/// `ghalint run` takes no file arguments: it always relints every workflow
+/// under `.github/workflows` relative to cwd, so a single invocation covers
+/// the whole workspace regardless of which workflow file changed.
+/// `--log-color never` keeps ANSI escapes out of diagnostics piped to a
+/// non-TTY, which ghalint otherwise emits unconditionally. The
+/// deferred workflow is declared explicitly (rather than left to the
+/// phase-compatibility translation) so its check scope is "workspace" and
+/// not the translator's target-files default, which would under-invalidate
+/// a cached clean result after some *other* workflow file changed.
+/// Operational failures (e.g. an unreadable `-c` config) also exit 1, the
+/// same code as a policy violation; ghalint does not expose a distinct exit
+/// status for the two, so they are not separable here.
 
 module velvet_glove.builtins.tools.GhalintWorkflow
 
@@ -13,16 +26,36 @@ spec: Config.ToolSpec = new Config.ToolSpec {
 
   files = new Config.FileSelection {
     include = new Listing<String> {
-      "*.yml"; "*.yaml"
-      "**/*.yml"; "**/*.yaml"
+      ".github/workflows/*.yml"; ".github/workflows/*.yaml"
+      "**/.github/workflows/*.yml"; "**/.github/workflows/*.yaml"
     }
   }
+
+  workflows = new Mapping<String, Config.Workflow> {
+    ["verify"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "run"
+          "--log-color"; "never"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+        }
+      }
+      checkScope = "workspace"
+      invocation = "workspace"
+    }
+  }
+  workflowOrder = new Listing<String> { "verify" }
 
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "run"
+        "--log-color"; "never"
         new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {

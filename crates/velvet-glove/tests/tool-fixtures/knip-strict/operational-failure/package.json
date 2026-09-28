@@ -1,0 +1,6 @@
+{
+  "name": "knip-strict-fixture-operational-failure",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./example.ts"
+}

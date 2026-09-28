@@ -1,4 +1,10 @@
 /// vp fmt — Vite+ formatter (oxfmt-based).
+///
+/// `vp fmt` exits 2 when it cannot parse an input file, naming the file at a
+/// location, so the runners report the syntax error as an issue in it (see
+/// the `syntax-error` fixture). A broken `vite.config.ts` exits 1 like an
+/// ordinary issue, so that config failure is reported as an issue rather
+/// than an operational failure (verified against vp 0.3.3).
 
 module velvet_glove.builtins.tools.VpFmt
 

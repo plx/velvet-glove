@@ -204,7 +204,12 @@ fn actionlint_builtin_classifies_findings_and_operational_failures() {
     assert_eq!(actionlint.executable, "actionlint");
     assert_eq!(
         actionlint.files.include,
-        vec!["*.yml", "*.yaml", "**/*.yml", "**/*.yaml"]
+        vec![
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml",
+            "**/.github/workflows/*.yml",
+            "**/.github/workflows/*.yaml"
+        ]
     );
     assert_eq!(actionlint.phase_order, vec!["verify"]);
 
@@ -339,10 +344,18 @@ fn eslint_builtin_matches_rust_spec() {
         vec![
             "*.js".to_string(),
             "**/*.js".into(),
+            "*.mjs".into(),
+            "**/*.mjs".into(),
+            "*.cjs".into(),
+            "**/*.cjs".into(),
             "*.jsx".into(),
             "**/*.jsx".into(),
             "*.ts".into(),
             "**/*.ts".into(),
+            "*.mts".into(),
+            "**/*.mts".into(),
+            "*.cts".into(),
+            "**/*.cts".into(),
             "*.tsx".into(),
             "**/*.tsx".into(),
         ],
@@ -423,7 +436,6 @@ fn cargo_fmt_builtin_uses_workspace_indicator() {
         format,
         vec![
             literal("fmt"),
-            literal("--all"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
             token(ArgToken::ExtraArgs),
@@ -438,7 +450,6 @@ fn cargo_fmt_builtin_uses_workspace_indicator() {
         verify,
         vec![
             literal("fmt"),
-            literal("--all"),
             literal("--check"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
@@ -470,8 +481,8 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("clippy"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
-            literal("--workspace"),
             literal("--all-targets"),
+            literal("--no-deps"),
             literal("--fix"),
             literal("--allow-dirty"),
             literal("--allow-staged"),
@@ -481,7 +492,11 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             token(ArgToken::ExtraArgs),
         ],
     );
-    assert_exit_codes(&fix.exit_codes, &[0], &[], &[101]);
+    // cargo/rustc use exit 101 as a generic failure code for compile errors,
+    // lint violations, and malformed config alike, so the fix phase treats
+    // it as an issue (like verify) rather than an operational failure — see
+    // the spec comment in cargo_clippy.pkl.
+    assert_exit_codes(&fix.exit_codes, &[0], &[101], &[]);
     assert_eq!(fix.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
     assert_eq!(fix.writes, WriteBehavior::MatchingGlobs);
 
@@ -493,8 +508,8 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("clippy"),
             literal("--manifest-path"),
             token(ArgToken::WorkspaceIndicator),
-            literal("--workspace"),
             literal("--all-targets"),
+            literal("--no-deps"),
             literal("--quiet"),
             literal("--"),
             literal("-D"),
@@ -647,6 +662,8 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     );
 
     let yq = spec(&specs, "yq");
+    // Batched `yq -iP a.yaml b.yaml` rewrites a.yaml with both documents.
+    assert_eq!(yq.phase_invocation, InvocationGranularity::PerFile);
     let yq = yq.workflows.get("format").expect("yq workflow");
     let yq_check = yq.check.as_ref().expect("yq check");
     assert_eq!(yq_check.program.as_deref(), Some("sh"));

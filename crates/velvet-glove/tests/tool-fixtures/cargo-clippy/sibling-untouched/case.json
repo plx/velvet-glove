@@ -1,0 +1,5 @@
+{
+  "outcome": "clean",
+  "cite": ["app/src/lib.rs"],
+  "note": "app depends on lib; lib has ordinary, pre-existing, machine-fixable clippy debt (useless_vec) the agent never touched, and the workspace builds. The invocation scoped to app must not lint, fix, or fail on lib's debt via the dependency edge: app is reported clean and lib stays byte-for-byte unchanged."
+}

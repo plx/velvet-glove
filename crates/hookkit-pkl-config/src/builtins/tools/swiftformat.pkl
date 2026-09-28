@@ -1,0 +1,60 @@
+/// SwiftFormat (nicklockwood) — community Swift formatter and linter.
+///
+/// Shares the `swift-format` detect role with Apple's `swift-format`: at
+/// most one is suggested for a project, preferring whichever config file
+/// (`.swiftformat` here, `.swift-format` for Apple's) is actually present.
+///
+/// Verified at 0.63.0: exit codes are clean, well-documented, and fully
+/// distinguish clean (0), issues (1, from `--lint`) and every operational
+/// failure this spec triggers — unknown flag, missing input file, and a
+/// malformed `.swiftformat` config — which all exit 70. Unparseable Swift
+/// source also exits 70, so it reads as operational rather than as an issue.
+module velvet_glove.builtins.tools.SwiftformatNicklockwood
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "swiftformat"
+  displayName = "SwiftFormat"
+  executable = "swiftformat"
+  installHint = "install SwiftFormat with `brew install swiftformat`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.swift"; "**/*.swift" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 70 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--lint"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 70 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".swiftformat" }
+    role = "swift-format"
+    note = "preferred over swift-format only when `.swiftformat` is present"
+  }
+}

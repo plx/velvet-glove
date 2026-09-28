@@ -1,0 +1,1 @@
+{"outcome": "operational", "deferred": false, "note": "nixfmt --check exits 1 for both unformatted and unparseable input, so the Stop check reads a parse error as manual before the failing remedy is reported; only the immediate lane, where the format phase runs first, classifies it cleanly."}

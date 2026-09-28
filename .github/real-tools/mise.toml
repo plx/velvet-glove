@@ -1,12 +1,43 @@
 # CI-only tool installation. Prefixes float to the latest patch on each run.
 # Pkl is the runner's required configuration runtime, not a floating test tool.
+#
+# This is the CORE tier of the "Real-tool fixtures" lane: tools with simple,
+# prebuilt aqua/mise-registry binaries (or that are subcommands of a
+# toolchain already declared here) that install and pass reliably on both
+# ubuntu-latest and macos-latest. Every tool in this file is REQUIRED (see
+# VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS below): a broken install or a fixture
+# failure here fails the job.
+#
+# See .github/real-tools/broad/mise.toml for the BROAD tier: npm, pipx, gem,
+# cargo and go-install backends, extra language runtimes, and tools that are
+# newer or less battle-tested. It installs best-effort and is never
+# REQUIRED, so one flaky install there cannot fail this job.
 [tools]
 pkl = "0.31.1"
 rust = { version = "prefix:1.97", profile = "minimal", components = ["rustfmt", "clippy"] }
-go = "prefix:1.26"
+go = "prefix:1.27"
 actionlint = "prefix:1.7"
 jq = "prefix:1.8"
+ruff = "latest"
+shellcheck = "latest"
+shfmt = "latest"
+yq = "latest"
+taplo = "prefix:0.10"
+hadolint = "latest"
+gofumpt = "latest"
+golangci-lint = "latest"
+staticcheck = "latest"
+typos = "latest"
+stylua = "latest"
+buf = "latest"
+terraform = "latest"
 
-[env]
-VELVET_GLOVE_FIXTURE_TOOLS = "cargo-fmt,cargo-clippy,actionlint,jq,go-fmt"
-VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS = "all"
+# `rust` backs four fixture IDs (cargo-check, cargo-clippy, cargo-fmt,
+# rustfmt); `go` backs three (go-fmt, go-vet, gomod-tidy); `buf` backs two
+# (buf-format, buf-lint); `taplo` backs two (taplo, taplo-format); `pkl`
+# backs two (pkl, pkl-format).
+#
+# Fixture selection and VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS are computed by
+# the workflow's "Select fixture tools" step, not declared here: a couple
+# of these fixture IDs need an OS-conditional exclusion (documented there)
+# that a single checked-in [env] value can't express.

@@ -1,1 +1,4 @@
-{"outcome": "manual"}
+{
+  "outcome": "manual",
+  "note": "ryl enables no rules without a config; `.yamllint` here is a real project config ryl discovers and reuses (it also reads its own .ryl.toml/ryl.toml)"
+}

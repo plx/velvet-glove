@@ -1,4 +1,9 @@
 /// zizmor — GitHub Actions static analysis / security linter.
+///
+/// zizmor only collects workflows, action definitions and Dependabot config;
+/// fed any other YAML file it collects zero inputs and exits 3 ("no inputs
+/// collected"), a spurious operational failure. The glob is scoped to the
+/// file shapes zizmor actually audits.
 
 module velvet_glove.builtins.tools.Zizmor
 
@@ -12,8 +17,11 @@ spec: Config.ToolSpec = new Config.ToolSpec {
 
   files = new Config.FileSelection {
     include = new Listing<String> {
-      "*.yml"; "*.yaml"
-      "**/*.yml"; "**/*.yaml"
+      ".github/workflows/*.yml"; ".github/workflows/*.yaml"
+      "**/.github/workflows/*.yml"; "**/.github/workflows/*.yaml"
+      "action.yml"; "action.yaml"
+      "**/action.yml"; "**/action.yaml"
+      ".github/dependabot.yml"; ".github/dependabot.yaml"
     }
   }
 

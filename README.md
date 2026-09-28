@@ -57,7 +57,9 @@ therefore pinned to Git commit
    `env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_PLUGIN_DATA` if that happens.)
 
 3. **Write, check, and try the project policy.** Nothing runs until a policy
-   lists tools.
+   lists tools. Run your project's own install step first (`uv sync`,
+   `npm install`, …) so `init` finds project-local tools and the version your
+   project pins, not just whatever else is on `PATH`.
 
    ```sh
    cd your-project
@@ -67,13 +69,22 @@ therefore pinned to Git commit
    ```
 
    `init` enables a builtin when the project has files it handles, its
-   executable resolves (in `node_modules/.bin`, `.venv/bin`, or on `PATH`),
-   and the project's config files point at it, or it is the standard choice
-   (such as Ruff for Python). Commit the policy; keep personal tweaks in
+   executable resolves (in `node_modules/.bin`, `.venv/bin`, or on `PATH`,
+   searched from the tool's own matching files' directory, so a nested
+   `frontend/` workspace's tools are found too), and the project's config
+   files point at it, or it is the standard choice (such as Ruff for Python).
+   Commit the policy; keep personal tweaks in
    `.velvet-glove/post-tool-use.local.pkl` and add that to `.gitignore`.
    `velvet-glove check [FILES...]` applies fixes, prints a verdict per file,
    and exits 0 (clean or auto-fixed), 1 (manual fixes needed), or 2 (a tool
-   could not run, or the policy is broken).
+   could not run, or the policy is broken). In a monorepo, tools resolve per
+   workspace; run `velvet-glove doctor` to see where each one actually
+   resolved.
+
+   The first `check` (or Stop) on a codebase nobody has run a formatter over
+   yet can reformat broadly: with no config, a formatter uses its own
+   defaults across every matching file, not just the lines an agent touched.
+   Expect a large first diff, then small, incremental ones after.
 
 ## What the agent and the user see
 
@@ -82,16 +93,23 @@ At Stop, in the default deferred mode:
 | Result | Agent | User |
 | --- | --- | --- |
 | Clean | nothing | nothing |
-| Auto-fixed only | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` | the same line |
-| Manual fixes needed | Stop is blocked; the reason lists each tool's files with a bounded, ANSI-free, project-relative excerpt of its final check output | file count, files, and the run's log directory |
+| Auto-fixed only | nothing | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` |
+| Manual fixes needed | Stop is blocked; the reason starts with the auto-fix line (if any) and lists each tool's files with a bounded, ANSI-free, project-relative excerpt of its final check output | the auto-fix line (if any), file count, files, and the run's log directory |
 | Tool missing, crashed, or timed out; broken policy | nothing | one line with the tool, reason, and install hint or log path |
 | Issues only in files not changed this turn | nothing | a one-line "not blocking" note |
 
 Stop never blocks twice in a row on the same issues: when the agent's retry
 leaves them unchanged (or after three consecutive blocks), the user gets a
-note instead and the files stay queued for the next turn. Codex has no
-agent channel on an allowed Stop, so there the auto-fix line reaches only
-the user.
+note instead and the files stay queued for the next turn. An allowed Stop
+tells the agent nothing about auto-fixes: any context there costs a model
+turn spent acknowledging it, and Claude Code already tells the agent when a
+file it read changed on disk. (`deferredReporting.autoFixed.agent` restores
+the agent copy.)
+
+Claude Code shows a legitimate "Manual fixes needed" block as a
+`Stop hook error occurred · ctrl+o to see` toast. That is Claude Code's own
+generic label for any non-empty Stop decision, not a crash; ctrl+o (or the
+run directory `doctor`/the block message names) shows the actual reason.
 
 In immediate mode the same contract applies per tool call, except that
 nothing blocks: remaining issues reach the agent as context

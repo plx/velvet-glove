@@ -1,1 +1,1 @@
-{"outcome": "auto-fixed"}
+{"outcome": "manual", "note": "oxlint tags the double-comparisons rewrite as a behavior-changing suggestion, so plain --fix leaves it for a manual fix."}

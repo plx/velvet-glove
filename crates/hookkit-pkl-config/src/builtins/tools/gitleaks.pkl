@@ -1,4 +1,17 @@
 /// gitleaks — secret scanner for source trees.
+///
+/// Verified with gitleaks 8.30.1: `dir` only documents (and only correctly
+/// handles) a single `[path]` argument. Given two or more positional paths it
+/// silently falls back to scanning the whole working directory instead of
+/// just the requested files, so the `multi-file` fixture's untouched secret
+/// is reported although it was never passed. `phaseInvocation = "per-file"`
+/// keeps every invocation to exactly one path. Its default
+/// exit code for "leaks found" (1) also collides with genuine operational
+/// failures (missing path, unreadable config), which also exit 1, so
+/// `--exit-code 2` reassigns the leaks-found exit code and leaves 1
+/// exclusively for operational failure (the `operational-failure` fixture's
+/// missing `--config` exits 1). `--log-level error` drops the timestamped
+/// info/warn chrome so diagnostics hold only findings and fatal errors.
 
 module velvet_glove.builtins.tools.Gitleaks
 
@@ -14,6 +27,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> { "*"; "**/*" }
   }
+  // `gitleaks dir` only supports one path; see header comment.
+  phaseInvocation = "per-file"
 
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
@@ -26,12 +41,19 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--verbose"
         "--no-color"
         "--no-banner"
+        // Free up exit 1 for operational failures; see header comment.
+        "--exit-code"
+        "2"
+        // Keep diagnostics to findings and fatal errors.
+        "--log-level"
+        "error"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1 }
+        issues = new Listing<Int> { 2 }
+        failure = new Listing<Int> { 1 }
       }
     }
   }

@@ -1,0 +1,67 @@
+/// cue fmt — CUE's bundled formatter.
+///
+/// `--files` treats arguments as file paths instead of import paths.
+/// `cue fmt --files --check` exits 1 both for an unformatted file and for a
+/// syntax error, so the check's exit code alone can't tell them apart. The
+/// mutating `format` phase can: it exits 1 only when parsing fails, and it
+/// declares just `clean = 0`, so that 1 falls through to the default
+/// `unexpected = "failure"`. The immediate runner runs `format` before
+/// `verify`; the deferred flow runs `format` as the remedy for the check's
+/// "issues" verdict. Either way a broken file ends as an operational
+/// failure, not a source issue. A batch `cue fmt` call stops at the first
+/// unparseable file, leaving later files unformatted, and exits 1 for the
+/// whole batch, so per-file invocation isolates a broken file from its
+/// siblings.
+
+module velvet_glove.builtins.tools.CueFmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "cue-fmt"
+  displayName = "cue fmt"
+  executable = "cue"
+  installHint = "install the CUE CLI with `brew install cue-lang/tap/cue`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.cue"; "**/*.cue" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        "--files"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        "--files"
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "cue.mod/module.cue" }
+    role = "cue-format"
+    default = true
+  }
+}

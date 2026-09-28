@@ -30,7 +30,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       "*.yaml"; "**/*.yaml"
       "*.yml"; "**/*.yml"
       "*.markdown"; "**/*.markdown"
-      "*.markdown.mdx"; "**/*.markdown.mdx"
+      "*.mdx"; "**/*.mdx"
       "*.md"; "**/*.md"
       "*.graphql"; "**/*.graphql"
       "*.handlebars"; "**/*.handlebars"

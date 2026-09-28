@@ -48,10 +48,11 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       invocation = "batch"
     }
     ["format"] = new Config.Workflow {
+      // Not `--quiet`: before Ruff 0.16 it also hides the parse error that
+      // makes the check exit 2, and with it where the syntax error is.
       check = new Config.WorkflowCommand {
         argv = new Listing<String | Config.ArgToken> {
           "format"
-          "--quiet"
           "--force-exclude"
           "--check"
           new Config.ExtraArgs {}

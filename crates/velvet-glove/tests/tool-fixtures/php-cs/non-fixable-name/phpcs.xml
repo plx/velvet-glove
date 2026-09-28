@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<ruleset name="velvet-glove-fixture">
+    <description>Minimal PSR12 ruleset for the php-cs fixture.</description>
+    <rule ref="PSR12"/>
+</ruleset>

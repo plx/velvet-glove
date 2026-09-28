@@ -1,0 +1,1 @@
+{"outcome": "manual", "cite": ["module/main.tf"], "files": {"module/main.tf": "manual"}, "note": "tflint only inspects its working directory unless run with --recursive; citing a file in a child module demonstrates the fix scans the whole tree instead of missing it."}

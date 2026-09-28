@@ -1,4 +1,10 @@
 /// ty — fast Python type checker from Astral.
+///
+/// Validated empirically: no cache directory or other side-effect files are
+/// written (unlike mypy), and batch invocation checks all cited files
+/// together. Like mypy, without a project config pointing at the right
+/// interpreter/venv, third-party imports outside the standard library may
+/// report as missing, matching what running ty directly would show.
 
 module velvet_glove.builtins.tools.Ty
 

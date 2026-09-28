@@ -1,0 +1,1 @@
+{"outcome": "manual", "cite": ["a.erb", "b.erb"], "files": {"a.erb": "auto-fixed", "b.erb": "manual"}}

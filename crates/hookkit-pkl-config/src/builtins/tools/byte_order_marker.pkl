@@ -1,12 +1,11 @@
-/// byte-order-marker — strip UTF-8 BOM (`U+FEFF`) from text files.
+/// byte-order-marker — strip a UTF-8 BOM (`U+FEFF`) from text files.
 ///
-// DRAFT: hk wraps this behind `hk util check-byte-order-marker` and
-// `hk util fix-byte-order-marker`, both implemented inside the hk binary
-// using random-access byte I/O. There is no portable single-executable
-// command to detect-and-strip a BOM across all the platforms we care about
-// (`sed`/`awk` get awkward fast; `perl -CSD -pe ...` is best but assumes
-// Perl with the right Unicode flags). Left as DRAFT until we ship a
-// hookkit-native helper or settle on a sed/perl invocation.
+/// Backed by hk's (jdx/hk) `hk util check-byte-order-marker` /
+/// `hk util fix-byte-order-marker`. `check` never mutates; `fix` exits 0
+/// and only rewrites files that actually had a BOM. `check` treats a
+/// missing path as clean (exit 0) while `fix` exits 1 on it, which the fix
+/// phase classifies as an operational failure, never an issue; a malformed
+/// invocation (bad flag) exits 2.
 
 module velvet_glove.builtins.tools.ByteOrderMarker
 
@@ -15,14 +14,45 @@ import "../Config.pkl" as Config
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "byte-order-marker"
   displayName = "byte-order-marker"
-  executable = "perl"
-  installHint = "perl ships with macOS and most Linux distributions"
-  enabled = false
+  executable = "hk"
+  installHint = "install hk, e.g. `brew install hk` or `mise use -g hk`"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "**/*" }
   }
 
-  phases = new Mapping<String, Config.Phase> {}
-  phaseOrder = new Listing<String> {}
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "util"
+        "fix-byte-order-marker"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "util"
+        "check-byte-order-marker"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    note = "opt-in only: pre-commit-style hygiene fixer for every edited file"
+  }
 }

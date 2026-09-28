@@ -1,0 +1,57 @@
+/// cargo-deny — Rust dependency linter (licenses, bans, advisories, sources).
+///
+/// The advisories check fetches the RustSec advisory database, so this tool
+/// needs network access (or a warm cache). It is opt-in twice over: `init`
+/// only suggests it when `deny.toml` exists, and `workspaceIndicator` means a
+/// project without a `deny.toml` (up to the project root) gets no job at all.
+/// `check` runs from the directory holding that `deny.toml`. `--locked` keeps
+/// `cargo metadata` from rewriting Cargo.lock.
+///
+/// The exit code is a bitmask of the failed checks: advisories 1, bans 2,
+/// licenses 4, sources 8 (so 1-15 are all findings). A malformed `deny.toml`,
+/// a stale Cargo.lock, a failed advisory fetch and a usage error also exit 1
+/// or 2, indistinguishable from findings, so they surface as issues too; the
+/// diagnostics say which it was.
+
+module velvet_glove.builtins.tools.CargoDeny
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "cargo-deny"
+  displayName = "cargo deny"
+  executable = "cargo-deny"
+  installHint = "install cargo-deny with `cargo install --locked cargo-deny`"
+  workspaceIndicator = "deny.toml"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "Cargo.toml"; "**/Cargo.toml"
+      "Cargo.lock"; "**/Cargo.lock"
+      "deny.toml"; "**/deny.toml"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--locked"
+        "--workspace"
+        "check"
+        new Config.ExtraArgs {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1; 2; 3; 4; 5; 6; 7; 8; 9; 10; 11; 12; 13; 14; 15 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "**/deny.toml" }
+    note = "config-only: fetches the RustSec advisory database over the network"
+  }
+}

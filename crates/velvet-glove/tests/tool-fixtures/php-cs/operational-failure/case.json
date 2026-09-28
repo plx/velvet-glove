@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "phpcs.xml references a standard that is not installed: PHP_CodeSniffer 4.x exits 16 (process error) from both phpcs and phpcbf."}
