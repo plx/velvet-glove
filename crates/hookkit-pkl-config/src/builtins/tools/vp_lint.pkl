@@ -1,12 +1,11 @@
 /// vp lint — Vite+ linter (oxlint-based).
 ///
 /// Like oxlint, `vp lint --fix` no longer rewrites the `double-comparisons`
-/// rule (`x === y || x < y`) on current vite-plus, so that fixture case
-/// expects a manual fix rather than an autofix. A file `vp lint` cannot
-/// parse is also reported at the same exit code (1) as an ordinary lint
-/// violation, so an operational failure is not distinguishable from a source
-/// issue via exit code; no operational-failure fixture is provided (verified
-/// against vp 0.3.3 / oxlint-based lint).
+/// rule (`x === y || x < y`), so that fixture case expects a manual fix; the
+/// `useless-escape` case demonstrates a real autofix. A file `vp lint` cannot
+/// parse, and a broken `vite.config.ts`, both exit 1 like an ordinary lint
+/// violation, so no operational-failure fixture is provided (verified
+/// against vp 0.3.3).
 
 module velvet_glove.builtins.tools.VpLint
 
