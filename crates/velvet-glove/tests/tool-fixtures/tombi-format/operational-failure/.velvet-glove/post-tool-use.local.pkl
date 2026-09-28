@@ -1,0 +1,11 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["tombi-format"] = (Builtins.tombiFormat) {
+    // An unrecognized flag on every command: tombi exits 2 (usage error),
+    // which neither phase maps, so it is an operational failure. Tool-level
+    // extraArgs also reach the deferred check, which runs verify first.
+    extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+  }
+}

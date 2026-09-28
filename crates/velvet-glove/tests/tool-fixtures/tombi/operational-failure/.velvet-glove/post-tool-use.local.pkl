@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["tombi"] = (Builtins.tombi) {
+    phases {
+      ["verify"] {
+        // Exercise tombi's own usage-error exit (2) through an unrecognized
+        // flag — genuinely operational, distinguishable from a lint issue
+        // (exit 1).
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}

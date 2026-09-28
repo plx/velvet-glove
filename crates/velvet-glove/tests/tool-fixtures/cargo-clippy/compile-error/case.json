@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "A mid-edit type error: cargo exits 101 from the fix phase, which must surface as a source issue, not an operational failure."}

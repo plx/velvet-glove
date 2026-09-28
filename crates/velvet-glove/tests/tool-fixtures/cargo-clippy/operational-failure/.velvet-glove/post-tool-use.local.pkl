@@ -1,0 +1,11 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["cargo-clippy"] = (Builtins.cargoClippy) {
+    // A toolchain that is not installed: the rustup proxy exits 1 before
+    // cargo runs, an environment problem rather than a source issue. cargo
+    // itself reports every error, including a bad clippy.toml, as 101.
+    env { ["RUSTUP_TOOLCHAIN"] = "velvet-glove-missing-toolchain" }
+  }
+}

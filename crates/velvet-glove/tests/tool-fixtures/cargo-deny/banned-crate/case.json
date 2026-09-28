@@ -1,0 +1,1 @@
+{"outcome": "manual", "cite": ["deny.toml"], "note": "The edited deny.toml bans a crate in the graph. cargo-deny exits with a bitmask of failed checks (advisories 1, bans 2, licenses 4, sources 8), so a ban alone exits 2."}

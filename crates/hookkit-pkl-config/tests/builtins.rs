@@ -494,7 +494,11 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             token(ArgToken::ExtraArgs),
         ],
     );
-    assert_exit_codes(&fix.exit_codes, &[0], &[], &[101]);
+    // cargo/rustc use exit 101 as a generic failure code for compile errors,
+    // lint violations, and malformed config alike, so the fix phase treats
+    // it as an issue (like verify) rather than an operational failure — see
+    // the spec comment in cargo_clippy.pkl.
+    assert_exit_codes(&fix.exit_codes, &[0], &[101], &[]);
     assert_eq!(fix.exit_codes.unexpected, UnexpectedExitPolicy::Failure);
     assert_eq!(fix.writes, WriteBehavior::MatchingGlobs);
 

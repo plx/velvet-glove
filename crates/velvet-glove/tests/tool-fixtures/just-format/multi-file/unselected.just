@@ -1,0 +1,2 @@
+unselected:
+   echo "sentinel"
