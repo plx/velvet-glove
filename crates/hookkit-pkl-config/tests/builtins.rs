@@ -505,14 +505,36 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
     assert_exit_codes(&verify.exit_codes, &[0], &[101], &[]);
     assert_eq!(verify.writes, WriteBehavior::None);
 
+    // Immediate agent feedback quotes a bounded excerpt of the check output
+    // (the default templates) instead of pointing at a diagnostics file.
     assert_eq!(
         clippy.messages.issues_agent,
-        "cargo clippy reports issues; inspect diagnostics at {{ diagnostics_path }}."
+        hookkit_pkl_config::schema::default_issues_agent()
     );
     assert_eq!(
         clippy.messages.issues_changed_agent,
-        "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
+        hookkit_pkl_config::schema::default_issues_changed_agent()
     );
+}
+
+#[test]
+fn builtin_agent_messages_never_point_the_agent_at_diagnostics_files() {
+    if !pkl_available() {
+        eprintln!("skipping test: pkl binary not on PATH");
+        return;
+    }
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    for (name, spec) in &specs {
+        for template in [
+            &spec.messages.issues_agent,
+            &spec.messages.issues_changed_agent,
+        ] {
+            assert!(
+                template.contains("{{ excerpt }}") && !template.contains("diagnostics_path"),
+                "{name}: agent issue templates must quote the excerpt: {template}"
+            );
+        }
+    }
 }
 
 #[test]

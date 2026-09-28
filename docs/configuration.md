@@ -257,16 +257,26 @@ confirm its fixes.
 ## Immediate hook output
 
 `post-tool-immediate` runs the tools whose globs match the files a tool call
-changed. Calls that change no files, such as reads and searches, return at
-once without evaluating any policy.
+changed. Calls that change no files, such as reads and searches, and calls
+that touch only Git-ignored files return at once without evaluating any
+policy.
 
 | Outcome | Agent (`additionalContext`) | User (`systemMessage`) |
 | --- | --- | --- |
 | Clean | nothing | nothing |
 | Auto-fixed | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` | the same line |
-| Issues remain | the tool's `messages.issuesAgent` / `issuesChangedAgent` text, with a diagnostics path | `Ruff: issues remain in src/a.py; diagnostics: <path>` |
+| Issues remain | `velvet-glove: Ruff reports issues in src/a.py:` plus a bounded excerpt of the deciding check's output | `Ruff: issues remain in src/a.py; diagnostics: <path>` |
 | Tool missing, crashed, timed out | nothing | one line with the install hint or diagnostics path |
 | Policy error | nothing | the itemised load error |
+
+The excerpt is the output of the verify phase that found the issues (or, for
+a tool without one, of the phases that did), with ANSI escapes removed and
+project paths made relative. All tools in one call share the
+`deferredReporting.excerptMaxLines`/`excerptMaxChars` budget; a cut excerpt
+ends with `…truncated; full log: <path>`. The texts come from the tool's
+`messages.issuesAgent` / `issuesChangedAgent` templates, which receive
+`excerpt` alongside `tool`, `changed_files`, `issue_files`, and the
+`diagnostics_*` paths.
 
 Clean output is `{}` with empty stderr. Full command output goes only to the
 diagnostics file. Immediate mode never fails the hook or feeds an error back

@@ -53,8 +53,8 @@ use std::time::Duration;
 
 const DEFAULT_CLEAN_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.";
 const DEFAULT_ISSUES_AGENT: &str =
-    "{{ tool }} reports issues; inspect diagnostics at {{ diagnostics_path }}.";
-const DEFAULT_ISSUES_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}.";
+    "velvet-glove: {{ tool }} reports issues in {{ issue_files | join(\", \") }}:\n{{ excerpt }}";
+const DEFAULT_ISSUES_CHANGED_AGENT: &str = "velvet-glove: {{ tool }} changed {{ changed_files | join(\", \") }} (re-read before editing); issues remain in {{ issue_files | join(\", \") }}:\n{{ excerpt }}";
 
 const BATCHED_TOOLS_FAMILY: &str = "velvet-glove.batched-tools";
 
@@ -1926,7 +1926,7 @@ fn run_post_tool_input(
 
     // Most tool calls (Read, Grep, ...) touch no files: skip every other cost,
     // including Pkl evaluation, for them.
-    let candidates = discover_modified_files(&post_tool, ctx)
+    let mut candidates = discover_modified_files(&post_tool, ctx)
         .into_iter()
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
@@ -1943,6 +1943,17 @@ fn run_post_tool_input(
         .first()
         .map(|root| PathBuf::from(root.as_str()))
         .ok_or_else(|| invalid_data("post-tool-use input has no workspace root".into()))?;
+    // As at Stop, build outputs and other Git-ignored paths are never lint
+    // candidates; a call that touched only those costs no Pkl evaluation.
+    let ignored = vcs::git_ignored_paths(&normalize_path(&cwd), &candidates);
+    candidates.retain(|path| !ignored.contains(path));
+    if candidates.is_empty() {
+        return lower_domain_outcome(
+            harness,
+            RunnerDomainOutcome::Clean,
+            lowering_warning_artifact.as_ref(),
+        );
+    }
     let loaded = match hookkit_pkl_config::discover_and_load(&cwd, config_path) {
         Ok(loaded) => loaded,
         // A broken policy is an operational problem: tell the user, never the
@@ -1967,7 +1978,11 @@ fn run_post_tool_input(
     let fail_fast = loaded.config.settings.fail_fast;
     let continue_after_issues = loaded.config.settings.continue_after_issues;
 
-    let mut output = RunnerPostToolUseOutput::new(lowering);
+    let mut output =
+        RunnerPostToolUseOutput::new(lowering).with_excerpt_budget(ExcerptBudget::new(
+            &loaded.config.settings.deferred_reporting,
+            display_roots(&project_root, &loaded.project_root),
+        ));
     let mut had_hard_failure = false;
     let mut had_harness_block_message: Option<String> = None;
 
@@ -2059,6 +2074,37 @@ pub struct RunnerPostToolUseOutput {
     auto_fixed: Vec<AutoFixed>,
     harness_block: Option<String>,
     lowering: pkl::LoweringPolicy,
+    excerpt_budget: ExcerptBudget,
+}
+
+/// Agent excerpt budget shared by every tool in one immediate run, plus the
+/// absolute prefixes that excerpts rewrite to project-relative paths. The
+/// limits are the deferred reporter's (`deferredReporting.excerptMax*`).
+#[derive(Debug, Default)]
+struct ExcerptBudget {
+    lines: usize,
+    chars: usize,
+    roots: Vec<PathBuf>,
+}
+
+impl ExcerptBudget {
+    fn new(reporting: &pkl::DeferredReporting, roots: Vec<PathBuf>) -> Self {
+        Self {
+            lines: reporting.excerpt_max_lines as usize,
+            chars: reporting.excerpt_max_chars as usize,
+            roots,
+        }
+    }
+
+    /// A bounded, ANSI-free, project-relative excerpt of `output`, charged
+    /// against the remaining budget. A cut excerpt points at `log`.
+    fn take(&mut self, output: &str, log: &Path) -> String {
+        let roots = self.roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let clipped = excerpt::clip(&excerpt::normalize(output, &roots), self.lines, self.chars);
+        self.lines = self.lines.saturating_sub(clipped.text.lines().count());
+        self.chars = self.chars.saturating_sub(clipped.text.chars().count());
+        excerpt::with_log_note(&clipped, Some(&log.to_string_lossy()))
+    }
 }
 
 /// Files one tool changed and left clean.
@@ -2136,6 +2182,11 @@ impl RunnerPostToolUseOutput {
 
     fn with_auto_fixed(mut self, auto_fixed: AutoFixed) -> Self {
         self.auto_fixed.push(auto_fixed);
+        self
+    }
+
+    fn with_excerpt_budget(mut self, budget: ExcerptBudget) -> Self {
+        self.excerpt_budget = budget;
         self
     }
 }
@@ -2884,6 +2935,10 @@ struct CompletedToolOutcome {
     issues: IssueState,
     changes: ChangeState,
     diagnostics: String,
+    /// Raw output of the phases that decided `issues`: the verifiers that
+    /// reported issues or, for a tool without a verifier, every phase that
+    /// did. Empty when the outcome is clean.
+    issue_output: String,
     files: Vec<PathBuf>,
 }
 
@@ -2985,6 +3040,8 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     let mut logs = Vec::new();
     let mut saw_issues = false;
     let mut verify_state = None;
+    let mut verifier_issue_output = Vec::new();
+    let mut phase_issue_output = Vec::new();
 
     for phase in &context.spec.phases {
         if !phase.enabled {
@@ -3024,8 +3081,10 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
             }
             Some(PhaseStatus::Issues) => {
                 saw_issues = true;
+                phase_issue_output.push(combined_output(&log));
                 if phase.is_verifier() {
                     verify_state = Some(IssueState::Issues);
+                    verifier_issue_output.push(combined_output(&log));
                 }
             }
             Some(PhaseStatus::Failure) | None => {
@@ -3051,6 +3110,11 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     } else {
         IssueState::Clean
     });
+    let issue_output = match (issues, verify_state) {
+        (IssueState::Clean, _) => Vec::new(),
+        (IssueState::Issues, Some(_)) => verifier_issue_output,
+        (IssueState::Issues, None) => phase_issue_output,
+    };
     let changes = if changed_files.is_empty() {
         ChangeState::Unchanged
     } else {
@@ -3063,6 +3127,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
         issues,
         changes,
         diagnostics: format_logs(&logs),
+        issue_output: issue_output.join("\n"),
         files: job.files.clone(),
     })
 }
@@ -3447,6 +3512,7 @@ fn accumulate_outcomes(
     let mut changed_files = BTreeSet::new();
     let mut issue_files = BTreeSet::new();
     let mut issue_diagnostics = Vec::new();
+    let mut issue_outputs = Vec::new();
     let mut failure_diagnostics = Vec::new();
     let mut unavailable = Vec::new();
 
@@ -3459,6 +3525,9 @@ fn accumulate_outcomes(
                 if completed.issues == IssueState::Issues {
                     issue_files.extend(completed.files);
                     issue_diagnostics.push(completed.diagnostics);
+                    if !issue_outputs.contains(&completed.issue_output) {
+                        issue_outputs.push(completed.issue_output);
+                    }
                 }
             }
             ToolRunOutcome::ToolUnavailable {
@@ -3561,6 +3630,9 @@ fn accumulate_outcomes(
             .collect::<Vec<_>>()
             .join("\n\n");
         let artifact = write_diagnostics("tool-issues", &diagnostics, context, ctx)?;
+        let excerpt = output
+            .excerpt_budget
+            .take(&issue_outputs.join("\n"), &artifact);
         *output = std::mem::take(output)
             .with_user_notice(UserNotice::warning(format!(
                 "{}: issues remain in {}; diagnostics: {}",
@@ -3587,6 +3659,7 @@ fn accumulate_outcomes(
             &issue_paths,
             Some(&artifact),
             None,
+            &excerpt,
         )?;
         *output = std::mem::take(output).with_agent_feedback(rendered);
     } else if !changed_paths.is_empty() {
@@ -3595,8 +3668,15 @@ fn accumulate_outcomes(
         let template = &context.spec.messages.clean_changed_agent;
         let in_agent_line = template == DEFAULT_CLEAN_CHANGED_AGENT;
         if !in_agent_line {
-            let rendered =
-                render_template(template, context, &changed_paths, &issue_paths, None, None)?;
+            let rendered = render_template(
+                template,
+                context,
+                &changed_paths,
+                &issue_paths,
+                None,
+                None,
+                "",
+            )?;
             *output = std::mem::take(output).with_agent_feedback(rendered);
         }
         *output = std::mem::take(output).with_auto_fixed(AutoFixed {
@@ -3624,6 +3704,7 @@ fn render_unavailable_message(
             &[],
             None,
             Some((phase, executable, install_hint)),
+            "",
         );
     }
 
@@ -3651,6 +3732,7 @@ fn render_failed_message(
             &[],
             Some(diagnostics_path),
             Some((phase, "", None)),
+            "",
         );
     }
 
@@ -3669,6 +3751,7 @@ fn render_template(
     issue_files: &[String],
     diagnostics_path: Option<&Path>,
     phase_error: Option<(&str, &str, Option<&str>)>,
+    excerpt: &str,
 ) -> hookkit_core::Result<String> {
     let diagnostics_path_text = diagnostics_path
         .map(|path| path.to_string_lossy().to_string())
@@ -3691,6 +3774,7 @@ fn render_template(
         "phase": phase,
         "executable": executable,
         "install_hint": install_hint.unwrap_or(""),
+        "excerpt": excerpt,
     });
 
     Environment::new()
@@ -3868,6 +3952,35 @@ mod tests {
         ] {
             assert!(!matcher.matches(&root.join(excluded), root), "{excluded}");
         }
+    }
+
+    #[test]
+    fn immediate_excerpts_are_plain_project_relative_and_share_one_budget() {
+        let reporting = pkl::DeferredReporting {
+            excerpt_max_lines: 3,
+            ..Default::default()
+        };
+        let mut budget = ExcerptBudget::new(
+            &reporting,
+            display_roots(Path::new("/private/repo"), Path::new("/repo")),
+        );
+        let log = Path::new("/tmp/vg/issues.txt");
+        assert_eq!(
+            budget.take(
+                "\u{1b}[31m/private/repo/src/a.py:1:1\u{1b}[0m: E1\n/repo/src/a.py:2:1: E2\n",
+                log
+            ),
+            "src/a.py:1:1: E1\nsrc/a.py:2:1: E2"
+        );
+        // One line of the shared budget is left for the next tool.
+        assert_eq!(
+            budget.take("b.py:1: E3\nb.py:2: E4", log),
+            "b.py:1: E3\n…truncated; full log: /tmp/vg/issues.txt"
+        );
+        assert_eq!(
+            budget.take("c.py:1: E5", log),
+            "(output omitted; full log: /tmp/vg/issues.txt)"
+        );
     }
 
     fn emitted_json(output: PostToolUseOutput) -> (serde_json::Value, Vec<u8>) {

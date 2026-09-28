@@ -32,11 +32,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   }
   phaseOrder = new Listing<String> { "verify" }
 
-  messages = new Config.Messages {
-    issuesAgent =
-      "gosec reports security issues; inspect diagnostics at {{ diagnostics_path }}."
-  }
-
   detect = new Config.Detect {
     note = "opt-in only: noisy security findings"
   }

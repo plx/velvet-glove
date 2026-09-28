@@ -917,12 +917,14 @@ pub fn default_clean_changed_agent() -> String {
     "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.".into()
 }
 
-/// Returns the default agent template for a result with remaining issues.
+/// Returns the default agent template for a result with remaining issues:
+/// the files plus a bounded excerpt of the deciding check's output.
 pub fn default_issues_agent() -> String {
-    "{{ tool }} reports issues; inspect diagnostics at {{ diagnostics_path }}.".into()
+    "velvet-glove: {{ tool }} reports issues in {{ issue_files | join(\", \") }}:\n{{ excerpt }}"
+        .into()
 }
 
 /// Returns the default agent template for changed files with remaining issues.
 pub fn default_issues_changed_agent() -> String {
-    "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}.".into()
+    "velvet-glove: {{ tool }} changed {{ changed_files | join(\", \") }} (re-read before editing); issues remain in {{ issue_files | join(\", \") }}:\n{{ excerpt }}".into()
 }

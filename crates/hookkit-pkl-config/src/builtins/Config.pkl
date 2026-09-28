@@ -170,13 +170,18 @@ class Diagnostics {
   directory: String?
 }
 
+/// Immediate-mode (post-tool-immediate) agent templates. Besides `tool`,
+/// `changed_files`, `issue_files`, and the `diagnostics_*` paths, the issues
+/// templates receive `excerpt`: a bounded, ANSI-free, project-relative excerpt
+/// of the deciding check's output (capped by
+/// `settings.deferredReporting.excerptMaxLines`/`excerptMaxChars`).
 class Messages {
   cleanChangedAgent: String =
     "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further."
   issuesAgent: String =
-    "{{ tool }} reports issues; inspect diagnostics at {{ diagnostics_path }}."
+    "velvet-glove: {{ tool }} reports issues in {{ issue_files | join(\", \") }}:\n{{ excerpt }}"
   issuesChangedAgent: String =
-    "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
+    "velvet-glove: {{ tool }} changed {{ changed_files | join(\", \") }} (re-read before editing); issues remain in {{ issue_files | join(\", \") }}:\n{{ excerpt }}"
   unavailableUser: String?
   failedUser: String?
 }

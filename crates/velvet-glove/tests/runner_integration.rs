@@ -2850,6 +2850,106 @@ fn post_tool_use_manual_issues_write_diagnostics_and_render_template() {
     assert!(diagnostics.contains("F821 undefined name manual_issue"));
 }
 
+/// The Ruff builtin on `fake_ruff` with default messages and diagnostics
+/// location; `settings` is inserted verbatim inside `settings { ... }`.
+fn write_default_ruff_config(project: &Path, fake_ruff: &Path, settings: &str) {
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let escaped = fake_ruff.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {{ {settings} }}
+tools {{ ["ruff"] = (Builtins.ruff) {{ executable = "{escaped}" }} }}
+run {{ "ruff" }}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn post_tool_use_manual_issues_quote_a_bounded_project_relative_excerpt() {
+    require_pkl!();
+    let project = temp_project("ruff-excerpt");
+    let fake_ruff = write_fake_ruff(&project);
+    write_default_ruff_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/broken.py"), "print(manual_issue)\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/broken.py"),
+        &["--claude"],
+    );
+
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    // Only the verify phase decides, so the fix phase's copy is not quoted.
+    assert_eq!(
+        context,
+        "velvet-glove: Ruff reports issues in src/broken.py:\nsrc/broken.py:1:1: F821 undefined name manual_issue"
+    );
+    assert!(user.contains("Ruff: issues remain in src/broken.py; diagnostics: "));
+
+    // A cut excerpt stays within the configured budget and points at the log.
+    let bounded = temp_project("ruff-excerpt-bounded");
+    let fake_ruff = write_fake_ruff(&bounded);
+    write_default_ruff_config(
+        &bounded,
+        &fake_ruff,
+        "deferredReporting { excerptMaxChars = 300 }",
+    );
+    std::fs::create_dir_all(bounded.join("src")).unwrap();
+    std::fs::write(
+        bounded.join("src/big.py"),
+        "print(manual_issue)  # large_diagnostic\n",
+    )
+    .unwrap();
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("codex", &bounded, "src/big.py"),
+        &["--codex"],
+    );
+    let (json, _) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.chars().count() < 800, "{context}");
+    assert!(
+        context.contains("\n…truncated; full log: ")
+            && context.contains("velvet-glove/state/post-tool-immediate"),
+        "{context}"
+    );
+}
+
+#[test]
+fn post_tool_use_skips_git_ignored_files() {
+    require_pkl!();
+    let project = temp_project("ruff-git-ignored");
+    let fake_ruff = write_fake_ruff(&project);
+    write_default_ruff_config(&project, &fake_ruff, "");
+    run_git(&project, &["init", "-q"]);
+    std::fs::write(project.join(".gitignore"), "dist/\n").unwrap();
+    std::fs::create_dir_all(project.join("dist")).unwrap();
+    std::fs::write(project.join("dist/generated.py"), "print(manual_issue)\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "dist/generated.py"),
+        &["--claude"],
+    );
+
+    let (json, user) = immediate_response(&output);
+    assert_eq!(json, serde_json::json!({}));
+    assert!(user.is_empty());
+}
+
 #[test]
 fn post_tool_use_can_pass_phase_extra_args_for_unfixable_rules() {
     require_pkl!();
