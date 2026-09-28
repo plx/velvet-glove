@@ -1,0 +1,65 @@
+/// Ormolu — a Haskell formatter.
+///
+/// Ormolu has real per-mode exit codes: `--mode check` exits 0 clean, 100
+/// unformatted (a diff on stdout), 3 a parse error; `--mode inplace` exits
+/// 0 on success and 102 on a parse error. Both modes accept several files
+/// and keep going after a parse error, still writing the files that did
+/// parse — but the process exit code reflects only the last file's outcome,
+/// so a batch invocation containing a broken file could misreport an
+/// earlier fixed file. Per-file invocation keeps each file's classification
+/// independent. Not the only Haskell formatter (fourmolu, brittany, and
+/// stylish-haskell are common alternatives), so it has no project-wide
+/// config file to detect and is not a role default.
+
+module velvet_glove.builtins.tools.Ormolu
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "ormolu"
+  displayName = "Ormolu"
+  executable = "ormolu"
+  installHint = "install ormolu with `brew install ormolu`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.hs"; "**/*.hs" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "--mode"
+        "inplace"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 102 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--mode"
+        "check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 100 }
+        failure = new Listing<Int> { 3 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "haskell-format"
+    note = "opt-in only: no config file of its own, and not the only Haskell formatter"
+  }
+}
