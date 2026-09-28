@@ -49,8 +49,9 @@ pub fn validate_builtin_catalog(
 /// Validate the tools a resolved configuration will run: every `run` entry
 /// must name a defined tool, and each enabled tool must pass the builtin
 /// catalog's structural rules. The one exception is a tool whose phases only
-/// mutate (an hk-style formatter): immediate mode runs it as written, so it
-/// is accepted without an `unverifiedRemedyFallback`.
+/// mutate (an hk-style formatter): immediate mode runs it as written and the
+/// deferred runner reports its fixes as unverified auto-fixes, so it is
+/// accepted without an `unverifiedRemedyFallback`.
 pub fn validate_run_config(config: &RunnerConfig) -> Result<(), CatalogValidationError> {
     let mut errors = Vec::new();
     let mut selected = BTreeMap::new();

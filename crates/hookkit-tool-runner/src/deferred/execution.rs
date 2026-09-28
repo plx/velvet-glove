@@ -227,20 +227,11 @@ pub(crate) fn execute_deferred_workflows(
 
     for (index, scheduled) in plan.iter().enumerate() {
         let state = &states[index];
-        if scheduled.check.is_none() {
-            record_problem(
-                &mut execution.result,
-                scheduled,
-                "final-check",
-                CommandFailure {
-                    message:
-                        "legacy mutating-only workflow has no authoritative non-mutating check"
-                            .into(),
-                    missing_tool: false,
-                },
-            );
-        }
-        let operational = state.operational || scheduled.check.is_none();
+        // A user tool with only mutating phases (a formatter without a
+        // verify phase) has no check to confirm its remedy, so the remedy's
+        // own success is the verdict: files it changed are auto-fixed
+        // (unverified) and the rest clean. It can never block.
+        let remedy_only = scheduled.check.is_none();
 
         let mut report = ToolReport {
             id: scheduled.report_id(),
@@ -256,12 +247,17 @@ pub(crate) fn execute_deferred_workflows(
             conservative_attribution: false,
             issue_files: Vec::new(),
             out_of_scope_files: Vec::new(),
+            unverified: remedy_only,
             artifact_ids: Vec::new(),
         };
         report.normalize();
 
-        if operational {
+        if state.operational {
             execution.result.reports.insert(report.id.clone(), report);
+            continue;
+        }
+        if remedy_only {
+            execution.result.record_report(report);
             continue;
         }
         if report.final_check.is_none() {

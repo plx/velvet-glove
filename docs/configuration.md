@@ -252,7 +252,11 @@ run { "kdlfmt" }
 
 The deferred hook translates these phases into a workflow. Give a tool a
 verify phase (or explicit `workflows` with a `check`) so the deferred hook can
-confirm its fixes.
+confirm its fixes. A formatter defined with only mutating phases still works
+at Stop: its fix runs on the changed files, files it rewrites are reported as
+auto-fixed without a confirming check (`"unverified": true` on the report in
+`summary.json`), and it never blocks. Only a failing fix command is an
+operational problem. (Built-in specs must have a check.)
 
 ## Immediate hook output
 

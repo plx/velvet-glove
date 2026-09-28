@@ -1296,6 +1296,75 @@ fn turn_completion_operational_errors_notify_the_user_without_blocking() {
 }
 
 #[test]
+fn turn_completion_formatter_only_tools_report_unverified_auto_fixes() {
+    require_pkl!();
+    let project = temp_project("turn-completion-formatter-only");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let formatter = write_executable(
+        &project,
+        "upcase-fmt",
+        "#!/bin/sh\nfor f in \"$@\"; do tr a-z A-Z < \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"; done\n",
+    );
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{ fileActivity {{ filesystemMtime = false }} }}
+tools {{
+  ["upcase"] = new ToolSpec {{
+    id = "upcase"
+    displayName = "Upcase"
+    executable = "{}"
+    files {{ include {{ "**/*.txt" }} }}
+    phases {{
+      ["format"] = new Phase {{ mode = "format"; argv {{ new Files {{}} }}; writes = "target-files" }}
+    }}
+  }}
+}}
+run {{ "upcase" }}
+"#,
+            formatter.display()
+        ),
+    )
+    .unwrap();
+    let dirty = project.join("notes.txt");
+    let clean = project.join("CLEAN.txt");
+    std::fs::write(&dirty, "hello\n").unwrap();
+    std::fs::write(&clean, "ALREADY\n").unwrap();
+    seed_pending_file(&state_dir, "claude", &dirty);
+    seed_pending_file(&state_dir, "claude", &clean);
+
+    let output = run_deferred_case("claude", &project, &state_arg);
+
+    assert!(output.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(response.get("decision").is_none(), "{response}");
+    assert_eq!(
+        response["systemMessage"],
+        "velvet-glove auto-fixed notes.txt (Upcase); re-read before editing."
+    );
+    assert_eq!(std::fs::read_to_string(&dirty).unwrap(), "HELLO\n");
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["status"], "clean");
+    assert_eq!(summary["counts"]["operationalErrors"], 0);
+    assert_eq!(summary["counts"]["autoFixed"], 1);
+    assert_eq!(summary["counts"]["clean"], 1);
+    let reports = summary["result"]["reports"].as_object().unwrap();
+    assert!(reports.values().all(|report| report["unverified"] == true));
+
+    // Nothing is retained, so the next Stop is a silent no-op.
+    let again = run_deferred_case("claude", &project, &state_arg);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&again.stdout).unwrap(),
+        serde_json::json!({})
+    );
+}
+
+#[test]
 fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
     require_pkl!();
 

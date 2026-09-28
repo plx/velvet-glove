@@ -719,19 +719,43 @@ fn failed_remedy_keeps_changed_files_and_operational_problem() {
 }
 
 #[test]
-fn legacy_mutating_only_workflow_is_operationally_unverifiable() {
-    let fixture = Fixture::new("missing-final-check");
-    let file = fixture.file("file.rs", "DIRTY\n");
-    let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("fix"));
+fn formatter_only_workflow_reports_unverified_auto_fixes_and_never_blocks() {
+    let fixture = Fixture::new("formatter-only");
+    let dirty = fixture.file("dirty.rs", "DIRTY\n");
+    let clean = fixture.file("clean.rs", "CLEAN\n");
+    let mut scheduled = scheduled_with_scope(
+        &fixture,
+        0,
+        vec![dirty.clone(), clean.clone()],
+        "check",
+        Some("fix"),
+        CheckScope::TargetFiles,
+        false,
+    );
     scheduled.check = None;
     scheduled.compatibility_translation = true;
     let execution = execute_deferred_workflows(&[scheduled], 1, true);
-    assert!(execution.result.files.is_empty());
-    assert!(execution.result.has_operational_problems());
+    assert!(!execution.result.has_operational_problems());
+    assert!(!execution.result.has_manual_fixes());
+    assert_eq!(only_status(&execution, &dirty), Some(FileStatus::AutoFixed));
+    assert_eq!(only_status(&execution, &clean), Some(FileStatus::Clean));
     let report = execution.result.reports.values().next().expect("report");
-    assert!(report.fix_attempted);
-    assert_eq!(report.changed_files, vec![file]);
+    assert!(report.fix_attempted && report.unverified);
+    assert_eq!(report.changed_files, vec![dirty]);
     assert!(report.final_check.is_none());
+    assert_eq!(fixture.trace_lines(), vec!["fix"], "no check exists to run");
+}
+
+#[test]
+fn failing_formatter_only_remedy_is_still_operational() {
+    let fixture = Fixture::new("formatter-only-failure");
+    let file = fixture.file("file.rs", "DIRTY\n");
+    let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("crash"));
+    scheduled.check = None;
+    scheduled.compatibility_translation = true;
+    let execution = execute_deferred_workflows(&[scheduled], 1, true);
+    assert!(execution.result.has_operational_problems());
+    assert!(execution.result.files.is_empty());
 }
 
 #[test]

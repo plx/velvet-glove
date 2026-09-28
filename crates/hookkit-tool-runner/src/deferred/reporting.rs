@@ -617,6 +617,7 @@ mod tests {
             conservative_attribution: false,
             issue_files: files.iter().map(PathBuf::from).collect(),
             out_of_scope_files: Vec::new(),
+            unverified: false,
             artifact_ids: vec![format!("{id}-final-check")],
         }
     }

@@ -2592,9 +2592,9 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
 
     // Compatibility translation for the existing immediate-runner phase
     // shape. Every mutator becomes a separate deferred workflow paired with
-    // the last enabled verifier. Mutating-only tools remain explicitly marked
-    // and are rejected as operationally unverifiable after one compatibility
-    // remedy pass; Item 8 migrates all builtins away from that fallback.
+    // the last enabled verifier. A tool with no verifier (a user-defined
+    // formatter) gets check-less workflows whose remedy result is reported
+    // as an unverified auto-fix; builtin validation forbids that shape.
     let verifier = phases
         .iter()
         .rev()
