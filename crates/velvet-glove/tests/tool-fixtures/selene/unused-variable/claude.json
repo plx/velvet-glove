@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"Selene reports issues; inspect diagnostics at <workspace>/.velvet-glove/selene-agent-hook/test-session_selene-tool-issues.txt.","hookEventName":"PostToolUse"}}
+{"hookSpecificOutput":{"additionalContext":"Selene reports issues; inspect diagnostics at <workspace>/.velvet-glove/selene-agent-hook/test-session_selene-tool_selene-tool-issues.txt.","hookEventName":"PostToolUse"}}

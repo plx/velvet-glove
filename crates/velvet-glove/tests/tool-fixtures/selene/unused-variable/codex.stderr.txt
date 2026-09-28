@@ -1,4 +1,4 @@
-warning: Selene: issues remain; diagnostics: <workspace>/.velvet-glove/selene-agent-hook/test-session_selene-tool-issues.txt
+warning: Selene: issues remain; diagnostics: <workspace>/.velvet-glove/selene-agent-hook/test-session_test-turn_selene-tool_selene-tool-issues.txt
 Selene diagnostics:
 [verify] command: selene <workspace>/example.lua
 status: Some(1)
@@ -14,8 +14,5 @@ Results:
 0 errors
 1 warnings
 0 parse errors
-artifact: <workspace>/.velvet-glove/selene-agent-hook/test-session_selene-tool-issues.txt (text/plain)
-project-relative artifact: .velvet-glove/selene-agent-hook/test-session_selene-tool-issues.txt
-summary: Selene diagnostics
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
+artifact: <workspace>/.velvet-glove/selene-agent-hook/test-session_test-turn_selene-tool_selene-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
