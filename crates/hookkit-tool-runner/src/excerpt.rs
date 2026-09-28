@@ -111,7 +111,8 @@ const MAX_LINE_CHARS: usize = 400;
 /// excerpt: each later exact copy of a line is dropped, and the first copy
 /// keeps its place with `(repeated N times)` appended, N counting every
 /// copy. Lines without a letter or digit (blank lines, code-frame gutters
-/// and carets) are structure rather than noise and are all kept.
+/// and carets) are structure rather than noise: they are kept, except right
+/// after a dropped copy, whose code frame they belong to.
 pub(crate) fn collapse_repeats(text: &str) -> String {
     let substantive = |line: &str| line.chars().any(char::is_alphanumeric);
     let mut counts = HashMap::<&str, usize>::new();
@@ -120,14 +121,20 @@ pub(crate) fn collapse_repeats(text: &str) -> String {
     }
     let mut seen = HashSet::new();
     let mut out = Vec::new();
+    let mut after_dropped = false;
     for line in text.lines() {
         match counts.get(line) {
             Some(&count) if count > 1 => {
-                if seen.insert(line) {
+                after_dropped = !seen.insert(line);
+                if !after_dropped {
                     out.push(format!("{line} (repeated {count} times)"));
                 }
             }
-            _ => out.push(line.to_owned()),
+            None if after_dropped => {}
+            _ => {
+                after_dropped = false;
+                out.push(line.to_owned());
+            }
         }
     }
     out.join("\n")
@@ -329,7 +336,13 @@ mod tests {
         let frames = "E1 a.py:1:8\n  |\n1 | import os\n  |\nE2 a.py:2:8\n  |\n1 | import os\n  |";
         assert_eq!(
             collapse_repeats(frames),
-            "E1 a.py:1:8\n  |\n1 | import os (repeated 2 times)\n  |\nE2 a.py:2:8\n  |\n  |"
+            "E1 a.py:1:8\n  |\n1 | import os (repeated 2 times)\n  |\nE2 a.py:2:8\n  |"
+        );
+        // A whole diagnostic printed twice keeps only its first frame.
+        let twice = "error: unclosed\n --> a.rs:2:5\n  |\n2 | f(\n  |  ^\n\nerror: unclosed\n --> a.rs:2:5\n  |\n2 | f(\n  |  ^\n";
+        assert_eq!(
+            collapse_repeats(twice),
+            "error: unclosed (repeated 2 times)\n --> a.rs:2:5 (repeated 2 times)\n  |\n2 | f( (repeated 2 times)\n  |  ^\n"
         );
         // Within the budget nothing is collapsed, so both frames stay whole.
         assert_eq!(
