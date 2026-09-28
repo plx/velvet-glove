@@ -199,6 +199,35 @@ settings {
 }
 
 #[test]
+fn file_activity_pkl_defaults_match_the_runtime_defaults() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+settings { fileActivity = new FileActivity { maxEntries = 10 } }
+"#,
+    )
+    .expect("file activity settings");
+    let activity = config.settings.file_activity.expect("file activity");
+    let defaults = hookkit_pkl_config::schema::FileActivitySettings::default();
+    assert_eq!(
+        activity.ignored_directory_names,
+        defaults.ignored_directory_names
+    );
+    // Every tool cache is both pruned from scans and excluded from tools.
+    let excludes = hookkit_pkl_config::schema::default_excludes();
+    for cache in hookkit_pkl_config::schema::TOOL_CACHE_DIRECTORIES {
+        assert!(
+            activity
+                .ignored_directory_names
+                .iter()
+                .any(|name| name == cache)
+        );
+        assert!(excludes.contains(&format!("**/{cache}/**")), "{cache}");
+    }
+}
+
+#[test]
 fn deferred_workflow_schema_round_trips_structured_commands() {
     require_pkl!();
     let config = evaluate_pkl_source(

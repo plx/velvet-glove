@@ -2,7 +2,7 @@
 //! resolution, project file listing, glob matching, and the Pkl version check.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use hookkit_pkl_config::schema::{FileSelection, ToolSpec};
+use hookkit_pkl_config::schema::{FileSelection, TOOL_CACHE_DIRECTORIES, ToolSpec};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,7 +18,8 @@ const MAX_PROJECT_FILES: usize = 100_000;
 const OTHER_PROJECT_BIN_DIRS: &[&str] =
     &["node_modules/.bin", ".venv/bin", "venv/bin", "vendor/bin"];
 
-/// Directories never worth scanning when `git ls-files` is unavailable.
+/// Directories never worth scanning when `git ls-files` is unavailable, in
+/// addition to the tool caches in [`TOOL_CACHE_DIRECTORIES`].
 const WALK_SKIP_DIRS: &[&str] = &[
     ".git",
     ".hg",
@@ -242,9 +243,10 @@ fn walk_files(root: &Path) -> Vec<String> {
         .filter_entry(|entry| {
             let name = entry.file_name().to_string_lossy();
             let relative = relative_slash_path(entry.path(), root);
+            let skipped = WALK_SKIP_DIRS.contains(&name.as_ref())
+                || TOOL_CACHE_DIRECTORIES.contains(&name.as_ref());
             entry.depth() == 0
-                || !(entry.file_type().is_dir() && WALK_SKIP_DIRS.contains(&name.as_ref())
-                    || ignored.is_match(&relative))
+                || !(entry.file_type().is_dir() && skipped || ignored.is_match(&relative))
         })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())

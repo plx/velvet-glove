@@ -3949,6 +3949,9 @@ mod tests {
             "pkg/__pycache__/x.py",
             "crates/a/target/x.py",
             ".git/hooks/x.py",
+            ".ruff_cache/0.16.6/x.py",
+            "svc/.tox/py312/lib/x.py",
+            "app/.next/server/x.py",
         ] {
             assert!(!matcher.matches(&root.join(excluded), root), "{excluded}");
         }

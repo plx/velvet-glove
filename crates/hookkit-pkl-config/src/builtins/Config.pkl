@@ -21,7 +21,8 @@ class Settings {
   /// Global file exclusions applied before per-tool selection. Patterns are
   /// matched against project-relative paths and APPEND to the inherited list,
   /// which starts from the defaults (`**/.git/**`, `**/node_modules/**`,
-  /// `**/.venv/**`, `**/__pycache__/**`, `**/target/**`). Set
+  /// `**/.venv/**`, `**/__pycache__/**`, `**/target/**`, and tool caches such
+  /// as `**/.ruff_cache/**`; see docs/configuration.md). Set
   /// `merge.resetExclude = true` to replace the list instead.
   exclude: Listing<String>?
 
@@ -111,6 +112,9 @@ class FileActivity {
   /// stop solely for coverage. Strict also asks the harness to continue.
   coverageGapPolicy: "best-effort" | "strict" = "best-effort"
 
+  /// Directory basenames pruned from scans: VCS metadata, dependency trees,
+  /// build output, and tool caches (mirrors the Rust defaults; see
+  /// docs/configuration.md). Setting it replaces the whole list.
   ignoredDirectoryNames: Listing<String> = new Listing<String> {
     ".context"
     ".git"
@@ -118,6 +122,17 @@ class FileActivity {
     ".svn"
     "node_modules"
     "target"
+    ".venv"
+    "__pycache__"
+    ".ruff_cache"
+    ".mypy_cache"
+    ".pytest_cache"
+    ".tox"
+    ".nox"
+    ".gradle"
+    ".build"
+    ".next"
+    ".turbo"
   }
 }
 

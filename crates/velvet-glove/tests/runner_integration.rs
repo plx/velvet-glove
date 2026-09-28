@@ -1755,6 +1755,12 @@ fn turn_completion_mtime_fallback_finds_files_without_tool_observations() {
     std::fs::create_dir_all(project.join("src")).unwrap();
     let file = project.join("src/unobserved.py");
     std::fs::write(&file, "import os  # unused_import\nprint('needs_format')\n").unwrap();
+    // Tool caches written in the same window are pruned from the scan.
+    for cache in [".ruff_cache/0.16.6/abc", "src/.mypy_cache/3.12/x.json"] {
+        let path = project.join(cache);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "cache\n").unwrap();
+    }
 
     let stopped = run_example(
         "turn-completion",
@@ -1765,6 +1771,19 @@ fn turn_completion_mtime_fallback_finds_files_without_tool_observations() {
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
+    let summary = only_summary(&state_dir);
+    let candidates = summary["candidateFiles"].as_array().unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|path| path.as_str().unwrap().ends_with("src/unobserved.py"))
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|path| !path.as_str().unwrap().contains("_cache/")),
+        "{candidates:?}"
+    );
     assert_eq!(
         session_journal_len(&state_dir, "claude-code", "claude-ruff-test"),
         0

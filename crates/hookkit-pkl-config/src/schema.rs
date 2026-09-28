@@ -108,6 +108,31 @@ impl Default for Settings {
     }
 }
 
+/// Tool caches and build output that tools regenerate and nobody edits by
+/// hand. They are excluded from tool selection by default and pruned from
+/// file-activity scans, which matters outside Git repositories (inside one,
+/// Git-ignored candidates are dropped anyway) and for scan cost:
+///
+/// - `.ruff_cache`, `.mypy_cache`, `.pytest_cache`: caches Ruff, mypy, and
+///   pytest rewrite on every run, so without pruning a Stop that ran Ruff
+///   finds "new" files there on the next Stop;
+/// - `.tox`, `.nox`: tox/nox virtual environments, whole package trees;
+/// - `.gradle`: Gradle's per-project cache (build logic lives in
+///   `build.gradle*` and `gradle/`, which stay included);
+/// - `.build`: SwiftPM's build directory, including dependency checkouts;
+/// - `.next`, `.turbo`: Next.js build output and the Turborepo cache.
+pub const TOOL_CACHE_DIRECTORIES: &[&str] = &[
+    ".ruff_cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".nox",
+    ".gradle",
+    ".build",
+    ".next",
+    ".turbo",
+];
+
 /// Global exclusions that apply unless a layer sets `merge.resetExclude`.
 ///
 /// Every pattern is unanchored so nested copies are excluded too:
@@ -116,16 +141,33 @@ impl Default for Settings {
 /// - `**/node_modules/**`: installed JavaScript dependencies;
 /// - `**/.venv/**`: the conventional Python virtual environment;
 /// - `**/__pycache__/**`: Python bytecode caches;
-/// - `**/target/**`: Cargo (and Maven) build output.
+/// - `**/target/**`: Cargo (and Maven) build output;
+/// - one `**/<dir>/**` per [`TOOL_CACHE_DIRECTORIES`] entry.
 pub fn default_excludes() -> Vec<String> {
+    [".git", "node_modules", ".venv", "__pycache__", "target"]
+        .into_iter()
+        .chain(TOOL_CACHE_DIRECTORIES.iter().copied())
+        .map(|directory| format!("**/{directory}/**"))
+        .collect()
+}
+
+/// Directory basenames pruned from file-activity scans by default: VCS
+/// metadata, `.context` scratch space, dependency trees, build output, and
+/// [`TOOL_CACHE_DIRECTORIES`]. A direct observation of an edit inside one
+/// still counts.
+pub fn default_ignored_directory_names() -> Vec<String> {
     [
-        "**/.git/**",
-        "**/node_modules/**",
-        "**/.venv/**",
-        "**/__pycache__/**",
-        "**/target/**",
+        ".context",
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "target",
+        ".venv",
+        "__pycache__",
     ]
     .into_iter()
+    .chain(TOOL_CACHE_DIRECTORIES.iter().copied())
     .map(str::to_owned)
     .collect()
 }
@@ -461,7 +503,8 @@ pub struct FileActivitySettings {
     pub max_entries: usize,
     /// Behavior when reconciliation cannot establish complete activity coverage.
     pub coverage_gap_policy: CoverageGapPolicy,
-    /// Directory basenames pruned from recursive traversal.
+    /// Directory basenames pruned from recursive traversal; see
+    /// [`default_ignored_directory_names`].
     pub ignored_directory_names: Vec<String>,
 }
 
@@ -473,14 +516,7 @@ impl Default for FileActivitySettings {
             timestamp_tolerance_millis: 2_000,
             max_entries: 100_000,
             coverage_gap_policy: CoverageGapPolicy::BestEffort,
-            ignored_directory_names: vec![
-                ".context".into(),
-                ".git".into(),
-                ".hg".into(),
-                ".svn".into(),
-                "node_modules".into(),
-                "target".into(),
-            ],
+            ignored_directory_names: default_ignored_directory_names(),
         }
     }
 }

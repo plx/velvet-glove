@@ -83,22 +83,34 @@ A layer can discard inherited state first with `merge`:
 | `settings.jobs` | `0` | Concurrent jobs within a tool (one per workspace or file). `0` is auto: available parallelism, capped at 8. `1` runs serially. Tools themselves run one after another. |
 | `settings.commandTimeoutSeconds` | `120` | Wall-clock limit per external command. A command that exceeds it is killed (on Unix, with its whole process group) and reported as an operational failure. `0` disables the limit. |
 | `settings.localBinDirs` | `node_modules/.bin`, `.venv/bin` | Project-local executable directories searched before `PATH`; see [Executable resolution](#executable-resolution). A layer that sets it replaces the list. |
-| `settings.exclude` | `**/.git/**`, `**/node_modules/**`, `**/.venv/**`, `**/__pycache__/**`, `**/target/**` | Global exclusions, matched against project-relative paths before tool filters. Additions append; see `merge.resetExclude`. |
+| `settings.exclude` | `**/<dir>/**` for `.git`, `node_modules`, `.venv`, `__pycache__`, `target`, and the tool caches below | Global exclusions, matched against project-relative paths before tool filters. Additions append; see `merge.resetExclude`. |
 | `settings.failFast` | `true` | Stop scheduling later tools after an operational failure. |
 | `settings.continueAfterIssues` | `true` | Continue with later tools after source issues (immediate mode). |
-| `settings.missingToolPolicy` | `user-notice` | Missing executable in immediate mode: `user-notice`, `hard-failure` (the hook fails), or `harness-block`. |
+| `settings.missingToolPolicy` | `user-notice` | Missing executable: `user-notice`, `hard-failure` (the hook fails), or `harness-block`. Applies to both hooks. |
 | `settings.diagnosticsDirectory` | unset | Immediate-mode full diagnostics. Unset keeps them outside the project, in `$TMPDIR/velvet-glove/state/post-tool-immediate`; a relative path resolves from the project root. |
 | `settings.loweringPolicy` | `best-effort-with-warnings` | Messages a native event cannot represent: `strict`, `best-effort`, or warning mode. |
-| `settings.fileActivity.filesystemMtime` | `true` | Reconcile mtime evidence through a durable cutoff before Stop. |
+| `settings.fileActivity.filesystemMtime` | `true` | At Stop, also treat files modified since the last Stop as candidates. |
 | `settings.fileActivity.vcs` | `disabled` | Optional broad `git-dirty` fallback. |
 | `settings.fileActivity.maxEntries` | `100000` | Bound recursive workspace expansion. |
-| `settings.fileActivity.coverageGapPolicy` | `best-effort` | Warn and retain incomplete evidence, or use `strict` to block. |
+| `settings.fileActivity.ignoredDirectoryNames` | `.context`, `.git`, `.hg`, `.svn`, `node_modules`, `target`, `.venv`, `__pycache__`, and the tool caches below | Directory names the mtime scan and workspace expansion never enter. Setting it replaces the list. |
+| `settings.fileActivity.coverageGapPolicy` | `best-effort` | Record incomplete evidence silently, or use `strict` to block. |
 
 The default excludes cover version-control internals (`.git`), installed
 JavaScript dependencies (`node_modules`), the conventional Python virtual
 environment (`.venv`), Python bytecode caches (`__pycache__`), and Cargo or
 Maven build output (`target`). They are unanchored, so nested copies such as
 `web/node_modules/` are excluded too.
+
+Both lists also cover tool caches and build output that tools regenerate
+and nobody edits: `.ruff_cache`, `.mypy_cache`, and `.pytest_cache` (rewritten
+on every Ruff, mypy, or pytest run, so an unpruned scan finds "changed" files
+there after every Stop), `.tox` and `.nox` (whole virtual environments),
+`.gradle` (Gradle's project cache; `build.gradle*` and `gradle/` stay
+included), `.build` (SwiftPM build products and dependency checkouts), `.next`
+(Next.js output), and `.turbo` (Turborepo cache). Inside a Git repository,
+Git-ignored files are dropped anyway; the lists matter outside Git and for
+scan cost. An edit the agent makes inside one of these directories is still
+observed, but no tool selects it.
 
 ## Tool specs
 
