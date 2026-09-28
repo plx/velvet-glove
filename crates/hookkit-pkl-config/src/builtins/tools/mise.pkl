@@ -56,4 +56,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    note = "opt-in only: formats every mise config in the project"
+  }
 }

@@ -1,0 +1,4 @@
+{
+  "outcome": "clean",
+  "note": "The only lint is pre-existing in member/tests/persistent.rs, which the agent did not touch, so both runners treat it as out of scope: the cited example.rs stays clean and nothing blocks. edited-file-issue is the same workspace with that file cited."
+}

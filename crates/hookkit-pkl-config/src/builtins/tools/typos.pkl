@@ -43,4 +43,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "_typos.toml"; "typos.toml"; ".typos.toml" }
+    note = "config-only: its fix can rename identifiers in one file"
+  }
 }

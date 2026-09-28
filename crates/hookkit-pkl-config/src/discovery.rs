@@ -11,7 +11,9 @@
 //!
 //! Canonical files are evaluated later and therefore override their legacy
 //! peers within the same layer; ordinary home → project → local precedence is
-//! preserved across layers.
+//! preserved across layers. The ancestor walk skips the home directory itself,
+//! so `~/.velvet-glove/post-tool-use.pkl` is loaded once, as the home layer,
+//! and never makes `$HOME` the project root.
 //!
 //! When `--config PATH` is passed, the entire chain is bypassed and only that
 //! file is used.
@@ -49,44 +51,47 @@ pub enum DiscoveredKind {
 
 /// Discover the configs that should be loaded, in merge order (earliest first).
 pub fn discover(cwd: &Path) -> Vec<DiscoveredConfig> {
+    discover_with_home(cwd, dirs::home_dir().as_deref())
+}
+
+/// [`discover`] with an explicit home directory (`None` disables the home
+/// layer). The ancestor walk never visits `home` itself: its
+/// `.velvet-glove/` belongs to the home layer and must neither be loaded twice
+/// nor make `$HOME` look like a project root.
+pub fn discover_with_home(cwd: &Path, home: Option<&Path>) -> Vec<DiscoveredConfig> {
     let mut chain = Vec::new();
 
-    for home in [legacy_home_config_path(), home_config_path()]
-        .into_iter()
-        .flatten()
-    {
-        if home.is_file() {
-            chain.push(DiscoveredConfig {
-                path: home,
-                kind: DiscoveredKind::Home,
-            });
-        }
-    }
-
-    // Walk ancestors root-first so child configs override parent configs.
-    let mut ancestors: Vec<PathBuf> = cwd.ancestors().map(Path::to_path_buf).collect();
-    ancestors.reverse();
-
-    for config_dir in [LEGACY_CONFIG_DIR, CONFIG_DIR] {
-        for ancestor in &ancestors {
-            let candidate = ancestor.join(config_dir).join(PROJECT_CONFIG_NAME);
-            if candidate.is_file() {
+    if let Some(home) = home {
+        for config_dir in [LEGACY_CONFIG_DIR, CONFIG_DIR] {
+            let path = home.join(config_dir).join(PROJECT_CONFIG_NAME);
+            if path.is_file() {
                 chain.push(DiscoveredConfig {
-                    path: candidate,
-                    kind: DiscoveredKind::Project,
+                    path,
+                    kind: DiscoveredKind::Home,
                 });
             }
         }
     }
 
-    for config_dir in [LEGACY_CONFIG_DIR, CONFIG_DIR] {
-        for ancestor in &ancestors {
-            let candidate = ancestor.join(config_dir).join(LOCAL_CONFIG_NAME);
-            if candidate.is_file() {
-                chain.push(DiscoveredConfig {
-                    path: candidate,
-                    kind: DiscoveredKind::Local,
-                });
+    // Walk ancestors root-first so child configs override parent configs.
+    let home = home.map(canonical_or_self);
+    let mut ancestors: Vec<PathBuf> = cwd
+        .ancestors()
+        .filter(|ancestor| home.as_deref() != Some(canonical_or_self(ancestor).as_path()))
+        .map(Path::to_path_buf)
+        .collect();
+    ancestors.reverse();
+
+    for (name, kind) in [
+        (PROJECT_CONFIG_NAME, DiscoveredKind::Project),
+        (LOCAL_CONFIG_NAME, DiscoveredKind::Local),
+    ] {
+        for config_dir in [LEGACY_CONFIG_DIR, CONFIG_DIR] {
+            for ancestor in &ancestors {
+                let path = ancestor.join(config_dir).join(name);
+                if path.is_file() {
+                    chain.push(DiscoveredConfig { path, kind });
+                }
             }
         }
     }
@@ -94,13 +99,20 @@ pub fn discover(cwd: &Path) -> Vec<DiscoveredConfig> {
     chain
 }
 
-/// Returns the conventional home configuration path, if a home directory exists.
-pub fn home_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(CONFIG_DIR).join(PROJECT_CONFIG_NAME))
+fn canonical_or_self(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn legacy_home_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(LEGACY_CONFIG_DIR).join(PROJECT_CONFIG_NAME))
+/// Project root for a discovery chain: the nearest (deepest) directory that
+/// holds a project or local config, else `cwd` (the harness workspace root).
+/// Home configs never imply a project root.
+pub fn project_root(chain: &[DiscoveredConfig], cwd: &Path) -> PathBuf {
+    chain
+        .iter()
+        .filter(|config| config.kind != DiscoveredKind::Home)
+        .map(|config| project_root_for(config, cwd))
+        .max_by_key(|root| root.components().count())
+        .unwrap_or_else(|| cwd.to_path_buf())
 }
 
 /// Project root associated with a discovered config (or the cwd as fallback).
@@ -221,6 +233,39 @@ mod tests {
                 canonical_local,
             ]
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn home_config_is_discovered_once_and_never_becomes_the_project_root() {
+        let home = temp_dir("home-once");
+        let project = home.join("code/app");
+        std::fs::create_dir_all(&project).unwrap();
+        let home_config = write_config(&home, PROJECT_CONFIG_NAME);
+        let home_local = write_config(&home, LOCAL_CONFIG_NAME);
+
+        let chain = discover_with_home(&project, Some(&home));
+        let found: Vec<_> = chain.iter().map(|c| (c.kind, c.path.clone())).collect();
+        assert_eq!(found, vec![(DiscoveredKind::Home, home_config)]);
+        assert!(!found.iter().any(|(_, path)| path == &home_local));
+        assert_eq!(project_root(&chain, &project), project);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn project_root_is_the_nearest_config_directory() {
+        let root = temp_dir("nearest-root");
+        let nested = root.join("a/b");
+        let cwd = nested.join("c");
+        std::fs::create_dir_all(&cwd).unwrap();
+        write_config(&root, LOCAL_CONFIG_NAME);
+        write_config(&nested, PROJECT_CONFIG_NAME);
+
+        let chain = discover_with_home(&cwd, None);
+        assert_eq!(project_root(&chain, &cwd), nested);
+        assert_eq!(project_root(&[], &cwd), cwd);
 
         std::fs::remove_dir_all(&root).ok();
     }

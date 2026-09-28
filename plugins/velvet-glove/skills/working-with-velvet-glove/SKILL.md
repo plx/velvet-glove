@@ -7,17 +7,25 @@ description: Install, configure, operate, or troubleshoot the Pkl-driven Velvet 
 
 ## Overview
 
-Use Velvet Glove to record files changed during a coding session, run configured
-formatters and linters at turn completion, and route unresolved findings back to
-the coding agent. Treat this file as the overview; load only the reference that
-matches the task.
+Velvet Glove runs the formatters and linters the user already has installed on
+the files the agent edits. In the default deferred mode it records edits and
+runs the tools once when the agent stops: clean runs are silent, automatic
+fixes produce one line, and only issues that need a manual fix block the stop,
+with a short excerpt of the tool output. `VELVET_GLOVE_MODE=immediate` runs
+the tools after every edit instead. Treat this file as the overview; load only
+the reference that matches the task.
 
 ## Workflow
 
-1. Identify whether Claude Code or Codex is running the hook.
-2. Confirm that `velvet-glove` and Pkl 0.31.1 are available.
-3. Locate the applicable layered Pkl configuration.
-4. Reproduce the lifecycle event or inspect the retained report.
+1. Identify whether Claude Code or Codex is running the hook, and whether the
+   plugin runs in deferred (default) or `VELVET_GLOVE_MODE=immediate` mode.
+2. Run `velvet-glove doctor` in the repository: it checks Pkl (0.31.1 or
+   newer), the layered Pkl configuration, the run list, and where each tool's
+   executable resolves.
+3. If there is no policy yet, run `velvet-glove init` (or `init --print` to
+   preview) and review the generated `.velvet-glove/post-tool-use.pkl`.
+4. Reproduce what the Stop hook would do with `velvet-glove check [FILES...]`,
+   or inspect the run directory named in the last report.
 5. Change configuration or installation state only within the user's requested scope.
 
 ## References
@@ -28,9 +36,9 @@ matches the task.
   [configuration.md](reference/configuration.md).
 - For event-to-command mapping and state boundaries, read
   [hook-lifecycle.md](reference/hook-lifecycle.md).
-- For auto-fix outcomes and retained manual findings, read
+- For auto-fix outcomes and blocked stops, read
   [manual-intervention.md](reference/manual-intervention.md).
 - For missing executables, hook loading, and report diagnosis, read
   [troubleshooting.md](reference/troubleshooting.md).
-- For future prebuilt-binary distribution work, read
+- For prebuilt-binary distribution status, read
   [release-packaging.md](reference/release-packaging.md).

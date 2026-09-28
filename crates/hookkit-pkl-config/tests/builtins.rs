@@ -150,7 +150,7 @@ fn ruff_builtin_matches_rust_spec() {
     assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
     assert_eq!(verify.writes, WriteBehavior::None);
 
-    assert_eq!(ruff.phase_order, vec!["format", "fix", "verify"]);
+    assert_eq!(ruff.phase_order, vec!["fix", "format", "verify"]);
 }
 
 #[test]
@@ -477,6 +477,7 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("--allow-staged"),
             literal("--allow-no-vcs"),
             literal("--quiet"),
+            literal("--"),
             token(ArgToken::ExtraArgs),
         ],
     );
@@ -495,23 +496,51 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("--workspace"),
             literal("--all-targets"),
             literal("--quiet"),
-            token(ArgToken::ExtraArgs),
             literal("--"),
             literal("-D"),
             literal("warnings"),
+            token(ArgToken::ExtraArgs),
         ],
     );
     assert_exit_codes(&verify.exit_codes, &[0], &[101], &[]);
     assert_eq!(verify.writes, WriteBehavior::None);
 
+    // Immediate agent feedback quotes a bounded excerpt of the check output
+    // (the default templates) instead of pointing at a diagnostics file.
     assert_eq!(
         clippy.messages.issues_agent,
-        "cargo clippy reports issues; inspect diagnostics at {{ diagnostics_path }}."
+        hookkit_pkl_config::schema::default_issues_agent()
     );
     assert_eq!(
         clippy.messages.issues_changed_agent,
-        "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
+        hookkit_pkl_config::schema::default_issues_changed_agent()
     );
+    // The runner recognizes the default `cleanChangedAgent` by equality to
+    // share one auto-fix line, so Config.pkl must emit exactly the schema's.
+    assert_eq!(
+        clippy.messages.clean_changed_agent,
+        hookkit_pkl_config::schema::default_clean_changed_agent()
+    );
+}
+
+#[test]
+fn builtin_agent_messages_never_point_the_agent_at_diagnostics_files() {
+    if !pkl_available() {
+        eprintln!("skipping test: pkl binary not on PATH");
+        return;
+    }
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    for (name, spec) in &specs {
+        for template in [
+            &spec.messages.issues_agent,
+            &spec.messages.issues_changed_agent,
+        ] {
+            assert!(
+                template.contains("{{ excerpt }}") && !template.contains("diagnostics_path"),
+                "{name}: agent issue templates must quote the excerpt: {template}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -666,4 +695,61 @@ fn builtin_catalog_audit_is_current() {
     let checked_in = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     assert_eq!(checked_in, generated, "regenerate {}", path.display());
+}
+
+#[test]
+fn run_config_accepts_immediate_only_tools_and_rejects_bad_globs() {
+    require_pkl!();
+    let immediate_only = hookkit_pkl_config::evaluate_pkl_source(
+        r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    workflows { ["lint"] { enabled = false } ["format"] { enabled = false } }
+  }
+}
+run = new Listing<String> { "ruff" }
+"#,
+    )
+    .expect("evaluate immediate-only policy");
+    hookkit_pkl_config::validate_run_config(&immediate_only)
+        .expect("a tool with every workflow disabled runs only in immediate mode");
+
+    let bad_globs = hookkit_pkl_config::evaluate_pkl_source(
+        r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings { exclude { "src/{gen,build" } }
+tools {
+  ["ruff"] = (Builtins.ruff) { files { include { "**/*.{py" } } }
+}
+run = new Listing<String> { "ruff" }
+"#,
+    )
+    .expect("evaluate bad-glob policy");
+    let error = hookkit_pkl_config::validate_run_config(&bad_globs)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("settings.exclude has an invalid glob `src/{gen,build`"),
+        "{error}"
+    );
+    assert!(
+        error.contains("ruff (ruff): files.include has an invalid glob `**/*.{py`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn auto_fixed_file_limit_matches_the_default_stop_templates() {
+    let reporting = hookkit_pkl_config::DeferredReporting::default();
+    let limit = hookkit_pkl_config::schema::AUTO_FIXED_LISTED_FILES;
+    for template in [&reporting.auto_fixed.user, &reporting.auto_fixed.agent] {
+        assert!(
+            template.contains(&format!("auto_fixed_files[:{limit}]"))
+                && template.contains(&format!("counts.auto_fixed > {limit}")),
+            "{template}"
+        );
+    }
 }

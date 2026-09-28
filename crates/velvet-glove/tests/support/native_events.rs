@@ -226,6 +226,11 @@ impl NativePostToolInput {
         self.surface
     }
 
+    /// Session identity shared by follow-up lifecycle events.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.payload
     }

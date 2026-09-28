@@ -45,9 +45,40 @@ pub fn evaluate_pkl_file_patch(file_path: &Path) -> Result<RunnerConfigPatch, Pk
     mirror_source_siblings(file_path, &staging.dir)?;
     let staged_target = staging.dir.join(unique_pkl_name("user"));
     copy_to_staging(file_path, &staged_target)?;
+    // Pkl may report the canonical spelling (`/private/var/...` on macOS).
+    let mut staged_spellings = vec![staged_target.clone()];
+    staged_spellings.extend(std::fs::canonicalize(&staged_target).ok());
     let result = run_pkl_eval(&staged_target);
     drop(staging);
-    result
+    result.map_err(|error| attribute_to_source(error, &staged_spellings, file_path))
+}
+
+/// Point an evaluation error at the user's file instead of the staged copy,
+/// which is deleted by the time anyone reads the message.
+fn attribute_to_source(
+    error: PklConfigError,
+    spellings: &[PathBuf],
+    source: &Path,
+) -> PklConfigError {
+    let rewrite = |text: String| {
+        spellings.iter().fold(text, |text, spelling| {
+            text.replace(
+                &spelling.to_string_lossy().into_owned(),
+                &source.to_string_lossy(),
+            )
+        })
+    };
+    match error {
+        PklConfigError::PklEvalFailed { stderr, .. } => PklConfigError::PklEvalFailed {
+            path: source.to_path_buf(),
+            stderr: rewrite(stderr),
+        },
+        PklConfigError::JsonDecode { error, .. } => PklConfigError::JsonDecode {
+            path: source.to_path_buf(),
+            error: rewrite(error),
+        },
+        other => other,
+    }
 }
 
 /// Evaluate an in-memory Pkl source string.
@@ -318,17 +349,22 @@ where
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(unique_name(prefix))
 }
 
 fn unique_pkl_name(prefix: &str) -> String {
+    format!("{}.pkl", unique_name(prefix))
+}
+
+/// Process id, a per-process counter, and the clock: concurrent evaluations in
+/// one process (parallel tests, for instance) must never share a staging
+/// directory, and the clock alone is too coarse on some platforms.
+fn unique_name(prefix: &str) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{prefix}-{}-{nanos}.pkl", std::process::id())
+    format!("{prefix}-{}-{sequence}-{nanos}", std::process::id())
 }

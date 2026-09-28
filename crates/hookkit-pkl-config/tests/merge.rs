@@ -1,7 +1,7 @@
 //! End-to-end Pkl merge tests: evaluate small Pkl snippets and verify the
 //! merged result.
 
-use hookkit_pkl_config::merge::{merge_chain, merge_patch_chain};
+use hookkit_pkl_config::merge::merge_patch_chain;
 use hookkit_pkl_config::{
     evaluate_pkl_source, evaluate_pkl_source_patch,
     schema::{
@@ -90,6 +90,44 @@ settings {
 }
 
 #[test]
+fn deferred_blocking_and_excerpt_settings_default_and_merge_per_field() {
+    require_pkl!();
+    let defaults = hookkit_pkl_config::DeferredReporting::default();
+    assert!(!defaults.block_on_operational_errors);
+    assert_eq!(defaults.max_consecutive_blocks, 3);
+    assert_eq!(defaults.excerpt_max_lines, 60);
+    assert_eq!(defaults.excerpt_max_chars, 6_000);
+
+    let user = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings {
+  deferredReporting = new DeferredReporting {
+    blockOnOperationalErrors = true
+    excerptMaxLines = 10
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings {
+  deferredReporting = new DeferredReporting { maxConsecutiveBlocks = 0 }
+}
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([user, project].into_iter()).settings;
+
+    assert!(merged.deferred_reporting.block_on_operational_errors);
+    assert_eq!(merged.deferred_reporting.max_consecutive_blocks, 0);
+    assert_eq!(merged.deferred_reporting.excerpt_max_lines, 10);
+    assert_eq!(merged.deferred_reporting.excerpt_max_chars, 6_000);
+}
+
+#[test]
 fn deferred_reporting_reset_restores_defaults_before_local_patch() {
     require_pkl!();
     let user = evaluate_pkl_source_patch(
@@ -161,6 +199,35 @@ settings {
 }
 
 #[test]
+fn file_activity_pkl_defaults_match_the_runtime_defaults() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+settings { fileActivity = new FileActivity { maxEntries = 10 } }
+"#,
+    )
+    .expect("file activity settings");
+    let activity = config.settings.file_activity.expect("file activity");
+    let defaults = hookkit_pkl_config::schema::FileActivitySettings::default();
+    assert_eq!(
+        activity.ignored_directory_names,
+        defaults.ignored_directory_names
+    );
+    // Every tool cache is both pruned from scans and excluded from tools.
+    let excludes = hookkit_pkl_config::schema::default_excludes();
+    for cache in hookkit_pkl_config::schema::TOOL_CACHE_DIRECTORIES {
+        assert!(
+            activity
+                .ignored_directory_names
+                .iter()
+                .any(|name| name == cache)
+        );
+        assert!(excludes.contains(&format!("**/{cache}/**")), "{cache}");
+    }
+}
+
+#[test]
 fn deferred_workflow_schema_round_trips_structured_commands() {
     require_pkl!();
     let config = evaluate_pkl_source(
@@ -213,7 +280,7 @@ run = new Listing { "example" }
 #[test]
 fn project_config_merges_over_user_config_default_behavior() {
     require_pkl!();
-    let user = evaluate_pkl_source(
+    let user = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -226,7 +293,7 @@ run = new Listing<String> { "ruff" }
     )
     .expect("user pkl");
 
-    let project = evaluate_pkl_source(
+    let project = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -239,7 +306,7 @@ run = new Listing<String> { "ruff"; "prettier" }
     )
     .expect("project pkl");
 
-    let merged = merge_chain([user, project].into_iter());
+    let merged = merge_patch_chain([user, project].into_iter());
 
     assert!(merged.tools.contains_key("ruff"));
     assert!(merged.tools.contains_key("prettier"));
@@ -249,7 +316,7 @@ run = new Listing<String> { "ruff"; "prettier" }
 #[test]
 fn project_reset_tools_drops_user_tools() {
     require_pkl!();
-    let user = evaluate_pkl_source(
+    let user = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -263,7 +330,7 @@ run = new Listing<String> { "ruff"; "prettier" }
     )
     .expect("user pkl");
 
-    let project = evaluate_pkl_source(
+    let project = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -280,7 +347,7 @@ run = new Listing<String> { "biome" }
     )
     .expect("project pkl");
 
-    let merged = merge_chain([user, project].into_iter());
+    let merged = merge_patch_chain([user, project].into_iter());
 
     assert!(!merged.tools.contains_key("ruff"));
     assert!(!merged.tools.contains_key("prettier"));
@@ -291,7 +358,7 @@ run = new Listing<String> { "biome" }
 #[test]
 fn reset_all_overrides_everything() {
     require_pkl!();
-    let user = evaluate_pkl_source(
+    let user = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -309,7 +376,7 @@ run = new Listing<String> { "ruff" }
     )
     .expect("user pkl");
 
-    let project = evaluate_pkl_source(
+    let project = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -328,7 +395,7 @@ run = new Listing<String> { "cargoFmt" }
     )
     .expect("project pkl");
 
-    let merged = merge_chain([user, project].into_iter());
+    let merged = merge_patch_chain([user, project].into_iter());
 
     assert_eq!(merged.tools.len(), 1);
     assert!(merged.tools.contains_key("cargoFmt"));
@@ -344,7 +411,7 @@ run = new Listing<String> { "cargoFmt" }
 #[test]
 fn reset_tools_drops_specific_tools_then_overlays() {
     require_pkl!();
-    let user = evaluate_pkl_source(
+    let user = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -358,7 +425,7 @@ run = new Listing<String> { "ruff"; "prettier" }
     )
     .expect("user pkl");
 
-    let project = evaluate_pkl_source(
+    let project = evaluate_pkl_source_patch(
         r#"
 amends "Config.pkl"
 import "Builtins.pkl"
@@ -375,7 +442,7 @@ run = new Listing<String> { "prettier"; "eslint" }
     )
     .expect("project pkl");
 
-    let merged = merge_chain([user, project].into_iter());
+    let merged = merge_patch_chain([user, project].into_iter());
 
     assert!(!merged.tools.contains_key("ruff"));
     assert!(merged.tools.contains_key("prettier"));
@@ -413,4 +480,114 @@ run = new Listing<String> { "ruff" }
     assert_eq!(fix.extra_args, vec!["--unfixable", "F401"]);
     let verify = ruff.phases.get("verify").expect("verify phase");
     assert!(!verify.enabled, "verify should be disabled by override");
+}
+
+#[test]
+fn settings_exclude_appends_to_defaults_unless_reset() {
+    require_pkl!();
+    let defaults = hookkit_pkl_config::schema::default_excludes();
+    let home = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings { exclude { "**/vendor/**" } }
+"#,
+    )
+    .unwrap();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings { exclude { "generated/**"; "**/vendor/**" } }
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([home.clone(), project].into_iter());
+    let mut expected = defaults.clone();
+    expected.extend(["**/vendor/**".to_owned(), "generated/**".to_owned()]);
+    assert_eq!(merged.settings.exclude, expected);
+
+    let reset = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+merge { resetExclude = true }
+settings { exclude { "only/**" } }
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([home, reset].into_iter());
+    assert_eq!(merged.settings.exclude, vec!["only/**"]);
+}
+
+#[test]
+fn override_ergonomics_round_trip_through_pkl() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {
+  commandTimeoutSeconds = 30
+  localBinDirs { "bin" }
+}
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    env { ["RUFF_NO_CACHE"] = "true" }
+    timeoutSeconds = 5
+    workflows { ["lint"] { extraArgs { "--ignore"; "F401" } } }
+  }
+  ["cargoFmt"] = (Builtins.cargoFmt) { extraArgs { "--verbose" } }
+}
+run = new Listing<String> { "ruff"; "cargoFmt" }
+"#,
+    )
+    .expect("override config");
+
+    assert_eq!(config.settings.command_timeout_seconds, 30);
+    assert_eq!(config.settings.local_bin_dirs, vec!["bin"]);
+    let ruff = &config.tools["ruff"];
+    assert_eq!(ruff.env["RUFF_NO_CACHE"], "true");
+    assert_eq!(ruff.timeout_seconds, Some(5));
+    assert_eq!(ruff.workflows["lint"].extra_args, vec!["--ignore", "F401"]);
+    assert!(ruff.workflows["format"].extra_args.is_empty());
+    assert_eq!(config.tools["cargoFmt"].extra_args, vec!["--verbose"]);
+
+    let defaults = evaluate_pkl_source("amends \"Config.pkl\"\n").expect("defaults");
+    assert_eq!(defaults.settings.command_timeout_seconds, 120);
+    assert_eq!(
+        defaults.settings.local_bin_dirs,
+        vec!["node_modules/.bin", ".venv/bin"]
+    );
+    assert_eq!(defaults.settings.diagnostics_directory, None);
+}
+
+#[test]
+fn evaluation_errors_name_the_policy_file_not_its_staged_copy() {
+    require_pkl!();
+    let dir = std::env::temp_dir().join(format!(
+        "vg-eval-error-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let policy = dir.join("post-tool-use.pkl");
+    std::fs::write(
+        &policy,
+        "amends \"Config.pkl\"\nsettings { jobs = \"not a number\" }\n",
+    )
+    .unwrap();
+
+    let error = hookkit_pkl_config::evaluate_pkl_file_patch(&policy)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.starts_with(&format!("pkl eval failed for {}:", policy.display())),
+        "{error}"
+    );
+    assert!(!error.contains("velvet-glove-pkl-stage"), "{error}");
+    let _ = std::fs::remove_dir_all(dir);
 }

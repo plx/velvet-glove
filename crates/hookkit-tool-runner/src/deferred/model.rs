@@ -40,6 +40,9 @@ pub enum CheckOutcome {
 pub enum CommandPhase {
     /// First authoritative check before any remedy.
     InitialCheck,
+    /// Check rerun before the remedy decision because an earlier remedy
+    /// changed files in this workflow's scope.
+    Recheck,
     /// Automatic repair command.
     Remedy,
     /// Authoritative check after a remedy.
@@ -106,8 +109,24 @@ pub struct RunArtifact {
     pub candidate_files: Vec<PathBuf>,
     /// Files observed to change while the command ran.
     pub changed_files: Vec<PathBuf>,
-    /// Durable textual artifact contents.
+    /// Durable textual artifact contents. The artifact file is the durable
+    /// copy, so run summaries do not repeat it.
+    #[serde(skip)]
     pub contents: String,
+    /// Raw combined standard output and error of the command, used for
+    /// bounded agent excerpts. Not serialized.
+    #[serde(skip)]
+    pub output: String,
+}
+
+impl RunArtifact {
+    /// Whether this artifact records a non-mutating check command.
+    pub fn is_check(&self) -> bool {
+        matches!(
+            self.phase,
+            CommandPhase::InitialCheck | CommandPhase::Recheck | CommandPhase::FinalCheck
+        )
+    }
 }
 
 /// Stable link from a file result to one tool/workflow report.
@@ -160,8 +179,21 @@ pub struct ToolReport {
     pub fix_attempted: bool,
     /// Outcome of the final authoritative check, when one ran.
     pub final_check: Option<CheckOutcome>,
-    /// Whether a job-level result was conservatively attributed to every candidate.
+    /// Whether issues were attributed to every candidate because the check
+    /// output named no file.
     pub conservative_attribution: bool,
+    /// Files to which remaining issues are attributed.
+    #[serde(default)]
+    pub issue_files: Vec<PathBuf>,
+    /// Files outside this workflow's candidates that the final check output
+    /// blamed when it named no candidate; such issues never block.
+    #[serde(default)]
+    pub out_of_scope_files: Vec<PathBuf>,
+    /// Whether no check could confirm the remedy: a user tool with only
+    /// mutating phases, whose changed files are auto-fixed on the remedy's
+    /// word alone.
+    #[serde(default)]
+    pub unverified: bool,
     /// Durable artifacts supporting this report.
     pub artifact_ids: Vec<String>,
 }
@@ -171,6 +203,8 @@ impl ToolReport {
     pub fn normalize(&mut self) {
         sort_paths(&mut self.candidate_files);
         sort_paths(&mut self.changed_files);
+        sort_paths(&mut self.issue_files);
+        sort_paths(&mut self.out_of_scope_files);
         self.artifact_ids.sort();
         self.artifact_ids.dedup();
     }
@@ -195,6 +229,9 @@ pub struct FileResult {
     pub status: FileStatus,
     /// Whether the runner changed this file.
     pub changed_by_runner: bool,
+    /// Display names of tools whose remedies changed this file.
+    #[serde(default)]
+    pub fixed_by: Vec<String>,
     /// Tool reports contributing to this result.
     pub reports: Vec<ToolReportRef>,
 }
@@ -212,6 +249,8 @@ pub struct FileAssessment {
     pub status: FileStatus,
     /// Whether the contributing workflow changed this file.
     pub changed_by_runner: bool,
+    /// Display name of the tool whose remedy changed this file.
+    pub fixed_by: Option<String>,
     /// Tool report supporting this contribution, when available.
     pub report: Option<ToolReportRef>,
 }
@@ -226,6 +265,7 @@ impl FileAssessment {
             group_id: "other".into(),
             status,
             changed_by_runner: false,
+            fixed_by: None,
             report: None,
         }
     }
@@ -239,6 +279,15 @@ pub struct OperationalProblem {
     pub id: String,
     /// Tool associated with the problem, when applicable.
     pub tool_id: Option<String>,
+    /// Human-readable name of the associated tool, when applicable.
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    /// Whether the tool executable could not be found.
+    #[serde(default)]
+    pub missing_tool: bool,
+    /// Installation guidance for a missing tool, when configured.
+    #[serde(default)]
+    pub install_hint: Option<String>,
     /// Command phase associated with the problem, when applicable.
     pub phase: Option<String>,
     /// Files potentially affected by the problem.
@@ -301,6 +350,9 @@ impl DeferredRunResult {
             Some(existing) => {
                 existing.status = existing.status.join(assessment.status);
                 existing.changed_by_runner |= assessment.changed_by_runner;
+                if let Some(tool) = assessment.fixed_by {
+                    sorted_insert(&mut existing.fixed_by, tool);
+                }
                 if existing.display_path.is_empty() {
                     existing.display_path = assessment.display_path;
                 }
@@ -321,6 +373,7 @@ impl DeferredRunResult {
                         group_id: assessment.group_id,
                         status: assessment.status,
                         changed_by_runner: assessment.changed_by_runner,
+                        fixed_by: assessment.fixed_by.into_iter().collect(),
                         reports,
                     },
                 );
@@ -328,10 +381,11 @@ impl DeferredRunResult {
         }
     }
 
-    /// Attach a job-level result to every candidate when diagnostics do not
-    /// provide exact per-file attribution. Snapshot-discovered writes are also
-    /// included, even if they were not original session candidates.
-    pub fn record_conservative_report(&mut self, mut report: ToolReport, status: FileStatus) {
+    /// Attach one completed workflow report to its files. Files in
+    /// `issue_files` need manual fixes; other candidates are clean. Any file a
+    /// remedy actually changed is at least auto-fixed, including
+    /// snapshot-discovered writes outside the original candidates.
+    pub fn record_report(&mut self, mut report: ToolReport) {
         report.normalize();
         let reference = report.reference();
         let changed = report
@@ -339,6 +393,7 @@ impl DeferredRunResult {
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
+        let issues = report.issue_files.iter().cloned().collect::<BTreeSet<_>>();
         let paths = report
             .candidate_files
             .iter()
@@ -347,15 +402,17 @@ impl DeferredRunResult {
             .collect::<BTreeSet<_>>();
         for path in paths {
             let changed_by_runner = changed.contains(&path);
-            let mut assessment = FileAssessment::new(
-                path,
-                if changed_by_runner {
-                    status.join(FileStatus::AutoFixed)
-                } else {
-                    status
-                },
-            );
+            let mut status = if issues.contains(&path) {
+                FileStatus::ManualFixesNeeded
+            } else {
+                FileStatus::Clean
+            };
+            if changed_by_runner {
+                status = status.join(FileStatus::AutoFixed);
+            }
+            let mut assessment = FileAssessment::new(path, status);
             assessment.changed_by_runner = changed_by_runner;
+            assessment.fixed_by = changed_by_runner.then(|| report.tool_name.clone());
             assessment.report = Some(reference.clone());
             self.record_file(assessment);
         }
@@ -409,6 +466,33 @@ impl DeferredRunResult {
     pub fn has_operational_problems(&self) -> bool {
         !self.operational_problems.is_empty()
     }
+
+    /// Returns the artifact of the latest check that decided `report`.
+    pub fn latest_check_artifact(&self, report: &ToolReport) -> Option<&RunArtifact> {
+        report
+            .artifact_ids
+            .iter()
+            .filter_map(|id| self.artifacts.get(id))
+            .filter(|artifact| artifact.is_check())
+            .max_by_key(|artifact| artifact.phase)
+    }
+
+    /// Reports whose remaining issues are attributed to changed or candidate
+    /// files, in deterministic report order.
+    pub fn manual_reports(&self) -> impl Iterator<Item = &ToolReport> {
+        self.reports.values().filter(|report| {
+            report.final_check == Some(CheckOutcome::Issues) && !report.issue_files.is_empty()
+        })
+    }
+
+    /// Reports whose final-check issues name only files outside the run.
+    pub fn out_of_scope_reports(&self) -> impl Iterator<Item = &ToolReport> {
+        self.reports.values().filter(|report| {
+            report.final_check == Some(CheckOutcome::Issues)
+                && report.issue_files.is_empty()
+                && !report.out_of_scope_files.is_empty()
+        })
+    }
 }
 
 fn sorted_insert<T: Ord>(values: &mut Vec<T>, value: T) {
@@ -431,19 +515,26 @@ fn display_path(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn report(id: &str, candidates: &[&str], changed: &[&str]) -> ToolReport {
+    fn report(id: &str, candidates: &[&str], changed: &[&str], issues: &[&str]) -> ToolReport {
         ToolReport {
             id: id.into(),
             tool_id: id.into(),
-            tool_name: id.into(),
+            tool_name: format!("{id}-name"),
             workflow_id: "workflow".into(),
             job_id: "job".into(),
             candidate_files: candidates.iter().map(PathBuf::from).collect(),
             changed_files: changed.iter().map(PathBuf::from).collect(),
             initial_check: Some(CheckOutcome::Issues),
             fix_attempted: !changed.is_empty(),
-            final_check: Some(CheckOutcome::Clean),
-            conservative_attribution: candidates.len() > 1,
+            final_check: Some(if issues.is_empty() {
+                CheckOutcome::Clean
+            } else {
+                CheckOutcome::Issues
+            }),
+            conservative_attribution: false,
+            issue_files: issues.iter().map(PathBuf::from).collect(),
+            out_of_scope_files: Vec::new(),
+            unverified: false,
             artifact_ids: vec![format!("{id}-artifact")],
         }
     }
@@ -475,19 +566,12 @@ mod tests {
         let build = |reverse: bool| {
             let mut result = DeferredRunResult::default();
             let reports = [
-                (
-                    report("formatter", &["src/a.rs"], &["src/a.rs"]),
-                    FileStatus::AutoFixed,
-                ),
-                (
-                    report("linter", &["src/a.rs"], &[]),
-                    FileStatus::ManualFixesNeeded,
-                ),
+                report("formatter", &["src/a.rs"], &["src/a.rs"], &[]),
+                report("linter", &["src/a.rs"], &[], &["src/a.rs"]),
             ];
             let order: &[usize] = if reverse { &[1, 0] } else { &[0, 1] };
             for index in order {
-                let (report, status) = &reports[*index];
-                result.record_conservative_report(report.clone(), *status);
+                result.record_report(reports[*index].clone());
             }
             result
         };
@@ -497,44 +581,79 @@ mod tests {
         let file = forward.files.get(Path::new("src/a.rs")).expect("file");
         assert_eq!(file.status, FileStatus::ManualFixesNeeded);
         assert!(file.changed_by_runner);
+        assert_eq!(file.fixed_by, vec!["formatter-name".to_owned()]);
         assert_eq!(file.reports.len(), 2);
     }
 
     #[test]
-    fn conservative_batch_report_is_reused_by_all_candidates() {
+    fn issues_attach_only_to_attributed_files_and_others_stay_clean() {
         let mut result = DeferredRunResult::default();
-        result.record_conservative_report(
-            report("batch", &["src/b.rs", "src/a.rs"], &[]),
-            FileStatus::ManualFixesNeeded,
-        );
+        result.record_report(report(
+            "batch",
+            &["src/b.rs", "src/a.rs"],
+            &[],
+            &["src/a.rs"],
+        ));
         assert_eq!(result.files.len(), 2);
+        assert_eq!(
+            result.files[Path::new("src/a.rs")].status,
+            FileStatus::ManualFixesNeeded
+        );
+        assert_eq!(
+            result.files[Path::new("src/b.rs")].status,
+            FileStatus::Clean
+        );
         for file in result.files.values() {
             assert_eq!(file.reports[0].report_id, "batch");
+        }
+        assert_eq!(result.manual_reports().count(), 1);
+    }
+
+    #[test]
+    fn only_changed_files_are_auto_fixed() {
+        let mut result = DeferredRunResult::default();
+        result.record_report(report(
+            "workspace",
+            &["src/a.rs", "src/b.rs"],
+            &["src/a.rs", "Cargo.lock"],
+            &[],
+        ));
+        for (path, status) in [
+            ("src/a.rs", FileStatus::AutoFixed),
+            ("Cargo.lock", FileStatus::AutoFixed),
+            ("src/b.rs", FileStatus::Clean),
+        ] {
+            let file = &result.files[Path::new(path)];
+            assert_eq!(file.status, status, "{path}");
+            assert_eq!(file.changed_by_runner, status == FileStatus::AutoFixed);
         }
     }
 
     #[test]
-    fn changed_non_candidate_file_is_included() {
+    fn out_of_scope_issues_are_neither_manual_nor_blocking() {
         let mut result = DeferredRunResult::default();
-        result.record_conservative_report(
-            report("workspace", &["src/a.rs"], &["Cargo.lock"]),
-            FileStatus::Clean,
+        let mut outside = report("outside", &["src/a.rs"], &[], &[]);
+        outside.final_check = Some(CheckOutcome::Issues);
+        outside.out_of_scope_files = vec!["src/untouched.rs".into()];
+        result.record_report(outside);
+        assert_eq!(
+            result.files[Path::new("src/a.rs")].status,
+            FileStatus::Clean
         );
-        let changed = result
-            .files
-            .get(Path::new("Cargo.lock"))
-            .expect("changed file");
-        assert_eq!(changed.status, FileStatus::AutoFixed);
-        assert!(changed.changed_by_runner);
+        assert!(!result.has_manual_fixes());
+        assert_eq!(result.out_of_scope_reports().count(), 1);
     }
 
     #[test]
     fn operational_problems_do_not_change_normal_status() {
         let mut result = DeferredRunResult::default();
-        result.record_conservative_report(report("ok", &["src/a.rs"], &[]), FileStatus::Clean);
+        result.record_report(report("ok", &["src/a.rs"], &[], &[]));
         result.record_operational_problem(OperationalProblem {
             id: "missing".into(),
             tool_id: Some("missing-tool".into()),
+            tool_name: Some("Missing".into()),
+            missing_tool: true,
+            install_hint: None,
             phase: Some("check".into()),
             affected_files: vec!["src/a.rs".into()],
             message: "missing executable".into(),

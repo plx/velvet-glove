@@ -51,4 +51,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "MODULE.bazel"; "WORKSPACE"; "WORKSPACE.bazel" }
+    role = "bazel-lint"
+  }
 }

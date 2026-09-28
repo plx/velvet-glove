@@ -1,8 +1,8 @@
 use super::FileStatus;
 use super::execution::{DeferredExecution, ScheduledWorkflow, execute_deferred_workflows};
 use crate::{
-    CheckScope, CommandArgTemplate, ExitCodePolicy, InvocationGranularity, PhaseMode, ToolJob,
-    ToolPhase, ToolSpec, UnexpectedExitPolicy, WriteBehavior,
+    CheckScope, CommandArgTemplate, ExitCodePolicy, FileSelection, PhaseMode, ToolJob, ToolPhase,
+    ToolSpec, UnexpectedExitPolicy, WriteBehavior,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +27,8 @@ impl Fixture {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create fixture root");
+        // Runner candidates are canonical paths; mirror that here.
+        let root = std::fs::canonicalize(root).expect("canonical fixture root");
         let executable = root.join("fake-workflow");
         std::fs::write(
             &executable,
@@ -72,6 +74,33 @@ case "$action" in
   check-workspace)
     if grep -R -q 'BAD_A' "$1"; then exit 1; fi
     ;;
+  check-report)
+    status=0
+    for file in "$@"; do
+      if grep -Eq 'DIRTY|MANUAL' "$file"; then printf '%s:1:1: issue\n' "$file"; status=1; fi
+    done
+    exit $status
+    ;;
+  check-other)
+    for file in "$@"; do
+      if grep -q 'MANUAL' "$file"; then printf 'other.rs:2:1: issue\n'; exit 1; fi
+    done
+    ;;
+  lint-fix)
+    for file in "$@"; do
+      sed 's/DIRTY/CLEAN/g; s/FORMATTED/UNFORMATTED/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    done
+    ;;
+  format-check)
+    for file in "$@"; do
+      if grep -q 'UNFORMATTED' "$file"; then exit 1; fi
+    done
+    ;;
+  format-fix)
+    for file in "$@"; do
+      sed 's/UNFORMATTED/FORMATTED/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    done
+    ;;
   fix)
     for file in "$@"; do
       sed 's/DIRTY/CLEAN/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
@@ -97,6 +126,11 @@ case "$action" in
     ;;
   crash)
     exit 2
+    ;;
+  fix-members)
+    for file in "$1"/../*/*.rs; do
+      sed 's/DIRTY/CLEAN/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    done
     ;;
 esac
 exit 0
@@ -223,7 +257,6 @@ fn scheduled_with_scope(
         remedy: remedy_action
             .map(|action| command(fixture, "remedy", action, WriteBehavior::TargetFiles, false)),
         check_scope,
-        invocation: InvocationGranularity::Batch,
         compatibility_translation: false,
         job: ToolJob {
             workspace_dir: fixture.root.clone(),
@@ -343,7 +376,6 @@ fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
         check: Some(check),
         remedy: Some(remedy),
         check_scope: CheckScope::TargetFiles,
-        invocation: InvocationGranularity::PerFile,
         compatibility_translation: false,
         job: ToolJob {
             workspace_dir: fixture.root.clone(),
@@ -402,29 +434,241 @@ fn operational_initial_check_never_runs_remedy() {
 }
 
 #[test]
-fn operational_initial_check_stops_later_remedies_under_fail_fast() {
+fn fail_fast_stops_only_the_failing_tools_later_remedies() {
     let fixture = Fixture::new("initial-failure-stops-remedies");
     let earlier = fixture.file("earlier.rs", "DIRTY\n");
     let failed = fixture.file("failed.rs", "DIRTY\n");
+    let sibling = fixture.file("sibling.rs", "DIRTY\n");
     let later = fixture.file("later.rs", "DIRTY\n");
+    let mut same_tool = scheduled(&fixture, 1, sibling.clone(), "check", Some("fix"));
+    same_tool.job_index = 1;
     let plan = vec![
         scheduled(&fixture, 0, earlier.clone(), "check", Some("fix")),
         scheduled(&fixture, 1, failed, "crash", Some("fix")),
+        same_tool,
         scheduled(&fixture, 2, later.clone(), "check", Some("fix")),
     ];
 
     let execution = execute_deferred_workflows(&plan, 1, true);
 
-    assert!(execution.result.has_operational_problems());
     assert_eq!(
-        std::fs::read_to_string(earlier).expect("read skipped earlier candidate"),
+        only_status(&execution, &earlier),
+        Some(FileStatus::AutoFixed)
+    );
+    assert_eq!(only_status(&execution, &later), Some(FileStatus::AutoFixed));
+    assert_eq!(only_status(&execution, &sibling), None);
+    assert_eq!(
+        std::fs::read_to_string(&sibling).expect("read skipped sibling"),
         "DIRTY\n"
     );
-    assert_eq!(
-        std::fs::read_to_string(later).expect("read skipped candidate"),
-        "DIRTY\n"
+    let problems = &execution.result.operational_problems;
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(
+        problems
+            .values()
+            .all(|problem| problem.tool_id.as_deref() == Some("tool-1"))
     );
-    assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
+    assert_eq!(
+        fixture.trace_lines(),
+        vec![
+            "check", "crash", "check", "check", "fix", "fix", "check", "check"
+        ]
+    );
+}
+
+#[test]
+fn missing_executable_is_a_missing_tool_problem_with_install_hint() {
+    let fixture = Fixture::new("missing-tool");
+    let file = fixture.file("file.rs", "DIRTY\n");
+    let mut workflow = scheduled(&fixture, 0, file, "check", Some("fix"));
+    let mut spec = (*workflow.spec).clone();
+    spec.install_hint = Some("install the tool".into());
+    workflow.spec = Arc::new(spec);
+    workflow.check.as_mut().expect("check").program = Some(
+        fixture
+            .root
+            .join("missing-program")
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    let execution = execute_deferred_workflows(&[workflow], 1, true);
+
+    let problem = execution
+        .result
+        .operational_problems
+        .values()
+        .next()
+        .expect("problem");
+    assert!(problem.missing_tool);
+    assert!(problem.message.ends_with("missing-program not found"));
+    assert_eq!(problem.install_hint.as_deref(), Some("install the tool"));
+    assert_eq!(problem.tool_name.as_deref(), Some("Tool 0"));
+}
+
+#[test]
+fn remedy_that_dirties_a_clean_later_check_reruns_it_before_deciding() {
+    let fixture = Fixture::new("cross-workflow-recheck");
+    let file = fixture.file("file.py", "DIRTY FORMATTED\n");
+    let mut format = scheduled(
+        &fixture,
+        0,
+        file.clone(),
+        "format-check",
+        Some("format-fix"),
+    );
+    format.workflow_index = 1;
+    format.workflow_id = "format".into();
+    format.check.as_mut().expect("check").id = "format.check".into();
+    let plan = vec![
+        scheduled(&fixture, 0, file.clone(), "check", Some("lint-fix")),
+        format,
+    ];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read fixed file"),
+        "CLEAN FORMATTED\n"
+    );
+    assert_eq!(
+        fixture.trace_lines(),
+        vec![
+            "check",
+            "format-check",
+            "lint-fix",
+            "format-check",
+            "format-fix",
+            "check",
+            "format-check"
+        ]
+    );
+    assert!(
+        execution
+            .logs
+            .iter()
+            .any(|log| log.phase == super::CommandPhase::Recheck)
+    );
+}
+
+#[test]
+fn identical_checks_within_one_stage_run_once() {
+    let fixture = Fixture::new("shared-verifier");
+    let file = fixture.file("file.rs", "DIRTY\n");
+    let mut second = scheduled(&fixture, 0, file.clone(), "check", Some("nochange"));
+    second.workflow_index = 1;
+    let plan = vec![
+        scheduled(&fixture, 0, file.clone(), "check", Some("fix")),
+        second,
+    ];
+
+    let execution = execute_deferred_workflows(&plan, 2, true);
+
+    assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
+    assert_eq!(
+        fixture.trace_lines(),
+        vec!["check", "fix", "nochange", "check"]
+    );
+    assert_eq!(
+        execution
+            .logs
+            .iter()
+            .filter(|log| log.phase == super::CommandPhase::FinalCheck)
+            .count(),
+        2,
+        "each workflow keeps its own final-check log"
+    );
+}
+
+#[test]
+fn batch_remedy_marks_only_changed_files_auto_fixed() {
+    let fixture = Fixture::new("batch-auto-fixed");
+    let dirty = fixture.file("dirty.rs", "DIRTY\n");
+    let clean = fixture.file("clean.rs", "CLEAN\n");
+    let plan = vec![scheduled_with_scope(
+        &fixture,
+        0,
+        vec![clean.clone(), dirty.clone()],
+        "check",
+        Some("fix"),
+        CheckScope::TargetFiles,
+        false,
+    )];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(only_status(&execution, &dirty), Some(FileStatus::AutoFixed));
+    assert_eq!(only_status(&execution, &clean), Some(FileStatus::Clean));
+}
+
+#[test]
+fn batch_issues_are_attributed_to_the_files_the_output_names() {
+    let fixture = Fixture::new("batch-attribution");
+    let manual = fixture.file("manual.rs", "MANUAL\n");
+    let clean = fixture.file("clean.rs", "CLEAN\n");
+    let silent = fixture.file("silent.rs", "MANUAL\n");
+    let named = scheduled_with_scope(
+        &fixture,
+        0,
+        vec![clean.clone(), manual.clone()],
+        "check-report",
+        None,
+        CheckScope::TargetFiles,
+        false,
+    );
+    let unnamed = scheduled_with_scope(
+        &fixture,
+        1,
+        vec![clean.clone(), silent.clone()],
+        "check",
+        None,
+        CheckScope::TargetFiles,
+        false,
+    );
+
+    let execution = execute_deferred_workflows(&[named, unnamed], 1, true);
+
+    assert_eq!(
+        only_status(&execution, &manual),
+        Some(FileStatus::ManualFixesNeeded)
+    );
+    assert_eq!(
+        only_status(&execution, &silent),
+        Some(FileStatus::ManualFixesNeeded)
+    );
+    let named_report = &execution.result.reports["000-tool-0-000-000"];
+    assert_eq!(named_report.issue_files, vec![manual]);
+    assert!(!named_report.conservative_attribution);
+    let unnamed_report = &execution.result.reports["001-tool-1-000-000"];
+    assert!(unnamed_report.conservative_attribution);
+    assert_eq!(
+        only_status(&execution, &clean),
+        Some(FileStatus::ManualFixesNeeded),
+        "a check that names no file is attributed to every candidate"
+    );
+}
+
+#[test]
+fn issues_naming_only_other_files_are_out_of_scope() {
+    let fixture = Fixture::new("out-of-scope");
+    let other = fixture.file("other.rs", "untouched\n");
+    let candidate = fixture.file("candidate.rs", "MANUAL\n");
+    let plan = vec![scheduled(
+        &fixture,
+        0,
+        candidate.clone(),
+        "check-other",
+        None,
+    )];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(only_status(&execution, &candidate), Some(FileStatus::Clean));
+    assert!(!execution.result.has_manual_fixes());
+    let report = execution.result.reports.values().next().expect("report");
+    assert_eq!(report.out_of_scope_files, vec![other]);
+    assert_eq!(execution.result.out_of_scope_reports().count(), 1);
 }
 
 #[test]
@@ -480,19 +724,43 @@ fn failed_remedy_keeps_changed_files_and_operational_problem() {
 }
 
 #[test]
-fn legacy_mutating_only_workflow_is_operationally_unverifiable() {
-    let fixture = Fixture::new("missing-final-check");
-    let file = fixture.file("file.rs", "DIRTY\n");
-    let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("fix"));
+fn formatter_only_workflow_reports_unverified_auto_fixes_and_never_blocks() {
+    let fixture = Fixture::new("formatter-only");
+    let dirty = fixture.file("dirty.rs", "DIRTY\n");
+    let clean = fixture.file("clean.rs", "CLEAN\n");
+    let mut scheduled = scheduled_with_scope(
+        &fixture,
+        0,
+        vec![dirty.clone(), clean.clone()],
+        "check",
+        Some("fix"),
+        CheckScope::TargetFiles,
+        false,
+    );
     scheduled.check = None;
     scheduled.compatibility_translation = true;
     let execution = execute_deferred_workflows(&[scheduled], 1, true);
-    assert!(execution.result.files.is_empty());
-    assert!(execution.result.has_operational_problems());
+    assert!(!execution.result.has_operational_problems());
+    assert!(!execution.result.has_manual_fixes());
+    assert_eq!(only_status(&execution, &dirty), Some(FileStatus::AutoFixed));
+    assert_eq!(only_status(&execution, &clean), Some(FileStatus::Clean));
     let report = execution.result.reports.values().next().expect("report");
-    assert!(report.fix_attempted);
-    assert_eq!(report.changed_files, vec![file]);
+    assert!(report.fix_attempted && report.unverified);
+    assert_eq!(report.changed_files, vec![dirty]);
     assert!(report.final_check.is_none());
+    assert_eq!(fixture.trace_lines(), vec!["fix"], "no check exists to run");
+}
+
+#[test]
+fn failing_formatter_only_remedy_is_still_operational() {
+    let fixture = Fixture::new("formatter-only-failure");
+    let file = fixture.file("file.rs", "DIRTY\n");
+    let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("crash"));
+    scheduled.check = None;
+    scheduled.compatibility_translation = true;
+    let execution = execute_deferred_workflows(&[scheduled], 1, true);
+    assert!(execution.result.has_operational_problems());
+    assert!(execution.result.files.is_empty());
 }
 
 #[test]
@@ -591,4 +859,72 @@ fn parallel_and_serial_jobs_produce_the_same_ordered_result() {
     }
     let parallel = execute_deferred_workflows(&plan, 4, true).result;
     assert_eq!(serial, parallel);
+}
+
+#[test]
+fn a_failed_remedy_leaves_the_final_check_authoritative() {
+    let fixture = Fixture::new("failed-remedy-final-check");
+    let file = fixture.file("broken.rs", "MANUAL\n");
+    let plan = vec![scheduled(&fixture, 0, file.clone(), "check", Some("crash"))];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(
+        only_status(&execution, &file),
+        Some(FileStatus::ManualFixesNeeded),
+        "the final check's issues must still need manual fixes"
+    );
+    assert!(execution.result.has_manual_fixes());
+    let problem = execution
+        .result
+        .operational_problems
+        .values()
+        .next()
+        .expect("remedy failure stays an operational problem");
+    assert!(problem.message.contains("failed with exit code 2"));
+    assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
+}
+
+#[test]
+fn workspace_wide_remedies_report_writes_in_sibling_members() {
+    let fixture = Fixture::new("sibling-members");
+    for member in ["a", "b"] {
+        std::fs::create_dir_all(fixture.root.join(member)).expect("member dir");
+        fixture.file(&format!("{member}/ws.marker"), "");
+    }
+    fixture.file("ws.marker", "");
+    let candidate = fixture.file("a/x.rs", "DIRTY\n");
+    let sibling = fixture.file("b/y.rs", "DIRTY\n");
+    let mut workflow = scheduled(&fixture, 0, candidate.clone(), "check", None);
+    workflow.spec = Arc::new(
+        ToolSpec::new("tool-0", "Tool 0", fixture.executable.to_string_lossy())
+            .with_workspace_indicator("ws.marker")
+            .with_file_selection(FileSelection::include(["**/*.rs"])),
+    );
+    workflow.job.workspace_dir = fixture.root.join("a");
+    let mut remedy = command(
+        &fixture,
+        "remedy",
+        "fix-members",
+        WriteBehavior::MatchingGlobs,
+        true,
+    );
+    remedy.writes = WriteBehavior::MatchingGlobs;
+    workflow.remedy = Some(remedy);
+
+    let execution = execute_deferred_workflows(&[workflow], 1, true);
+
+    assert_eq!(
+        std::fs::read_to_string(&sibling).expect("read sibling"),
+        "CLEAN\n"
+    );
+    assert_eq!(
+        only_status(&execution, &candidate),
+        Some(FileStatus::AutoFixed)
+    );
+    assert_eq!(
+        only_status(&execution, &sibling),
+        Some(FileStatus::AutoFixed),
+        "a write outside the job's own member must be seen and reported"
+    );
 }
