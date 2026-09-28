@@ -34,6 +34,11 @@ impl ScheduledWorkflow {
         )
     }
 
+    /// The failFast scope: one workflow of one tool, across its jobs.
+    fn workflow_key(&self) -> (usize, usize) {
+        (self.tool_index, self.workflow_index)
+    }
+
     fn context(&self) -> ToolContext<'_> {
         ToolContext {
             spec: &self.spec,
@@ -95,7 +100,8 @@ struct CommandFailure {
 /// check a remedy may have invalidated.
 ///
 /// With `fail_fast`, an operational failure stops later remedies of the same
-/// tool only; other tools still run their remedies.
+/// tool workflow only: other workflows of that tool (Ruff's lint when its
+/// format check cannot run) and other tools still run their remedies.
 pub(crate) fn execute_deferred_workflows(
     plan: &[ScheduledWorkflow],
     jobs_setting: u32,
@@ -106,7 +112,8 @@ pub(crate) fn execute_deferred_workflows(
         .map(|_| WorkflowState::default())
         .collect::<Vec<_>>();
     let mut impacts = Vec::<WriteImpact>::new();
-    let mut stopped_tools = BTreeSet::new();
+    // `(tool_index, workflow_index)` of workflows stopped under failFast.
+    let mut stopped = BTreeSet::new();
 
     let initial_indices = plan
         .iter()
@@ -124,7 +131,7 @@ pub(crate) fn execute_deferred_workflows(
         );
         states[index].initial_check = outcome;
         if outcome.is_none() && fail_fast {
-            stopped_tools.insert(plan[index].tool_index);
+            stopped.insert(plan[index].workflow_key());
         }
     }
 
@@ -146,7 +153,7 @@ pub(crate) fn execute_deferred_workflows(
             );
             if outcome.is_none() {
                 if fail_fast {
-                    stopped_tools.insert(scheduled.tool_index);
+                    stopped.insert(scheduled.workflow_key());
                 }
                 continue;
             }
@@ -161,15 +168,16 @@ pub(crate) fn execute_deferred_workflows(
         let Some(remedy) = scheduled.remedy.as_ref() else {
             continue;
         };
-        if stopped_tools.contains(&scheduled.tool_index) {
+        if stopped.contains(&scheduled.workflow_key()) {
             states[index].operational = true;
             record_problem(
                 &mut execution.result,
                 scheduled,
                 "remedy",
                 CommandFailure {
-                    message: "remedy skipped after an earlier failure of this tool under failFast"
-                        .into(),
+                    message:
+                        "remedy skipped after an earlier failure of this workflow under failFast"
+                            .into(),
                     missing_tool: false,
                 },
             );
@@ -213,7 +221,7 @@ pub(crate) fn execute_deferred_workflows(
                 states[index].remedy_failure = Some(failure);
             }
             if fail_fast {
-                stopped_tools.insert(scheduled.tool_index);
+                stopped.insert(scheduled.workflow_key());
             }
         }
     }

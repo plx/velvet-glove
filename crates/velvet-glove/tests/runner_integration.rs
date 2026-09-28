@@ -2373,6 +2373,42 @@ fn turn_completion_reruns_format_after_a_lint_fix_dirties_it() {
 }
 
 #[test]
+fn turn_completion_format_failure_does_not_hide_the_lint_diagnostic() {
+    require_pkl!();
+    let project = temp_project("turn-completion-sibling-workflow-fail-fast");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/broken.py");
+    std::fs::write(&file, "print(manual_issue)  # format_crash\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block", "{response}");
+    assert!(
+        response["reason"].as_str().unwrap().contains("F821"),
+        "the lint workflow still reports under failFast: {response}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    let problems = summary["result"]["operationalProblems"]
+        .as_object()
+        .unwrap();
+    assert!(!problems.is_empty());
+    for problem in problems.values() {
+        assert!(
+            problem["id"].as_str().unwrap().contains("-ruff-001-"),
+            "only the format workflow is operational: {problem}"
+        );
+    }
+}
+
+#[test]
 fn turn_completion_batch_blames_only_the_files_the_output_names() {
     require_pkl!();
     let project = temp_project("turn-completion-batch-attribution");

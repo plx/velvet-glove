@@ -89,7 +89,7 @@ A layer can discard inherited state first with `merge`:
 | `settings.commandTimeoutSeconds` | `120` | Wall-clock limit per external command. A command that exceeds it is killed (on Unix, with its whole process group) and reported as an operational failure. `0` disables the limit. |
 | `settings.localBinDirs` | `node_modules/.bin`, `.venv/bin` | Project-local executable directories searched before `PATH`; see [Executable resolution](#executable-resolution). A layer that sets it replaces the list. |
 | `settings.exclude` | `**/<dir>/**` for `.git`, `node_modules`, `.venv`, `__pycache__`, `target`, and the tool caches below | Global exclusions, matched against project-relative paths before tool filters. Additions append; see `merge.resetExclude`. |
-| `settings.failFast` | `true` | In immediate mode, stop scheduling later tools after an operational failure. At Stop, skip only the failing tool's later remedies; other tools still run. |
+| `settings.failFast` | `true` | In immediate mode, stop scheduling later tools after an operational failure. At Stop, skip only the failing workflow's later remedies; the tool's other workflows and other tools still run. |
 | `settings.continueAfterIssues` | `true` | Continue with later tools after source issues (immediate mode). |
 | `settings.missingToolPolicy` | `user-notice` | Missing executable: `user-notice`, `hard-failure` (the hook fails), or `harness-block`. Applies to both hooks. |
 | `settings.diagnosticsDirectory` | unset | Immediate-mode full diagnostics. Unset keeps them outside the project, in `$TMPDIR/velvet-glove/state/post-tool-immediate`; a relative path resolves from the project root. |
@@ -456,8 +456,9 @@ committed as operational artifacts.
 Missing executables follow `settings.missingToolPolicy` at Stop too:
 `user-notice` notifies without blocking or keeping the files pending,
 `harness-block` blocks, and `hard-failure` fails the hook. Under
-`settings.failFast`, an operational failure skips only the same tool's later
-remedies; other tools still fix their files.
+`settings.failFast`, an operational failure skips only the same workflow's
+later remedies; the tool's other workflows (Ruff's lint when its format check
+cannot run) and other tools still fix their files.
 
 A Stop that follows a block (Claude and Codex `stop_hook_active`; for
 Antigravity, the Stop right after a block) is not blocked again for an

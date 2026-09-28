@@ -104,8 +104,8 @@ broken tool config the check merely names) it is an operational problem.
 Identical check
 commands within one stage (the compatibility translation pairs several
 mutators with one verifier) run once.
-With `failFast`, an operational failure skips only the same tool's later
-remedies. Check stages retain bounded job parallelism and deterministic result
+With `failFast`, an operational failure skips only the same tool workflow's
+later remedies, so a sibling workflow of that tool still runs. Check stages retain bounded job parallelism and deterministic result
 ordering. The complex deferred policy is split across `deferred/model.rs`,
 `deferred/execution.rs`, `deferred/attribution.rs`, `deferred/reporting.rs`,
 `deferred/guard.rs`, and `deferred/lowering.rs`; `excerpt.rs` and `vcs.rs` hold
