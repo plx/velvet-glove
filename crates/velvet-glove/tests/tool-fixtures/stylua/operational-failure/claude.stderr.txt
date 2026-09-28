@@ -1,0 +1,13 @@
+error: StyLua: phase `format` failed; diagnostics: <workspace>/.velvet-glove/stylua-agent-hook/test-session_stylua-tool_stylua-tool-failure.txt
+StyLua failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: stylua <workspace>/example.lua
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: could not format file <workspace>/example.lua: error parsing: 
+ - unexpected token `(` (2:7 to 2:8), expected a `)`
+ - unexpected token `end` (3:1 to 3:4), unexpected expression when looking for a statement
+ - unexpected token `end` (3:1 to 3:4), unexpected token, this needs to be a statement
+artifact: <workspace>/.velvet-glove/stylua-agent-hook/test-session_stylua-tool_stylua-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
