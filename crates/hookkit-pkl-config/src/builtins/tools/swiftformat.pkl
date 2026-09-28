@@ -7,7 +7,8 @@
 /// Verified at 0.63.0: exit codes are clean, well-documented, and fully
 /// distinguish clean (0), issues (1, from `--lint`) and every operational
 /// failure this spec triggers — unknown flag, missing input file, and a
-/// malformed `.swiftformat` config — which all exit 70.
+/// malformed `.swiftformat` config — which all exit 70. Unparseable Swift
+/// source also exits 70, so it reads as operational rather than as an issue.
 module velvet_glove.builtins.tools.SwiftformatNicklockwood
 
 import "../Config.pkl" as Config

@@ -2,7 +2,7 @@ amends "Config.pkl"
 import "Builtins.pkl"
 
 tools {
-  ["swift-format"] = (Builtins.swiftFormat) {
+  ["swift-format"] = (Builtins.appleSwiftFormat) {
     phases {
       // A malformed `.swift-format` JSON config exits 1, the same code as a
       // real issue, so force the distinguishable argv-parsing failure

@@ -13,8 +13,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "cmake-format"
   executable = "cmake-format"
   // The PyPI distribution is `cmakelang`; it provides the `cmake-format`
-  // console-script entry point actually invoked here.
-  installHint = "install cmake-format with `pipx install cmakelang`"
+  // console script. Without its `YAML` extra (pyyaml), a `.cmake-format.yaml`
+  // config (a detect indicator) crashes with ModuleNotFoundError, exit 1.
+  installHint = "install cmake-format with `pipx install 'cmakelang[YAML]'`"
 
   files = new Config.FileSelection {
     include = new Listing<String> {

@@ -1,0 +1,73 @@
+/// swift-format — Apple's Swift formatter and linter.
+///
+/// Invoked as `swift format …`, the `swift` driver's subcommand, rather than
+/// a bare `swift-format`: Swift 6+ toolchains (Xcode 16+, swift.org) bundle
+/// swift-format next to the driver, where `swift format` finds it even though
+/// Xcode does not put it on PATH; other toolchains fall back to a
+/// `swift-format` on PATH (e.g. Homebrew's). With neither, the driver exits 2
+/// ("unable to invoke subcommand"), which reads as operational.
+///
+/// Verified with the Swift 6.4 toolchain's bundled swift-format (and the
+/// standalone 603.0.0 lint semantics match): `lint --strict` promotes
+/// warnings so issues exit 1 and clean exits 0; without `--strict` findings
+/// are warnings and exit 0. An unrecognized flag exits 64. A malformed
+/// `.swift-format` JSON config and unparseable Swift source both exit 1 in
+/// `lint` (indistinguishable from issues) and in `format -i` (operational).
+///
+/// Named `apple_swift_format.pkl` (key `appleSwiftFormat`) so its builtin key
+/// is not a case-only variant of nicklockwood's `swiftformat`.
+module velvet_glove.builtins.tools.AppleSwiftFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "swift-format"
+  displayName = "swift-format"
+  executable = "swift"
+  installHint = "install Xcode 16+ or a Swift 6+ toolchain from swift.org (bundles `swift format`), or `brew install swift-format`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.swift"; "**/*.swift" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "format"
+        "-i"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 1; 64 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "lint"
+        "--strict"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 64 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".swift-format" }
+    role = "swift-format"
+    default = true
+    note = "role default when neither `.swift-format` nor `.swiftformat` exists; without a `.swift-format` it applies Apple's default style (2-space indent)"
+  }
+}
