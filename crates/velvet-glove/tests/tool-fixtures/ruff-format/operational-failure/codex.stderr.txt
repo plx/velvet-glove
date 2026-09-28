@@ -1,0 +1,16 @@
+error: ruff format: phase `format` failed; diagnostics: <workspace>/.velvet-glove/ruff-format-agent-hook/test-session_test-turn_ruff-format-tool_ruff-format-tool-failure.txt
+ruff format failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: ruff format --quiet --force-exclude --bogus-flag <workspace>/example.py
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: unexpected argument '--bogus-flag' found
+
+  tip: to pass '--bogus-flag' as a value, use '-- --bogus-flag'
+
+Usage: ruff format --quiet --force-exclude [FILES]...
+
+For more information, try '--help'.
+artifact: <workspace>/.velvet-glove/ruff-format-agent-hook/test-session_test-turn_ruff-format-tool_ruff-format-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

@@ -1,0 +1,11 @@
+error: flake8: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/flake8-agent-hook/test-session_flake8-tool_flake8-tool-failure.txt
+flake8 failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: flake8 --bogus-flag <workspace>/example.py
+status: Some(2)
+classification: Some(Failure)
+stderr:
+usage: flake8 [options] file file ...
+flake8: error: unrecognized arguments: --bogus-flag
+artifact: <workspace>/.velvet-glove/flake8-agent-hook/test-session_flake8-tool_flake8-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

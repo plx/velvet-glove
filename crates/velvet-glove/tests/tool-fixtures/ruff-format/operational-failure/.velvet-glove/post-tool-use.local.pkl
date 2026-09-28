@@ -1,0 +1,14 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff-format"] = (Builtins.ruffFormat) {
+    phases {
+      // An unrecognized CLI flag is a usage error (exit 2), which this spec
+      // already classifies as `failure`, not a formatting issue.
+      ["format"] {
+        extraArgs = new Listing<String> { "--bogus-flag" }
+      }
+    }
+  }
+}

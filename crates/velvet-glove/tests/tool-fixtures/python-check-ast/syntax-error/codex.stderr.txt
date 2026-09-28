@@ -1,15 +1,14 @@
-warning: python check-ast: issues remain; diagnostics: <workspace>/.velvet-glove/python-check-ast-agent-hook/test-session_python-check-ast-tool-issues.txt
+warning: python check-ast: issues remain; diagnostics: <workspace>/.velvet-glove/python-check-ast-agent-hook/test-session_test-turn_python-check-ast-tool_python-check-ast-tool-issues.txt
 python check-ast diagnostics:
-[verify] command: python3 -m py_compile <workspace>/example.py
+[verify] command: python3 -c import sys; [compile(open(p, 'rb').read(), p, 'exec') for p in sys.argv[1:]] <workspace>/example.py
 status: Some(1)
 classification: Some(Issues)
 stderr:
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
   File "<workspace>/example.py", line 1
     def hello(:
               ^
 SyntaxError: invalid syntax
-artifact: <workspace>/.velvet-glove/python-check-ast-agent-hook/test-session_python-check-ast-tool-issues.txt (text/plain)
-project-relative artifact: .velvet-glove/python-check-ast-agent-hook/test-session_python-check-ast-tool-issues.txt
-summary: python check-ast diagnostics
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
+artifact: <workspace>/.velvet-glove/python-check-ast-agent-hook/test-session_test-turn_python-check-ast-tool_python-check-ast-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

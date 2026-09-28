@@ -132,5 +132,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
     }
   }
-  phaseOrder = new Listing<String> { "format"; "fix"; "verify" }
+  // Lint fixes can change layout (e.g. removing the last unused import
+  // leaves a stray blank line), so `fix` must run before `format` or the
+  // formatting pass has nothing left to clean up after it. Demonstrated: a
+  // single unused import in an unformatted file comes out format-dirty when
+  // `format` runs first, and clean when `fix` runs first.
+  phaseOrder = new Listing<String> { "fix"; "format"; "verify" }
 }

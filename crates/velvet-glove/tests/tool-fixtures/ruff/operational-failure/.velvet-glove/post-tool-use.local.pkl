@@ -1,0 +1,14 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    phases {
+      // An unrecognized CLI flag is a usage error (exit 2), which this spec
+      // already classifies as `failure`, not a lint issue.
+      ["fix"] {
+        extraArgs = new Listing<String> { "--bogus-flag" }
+      }
+    }
+  }
+}

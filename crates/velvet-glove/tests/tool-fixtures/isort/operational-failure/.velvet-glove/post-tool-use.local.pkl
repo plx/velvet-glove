@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["isort"] = (Builtins.isort) {
+    phases {
+      // An unrecognized CLI flag is a usage error (exit 2), which the default
+      // `unexpected = "failure"` classification correctly reports as an
+      // operational failure rather than an import-order issue.
+      ["fix"] {
+        extraArgs = new Listing<String> { "--bogus-flag" }
+      }
+    }
+  }
+}

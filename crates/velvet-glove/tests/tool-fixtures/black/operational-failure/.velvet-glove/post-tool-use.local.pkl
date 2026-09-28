@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["black"] = (Builtins.black) {
+    phases {
+      // An unrecognized CLI flag is a usage error (exit 2), which the default
+      // `unexpected = "failure"` classification correctly reports as an
+      // operational failure rather than a formatting issue.
+      ["format"] {
+        extraArgs = new Listing<String> { "--target-version=bogus" }
+      }
+    }
+  }
+}

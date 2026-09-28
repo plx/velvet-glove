@@ -1,0 +1,13 @@
+error: Black: phase `format` failed; diagnostics: <workspace>/.velvet-glove/black-agent-hook/test-session_black-tool_black-tool-failure.txt
+Black failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: black --target-version=bogus <workspace>/example.py
+status: Some(2)
+classification: Some(Failure)
+stderr:
+Usage: black [OPTIONS] SRC ...
+Try 'black --help' for help.
+
+Error: Invalid value for '-t' / '--target-version': 'bogus' is not one of 'py33', 'py34', 'py35', 'py36', 'py37', 'py38', 'py39', 'py310', 'py311', 'py312', 'py313', 'py314', 'py315'.
+artifact: <workspace>/.velvet-glove/black-agent-hook/test-session_black-tool_black-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

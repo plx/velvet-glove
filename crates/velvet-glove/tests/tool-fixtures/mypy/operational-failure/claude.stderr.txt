@@ -1,0 +1,12 @@
+error: mypy: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/mypy-agent-hook/test-session_mypy-tool_mypy-tool-failure.txt
+mypy failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: mypy --bogus-flag <workspace>/example.py
+status: Some(2)
+classification: Some(Failure)
+stderr:
+usage: mypy [-h] [-v] [-V] [more options; see below]
+            [-m MODULE] [-p PACKAGE] [-c PROGRAM_TEXT] [files ...]
+mypy: error: unrecognized arguments: --bogus-flag
+artifact: <workspace>/.velvet-glove/mypy-agent-hook/test-session_mypy-tool_mypy-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

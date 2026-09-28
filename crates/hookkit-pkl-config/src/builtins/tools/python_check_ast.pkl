@@ -1,8 +1,15 @@
-/// python-check-ast — validate Python syntax via `python3 -m py_compile`.
+/// python-check-ast — validate Python syntax by parsing it, read-only.
 ///
-/// hk implements this as `hk util python-check-ast`; we translate to the
-/// standard-library `py_compile` module which parses each file and reports
-/// SyntaxError on stderr with exit code 1.
+/// hk implements this as `hk util python-check-ast`. We previously translated
+/// it to the standard-library `py_compile` module, but `py_compile` writes a
+/// `.pyc` into `__pycache__/` next to each file even though this phase
+/// declares `writes = "none"` — demonstrated: running it against a clean file
+/// leaves a `__pycache__/<name>.cpython-*.pyc` behind. `compile(..., "exec")`
+/// parses the same way without ever touching bytecode-cache files, so this
+/// spec uses a single-expression `python3 -c` invocation instead of a module.
+/// Any `extraArgs` here are extra positional arguments to that expression
+/// (i.e. more paths), not flags, since `-c` leaves no room for python3-level
+/// flags; that matches this tool's narrow, flag-free role.
 
 module velvet_glove.builtins.tools.PythonCheckAst
 
@@ -22,8 +29,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
-        "-m"
-        "py_compile"
+        "-c"
+        "import sys; [compile(open(p, 'rb').read(), p, 'exec') for p in sys.argv[1:]]"
         new Config.ExtraArgs {}
         new Config.Files {}
       }

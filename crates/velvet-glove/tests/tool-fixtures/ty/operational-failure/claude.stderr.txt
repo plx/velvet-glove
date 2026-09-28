@@ -1,0 +1,16 @@
+error: ty: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/ty-agent-hook/test-session_ty-tool_ty-tool-failure.txt
+ty failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: ty check --bogus-flag <workspace>/example.py
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: unexpected argument '--bogus-flag' found
+
+  tip: to pass '--bogus-flag' as a value, use '-- --bogus-flag'
+
+Usage: ty check [OPTIONS] [PATH]...
+
+For more information, try '--help'.
+artifact: <workspace>/.velvet-glove/ty-agent-hook/test-session_ty-tool_ty-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
