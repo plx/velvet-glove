@@ -1,0 +1,62 @@
+/// ktfmt — Meta's opinionated Kotlin formatter.
+///
+/// Purely a formatter (no separate lint ruleset), so it is opt-in and shares
+/// no detect role with ktlint: ktlint already covers Kotlin's default
+/// lint+format slot, and running both on the same files fights over style.
+///
+/// Verified at 0.59 (npm distribution, matching upstream Meta): `--dry-run
+/// --set-exit-if-changed` exits 1 for both a real formatting issue and a
+/// syntax error ktfmt can't parse, and a bad flag also exits 1 — there is no
+/// distinguishable operational exit code, so no `operational-failure`
+/// fixture case is possible; see the fixture README note in this tool's
+/// directory. Default (no flags) always writes in place and exits 0.
+module velvet_glove.builtins.tools.Ktfmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "ktfmt"
+  displayName = "ktfmt"
+  executable = "ktfmt"
+  installHint = "install ktfmt with `brew install ktfmt`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.kt"; "**/*.kt"
+      "*.kts"; "**/*.kts"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--dry-run"
+        "--set-exit-if-changed"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "kotlin-format-opinionated"
+    note = "opt-in only: imposes Meta style and has no config file to detect"
+  }
+}
