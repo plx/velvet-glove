@@ -1,4 +1,4 @@
-warning: xmllint: issues remain; diagnostics: <workspace>/.velvet-glove/xmllint-agent-hook/test-session_xmllint-tool-issues.txt
+warning: xmllint: issues remain; diagnostics: <workspace>/.velvet-glove/xmllint-agent-hook/test-session_test-turn_xmllint-tool_xmllint-tool-issues.txt
 xmllint diagnostics:
 [verify] command: xmllint --noout <workspace>/example.xml
 status: Some(1)
@@ -10,8 +10,5 @@ stderr:
 <workspace>/example.xml:2: parser error : Premature end of data in tag root line 1
 
 ^
-artifact: <workspace>/.velvet-glove/xmllint-agent-hook/test-session_xmllint-tool-issues.txt (text/plain)
-project-relative artifact: .velvet-glove/xmllint-agent-hook/test-session_xmllint-tool-issues.txt
-summary: xmllint diagnostics
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
+artifact: <workspace>/.velvet-glove/xmllint-agent-hook/test-session_test-turn_xmllint-tool_xmllint-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
