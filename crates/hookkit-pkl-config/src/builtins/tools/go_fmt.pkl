@@ -79,4 +79,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "preflight"; "format" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "**/go.mod" }
+    role = "go-format"
+    default = true
+  }
 }

@@ -45,4 +45,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "lychee.toml"; ".lycheeignore" }
+    note = "config-only: checks links over the network"
+  }
 }

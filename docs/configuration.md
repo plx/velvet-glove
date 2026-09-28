@@ -274,6 +274,57 @@ unless `missingToolPolicy` asks for it (`hard-failure` or `harness-block`). A to
 `messages.cleanChangedAgent` gets that text instead of the shared auto-fix
 line.
 
+## Built-in tools
+
+The embedded catalog currently contains 134 reusable specifications, including
+Ruff, Prettier, ESLint, Biome, Cargo fmt, and Cargo Clippy. Each enabled entry
+either has explicit deferred workflows or a validated compatibility
+translation. The generated [built-in workflow audit](builtin-deferred-workflow-audit.md)
+is the authoritative inventory of commands, scopes, invocation granularity,
+and known limitations. `velvet-glove tools [--json]` lists every entry's Pkl
+key (the name used in `tools` and `run`, e.g. `cargoFmt`), id, file globs, and
+whether its executable resolves on `PATH`.
+
+## Generating and checking a policy
+
+`velvet-glove init [--dir DIR] [--print] [--force]` writes a commented
+`.velvet-glove/post-tool-use.pkl` for a project. It lists project files with
+`git ls-files` (or a bounded walk that honors simple root `.gitignore`
+patterns) and selects an enabled builtin when all of these hold:
+
+- its `files` globs match at least one project file;
+- every program it runs resolves on `PATH`; and
+- one of its detection indicators is present, or it is the default tool for
+  its role and no tool sharing that role has an indicator.
+
+Detection metadata lives in each builtin's optional `detect` block and never
+affects hook execution:
+
+| Field | Meaning |
+| --- | --- |
+| `indicators` | Project-relative globs, typically config files (`ruff.toml`, `.prettierrc.*`, `**/Cargo.toml`). |
+| `contains` | File → text, e.g. `["package.json"] = "\"eslint\""` or `["pyproject.toml"] = "[tool.ruff"`. |
+| `role` | Mutually exclusive slot such as `python-lint`, `js-format`, or `go-lint`. |
+| `default` | Chosen for its role when no role member has an indicator. |
+| `note` | Why the tool is opt-in or config-only; shown by `init`. |
+
+Defaults are reserved for canonical, local-only tools that need no project
+configuration (for example Ruff, gofmt, go vet, ShellCheck, hadolint, terraform
+fmt, nixfmt, and xmllint). Tools that reach the network, apply disruptive
+automatic fixes, or are drafts — lychee, govulncheck, pinact, typos, knip,
+gitleaks, deadnix, gomod-tidy, and similar — are only selected when their own
+configuration file is present, or never. The generated file names the reason
+for each choice and lists installed alternatives and wanted-but-missing tools
+as commented-out entries. `init` evaluates the file with Pkl before writing it
+and refuses to overwrite an existing policy without `--force`.
+
+`velvet-glove doctor [--dir DIR]` prints the discovered policy files in merge
+order, the evaluated `run` list with each tool's resolved executable or
+install hint, the Pkl version, and the state directory. It exits nonzero when
+Pkl is missing or older than 0.31.1, the policy fails to evaluate, or `run`
+names a tool that no `tools` entry defines; an empty `run` list, disabled
+entries, and missing executables are warnings.
+
 ## Deferred reports
 
 The default Stop-time messages follow one contract:

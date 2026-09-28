@@ -40,4 +40,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "rust-format"
+    note = "opt-in only: cargo-fmt knows the crate edition"
+  }
 }

@@ -24,7 +24,9 @@ kept out of protocol stdout; user-visible stderr is emitted only through an exac
 native output, while verbose remaining-tool output belongs in runner artifacts.
 
 To add a tool, extend the Pkl catalog and its fake-executable orchestration cases;
-real-tool fixtures belong to the opt-in compatibility lane. To add a harness,
+real-tool fixtures belong to the opt-in compatibility lane. Give the spec a
+`detect` block so `velvet-glove init` can suggest it; hooks never read that
+block. To add a harness,
 first prove how its native event yields changed files, then add an explicit final
 lowering arm and exact native fixture tests.
 

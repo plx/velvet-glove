@@ -73,4 +73,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     issuesChangedAgent =
       "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
   }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "**/Cargo.toml" }
+    role = "rust-lint"
+  }
 }

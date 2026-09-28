@@ -14,9 +14,12 @@ matches the task.
 
 ## Workflow
 
-1. Identify whether Claude Code or Codex is running the hook.
-2. Confirm that `velvet-glove` and Pkl 0.31.1 are available.
-3. Locate the applicable layered Pkl configuration.
+1. Identify whether Claude Code or Codex is running the hook, and whether the
+   plugin runs in deferred (default) or `VELVET_GLOVE_MODE=immediate` mode.
+2. Run `velvet-glove doctor` in the repository: it checks Pkl (0.31.1 or
+   newer), the layered Pkl configuration, the run list, and tool executables.
+3. If there is no policy yet, run `velvet-glove init` (or `init --print` to
+   preview) and review the generated `.velvet-glove/post-tool-use.pkl`.
 4. Reproduce the lifecycle event or inspect the retained report.
 5. Change configuration or installation state only within the user's requested scope.
 

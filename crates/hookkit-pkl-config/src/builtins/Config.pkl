@@ -253,6 +253,27 @@ class ToolSpec {
   /// Per-command timeout in seconds, overriding
   /// `settings.commandTimeoutSeconds`. 0 disables the limit.
   timeoutSeconds: UInt?
+  /// Project-detection hints for `velvet-glove init`. Never affects hook runs.
+  detect: Detect?
+}
+
+/// How `velvet-glove init` decides whether a project uses a tool. A tool is
+/// suggested when its `files` globs match a project file, its executable
+/// resolves, and either an indicator is present or it is its role's default
+/// and no other tool in that role has an indicator.
+class Detect {
+  /// Project-relative globs whose presence suggests the project uses this
+  /// tool, typically its config file (e.g. "ruff.toml", ".prettierrc*").
+  indicators: Listing<String> = new Listing<String> {}
+  /// Project-relative file -> text that suggests the tool when the file
+  /// contains it (e.g. a package.json dependency or a pyproject table).
+  contains: Mapping<String, String> = new Mapping<String, String> {}
+  /// Mutually exclusive slot such as "python-format" or "js-lint".
+  role: String?
+  /// Pick this tool for its role when no indicator decides.
+  default: Boolean = false
+  /// Short reason shown by `init`, e.g. why the tool is opt-in only.
+  note: String?
 }
 
 settings: Settings = new Settings {}

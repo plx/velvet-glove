@@ -39,4 +39,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    note = "opt-in only: OpenAPI files are not recognized by name"
+  }
 }

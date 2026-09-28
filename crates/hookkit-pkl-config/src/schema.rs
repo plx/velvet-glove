@@ -602,6 +602,24 @@ pub struct ToolSpec {
     pub env: BTreeMap<String, String>,
     /// Per-command timeout override in seconds; zero disables the limit.
     pub timeout_seconds: Option<u64>,
+    /// Project-detection hints used by `velvet-glove init`; never read by hooks.
+    pub detect: Option<Detect>,
+}
+
+/// Project-detection hints for one tool, used only when generating a policy.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Detect {
+    /// Project-relative globs whose presence suggests the project uses the tool.
+    pub indicators: Vec<String>,
+    /// Project-relative file paths mapped to text that suggests the tool.
+    pub contains: BTreeMap<String, String>,
+    /// Mutually exclusive slot such as `python-format`.
+    pub role: Option<String>,
+    /// Whether to pick this tool for its role when no indicator decides.
+    pub default: bool,
+    /// Short reason shown by `init`, e.g. why the tool is opt-in only.
+    pub note: Option<String>,
 }
 
 impl Default for ToolSpec {
@@ -625,6 +643,7 @@ impl Default for ToolSpec {
             extra_args: Vec::new(),
             env: BTreeMap::new(),
             timeout_seconds: None,
+            detect: None,
         }
     }
 }

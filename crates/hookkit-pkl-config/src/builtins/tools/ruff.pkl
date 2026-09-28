@@ -134,4 +134,11 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   }
   // Lint fixes can leave layout behind (e.g. removed imports), so fix first.
   phaseOrder = new Listing<String> { "fix"; "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "ruff.toml"; ".ruff.toml" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.ruff" }
+    role = "python-lint"
+    default = true
+  }
 }
