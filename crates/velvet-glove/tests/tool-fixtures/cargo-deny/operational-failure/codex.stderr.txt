@@ -1,0 +1,16 @@
+error: cargo deny: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/cargo-deny-agent-hook/test-session_test-turn_cargo-deny-tool_cargo-deny-tool-failure.txt
+cargo deny failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: cargo-deny --locked --workspace check --this-flag-does-not-exist
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: unexpected argument '--this-flag-does-not-exist' found
+
+  tip: to pass '--this-flag-does-not-exist' as a value, use '-- --this-flag-does-not-exist'
+
+Usage: cargo-deny check [OPTIONS] [WHICH]...
+
+For more information, try '--help'.
+artifact: <workspace>/.velvet-glove/cargo-deny-agent-hook/test-session_test-turn_cargo-deny-tool_cargo-deny-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

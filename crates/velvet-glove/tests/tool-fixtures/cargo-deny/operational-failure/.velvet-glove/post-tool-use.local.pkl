@@ -1,0 +1,18 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["cargo-deny"] = (Builtins.cargoDeny) {
+    phases {
+      ["verify"] {
+        // Exercise cargo-deny's own usage-error exit (2) through an
+        // unrecognized flag — genuinely operational, distinguishable from a
+        // rejected license/ban/advisory/source (exit 4). A malformed
+        // deny.toml also exits 1 here, but its message embeds a wall-clock
+        // timestamp the fixture golden can't pin, so this is the stable
+        // reproduction.
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}

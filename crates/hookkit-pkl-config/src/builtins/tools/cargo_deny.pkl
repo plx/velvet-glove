@@ -1,0 +1,63 @@
+/// cargo-deny — Rust dependency linter (licenses, bans, advisories, sources).
+///
+/// `advisories` fetches/reads the RustSec advisory database, so this needs
+/// network access (or a warm local cache) the first time it runs in an
+/// environment — unlike the rest of this catalog, which never talks to the
+/// network. `workspaceIndicator = "deny.toml"` makes that opt-in structural
+/// rather than a policy flag: a project only gets `cargo-deny` jobs from
+/// files whose nearest ancestor (up to the project root) actually has a
+/// `deny.toml`, so a Rust repo that never added one never triggers this
+/// tool, matching how `bundle-audit`/`govulncheck` (also network-dependent)
+/// are already handled in this catalog. `check` runs from the directory
+/// containing that `deny.toml` (the runner's workspace-indicator cwd), so no
+/// `--manifest-path` is needed.
+///
+/// `cargo-deny check` has no autofix; a rejected license/ban/advisory/source
+/// exits 4 (confirmed empirically), while a malformed `deny.toml` or a
+/// network/IO problem exits 1 — genuinely distinguishable, so the latter
+/// falls through to `unexpected = "failure"` rather than being misread as a
+/// source issue.
+
+module velvet_glove.builtins.tools.CargoDeny
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "cargo-deny"
+  displayName = "cargo deny"
+  executable = "cargo-deny"
+  installHint = "install cargo-deny with `cargo install cargo-deny`"
+  workspaceIndicator = "deny.toml"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "Cargo.toml"; "**/Cargo.toml"
+      "Cargo.lock"; "**/Cargo.lock"
+      "deny.toml"; "**/deny.toml"
+      ".deny.toml"; "**/.deny.toml"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--locked"
+        "--workspace"
+        "check"
+        new Config.ExtraArgs {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 4 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  messages = new Config.Messages {
+    issuesAgent =
+      "cargo deny reports issues; inspect diagnostics at {{ diagnostics_path }}."
+  }
+}

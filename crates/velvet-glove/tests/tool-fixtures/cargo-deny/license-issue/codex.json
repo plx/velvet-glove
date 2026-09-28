@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"cargo deny reports issues; inspect diagnostics at <workspace>/.velvet-glove/cargo-deny-agent-hook/test-session_test-turn_cargo-deny-tool_cargo-deny-tool-issues.txt."}}
