@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"cargo fmt changed alpha/src/lib.rs, beta/src/lib.rs; re-read changed files before editing further.","hookEventName":"PostToolUse"}}
+{"hookSpecificOutput":{"additionalContext":"velvet-glove auto-fixed alpha/src/lib.rs (cargo fmt), beta/src/lib.rs (cargo fmt); re-read before editing.","hookEventName":"PostToolUse"},"systemMessage":"velvet-glove auto-fixed alpha/src/lib.rs (cargo fmt), beta/src/lib.rs (cargo fmt); re-read before editing."}
