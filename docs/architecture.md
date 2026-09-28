@@ -158,3 +158,14 @@ single `reason` fallback and cannot preserve audience separation. A blocked
 completion never has an empty `reason`. The summary records emitted, omitted,
 empty, or unrepresentable status for each audience. Allowed completion stays
 allowed under both best-effort modes.
+
+## Direct checks
+
+`velvet-glove check` calls `hookkit_tool_runner::run_check`, which reuses the
+deferred planner (`build_deferred_plan`), executor, artifact writer, and the
+reporter's excerpt and problem summaries on an explicit candidate list. It
+skips everything hook-specific: no native input, session state, file-activity
+window, loop guard, or lowering. Logs and a `summary.json` go to a fresh
+`$TMPDIR/velvet-glove/check/<millis>-<pid>` directory. The command itself
+only chooses the files (explicit, expanded directories, or `git status`) and
+renders the report as text or JSON.

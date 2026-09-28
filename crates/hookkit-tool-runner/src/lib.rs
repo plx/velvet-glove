@@ -8,14 +8,16 @@
 //! [`hookkit_session_state`] and commits detailed run bundles before deciding
 //! whether a turn may stop.
 
+mod check;
 mod deferred;
 mod excerpt;
 mod vcs;
 
+pub use check::{CheckError, CheckReport, CheckRequest, CheckStatus, run_check};
 pub use deferred::{
     ArtifactClassification, CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult,
-    FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
-    ToolReportRef,
+    FileAssessment, FileResult, FileStatus, IssueExcerpt, OperationalProblem, ProblemSummary,
+    RunArtifact, ToolReport, ToolReportRef,
 };
 use deferred::{
     BlockReasons, DEFAULT_BLOCK_REASON, DeferredLog, DeferredReporter, LoopGuardState,
@@ -999,7 +1001,7 @@ fn run_turn_completion_view(
     };
     let mut execution = execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast);
     let tools = write_deferred_artifacts(
-        &run,
+        &mut |relative, contents| run.write_text(relative, contents).map_err(state_error),
         &plan,
         &planned_tools,
         &execution.logs,
@@ -1007,17 +1009,7 @@ fn run_turn_completion_view(
     )?;
     let mut result = execution.result;
     record_activity_resolution(&mut result, &commit.resolution);
-
-    let operational_files = result
-        .operational_problems
-        .values()
-        .flat_map(|problem| problem.affected_files.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    for candidate in &commit.candidates {
-        if !result.files.contains_key(candidate) && !operational_files.contains(candidate) {
-            result.record_uncovered(candidate.clone());
-        }
-    }
+    record_uncovered_candidates(&mut result, &commit.candidates);
 
     reporter.apply_groups(&mut result, &project_root);
     let template_run_id = run_id(run.directory())?;
@@ -1220,6 +1212,21 @@ impl DeferredCommit<'_, '_> {
     }
 }
 
+/// Mark candidates that no workflow assessed and no operational problem
+/// covers as uncovered (typically: no configured tool selects them).
+fn record_uncovered_candidates(result: &mut DeferredRunResult, candidates: &[PathBuf]) {
+    let operational_files = result
+        .operational_problems
+        .values()
+        .flat_map(|problem| problem.affected_files.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    for candidate in candidates {
+        if !result.files.contains_key(candidate) && !operational_files.contains(candidate) {
+            result.record_uncovered(candidate.clone());
+        }
+    }
+}
+
 fn missing_tool_messages(result: &DeferredRunResult) -> String {
     result
         .operational_problems
@@ -1382,8 +1389,12 @@ fn invocation_jobs(base_jobs: &[ToolJob], invocation: InvocationGranularity) -> 
         .collect()
 }
 
+/// Writes one text artifact at a run-relative path and returns its absolute
+/// path: a session run bundle for hooks, a plain directory for `check`.
+type ArtifactWriter<'a> = dyn FnMut(&str, &str) -> hookkit_core::Result<PathBuf> + 'a;
+
 fn write_deferred_artifacts(
-    run: &RunBundle,
+    write: &mut ArtifactWriter<'_>,
     plan: &[ScheduledWorkflow],
     tools: &[PlannedDeferredTool],
     logs: &[DeferredLog],
@@ -1421,7 +1432,7 @@ fn write_deferred_artifacts(
             scheduled.tool_index, scheduled.workflow_index, scheduled.job_index,
         );
         let contents = format_deferred_artifact(log)?;
-        let absolute = run.write_text(&relative, &contents).map_err(state_error)?;
+        let absolute = write(&relative, &contents)?;
         let artifact_id = format!("{report_id}-{phase}");
         attach_report_artifact(result, &report_id, &artifact_id);
         result.record_artifact(RunArtifact {

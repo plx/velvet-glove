@@ -411,6 +411,18 @@ fn setup_commands_do_not_need_a_harness() {
         &["velvet-glove", "doctor", "--dir", "."],
         &["velvet-glove", "--config", "p.pkl", "doctor"],
         &["velvet-glove", "init", "--print", "--force"],
+        &["velvet-glove", "check"],
+        &[
+            "velvet-glove",
+            "check",
+            "--json",
+            "--dir",
+            ".",
+            "a.py",
+            "src",
+        ],
+        &["velvet-glove", "check", "--config", "p.pkl", "a.py"],
+        &["velvet-glove", "--config", "p.pkl", "check"],
     ] {
         let cli = Cli::try_parse_from(args).unwrap_or_else(|error| panic!("{args:?}: {error}"));
         assert!(cli.validate().is_ok(), "{args:?}");
@@ -419,6 +431,8 @@ fn setup_commands_do_not_need_a_harness() {
         &["velvet-glove", "post-tool"][..],
         &["velvet-glove", "--harness", "claude", "tools"],
         &["velvet-glove", "--config", "p.pkl", "init"],
+        &["velvet-glove", "--harness", "claude", "check"],
+        &["velvet-glove", "--state-dir", "/tmp/state", "check"],
     ] {
         let cli = Cli::try_parse_from(args).unwrap();
         assert!(cli.validate().is_err(), "{args:?} must be rejected");

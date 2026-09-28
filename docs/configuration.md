@@ -354,6 +354,33 @@ Pkl is missing or older than 0.31.1, the policy fails to evaluate, or `run`
 names a tool that no `tools` entry defines; an empty `run` list, disabled
 entries, and missing executables are warnings.
 
+## Running the checks by hand
+
+`velvet-glove [--config PATH] check [--dir DIR] [--json] [FILES...]` runs the
+policy's Stop-time workflows (check, remedy, final check) right now, with the
+same engine as the Stop hook but outside any hook: it reads no hook payload
+and never touches session state. It checks the named files (relative to
+`DIR`; directories expand to their non-ignored files) or, with no `FILES`, the
+Git work tree's modified, staged, and untracked files under `DIR`. Automatic
+fixes are applied, as at Stop.
+
+It prints one line per file (`clean`, `auto-fixed by Ruff`, `needs manual
+fixes`, or `not checked: … could not run`), the same bounded excerpts the
+agent would see for remaining issues, any tool problems, and the directory
+holding every command log and a `summary.json`
+(`$TMPDIR/velvet-glove/check/<run>`, newest 20 kept). `--json` prints the
+same information as one object (`status`, `exitCode`, `files`, `issues`,
+`problems`, `outOfScope`, `logDirectory`, `summaryPath`).
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Every file is clean or was auto-fixed. |
+| `1` | Manual fixes remain. |
+| `2` | A tool could not run (missing, crashed, timed out), the policy failed to load, or a named file does not exist. |
+
+Use it to try a policy before relying on the hooks, in CI, or to validate a
+tool spec against real files.
+
 ## Deferred reports
 
 The default Stop-time messages follow one contract:
