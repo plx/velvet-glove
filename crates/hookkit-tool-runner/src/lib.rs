@@ -2814,12 +2814,9 @@ fn build_jobs(paths: &[PathBuf], project_root: &Path, spec: &ToolSpec) -> Vec<To
     if let Some(indicator) = &spec.workspace_indicator {
         let mut grouped = BTreeMap::<PathBuf, ToolJob>::new();
         for path in paths {
-            if let Some(indicator_path) = nearest_workspace_indicator(path, project_root, indicator)
+            if let Some((workspace_dir, indicator_path)) =
+                nearest_workspace_indicator(path, project_root, indicator)
             {
-                let workspace_dir = indicator_path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| project_root.to_path_buf());
                 grouped
                     .entry(workspace_dir.clone())
                     .or_insert_with(|| ToolJob {
@@ -2841,16 +2838,23 @@ fn build_jobs(paths: &[PathBuf], project_root: &Path, spec: &ToolSpec) -> Vec<To
     }
 }
 
+/// Finds the nearest ancestor of `path` (up to `project_root`) whose
+/// `indicator`-relative file exists, returning both that ancestor (the
+/// workspace root) and the indicator file itself. `indicator` may be a
+/// multi-component relative path (e.g. `sorbet/config`), so the workspace
+/// root is the directory the search matched *from*, not simply the
+/// indicator file's immediate parent — that would land inside `sorbet/`
+/// instead of the app root for a nested indicator like that one.
 fn nearest_workspace_indicator(
     path: &Path,
     project_root: &Path,
     indicator: &str,
-) -> Option<PathBuf> {
+) -> Option<(PathBuf, PathBuf)> {
     let mut current = path.parent();
     while let Some(dir) = current {
         let candidate = dir.join(indicator);
         if candidate.is_file() {
-            return Some(candidate);
+            return Some((dir.to_path_buf(), candidate));
         }
         if dir == project_root {
             break;
@@ -4124,6 +4128,33 @@ mod tests {
             "velvet-glove-runner-{label}-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn nearest_workspace_indicator_resolves_nested_indicators_to_their_own_directory() {
+        // A single-component indicator (e.g. "Cargo.toml") sitting directly in
+        // the workspace root, and a nested one (e.g. "sorbet/config") one
+        // level deeper, must both resolve `workspace_dir` to the same app
+        // root — not to the indicator's immediate parent, which for the
+        // nested case would be the "sorbet" directory itself.
+        let root = unique_test_directory("nearest-workspace-indicator");
+        std::fs::create_dir_all(root.join("sorbet")).unwrap();
+        std::fs::write(root.join("Gemfile"), "source 'https://rubygems.org'\n").unwrap();
+        std::fs::write(root.join("sorbet/config"), "--dir\n.\n").unwrap();
+        let file = root.join("example.rb");
+        std::fs::write(&file, "# typed: true\n").unwrap();
+
+        let (single_dir, single_indicator) =
+            nearest_workspace_indicator(&file, &root, "Gemfile").expect("Gemfile found");
+        assert_eq!(single_dir, root);
+        assert_eq!(single_indicator, root.join("Gemfile"));
+
+        let (nested_dir, nested_indicator) =
+            nearest_workspace_indicator(&file, &root, "sorbet/config").expect("config found");
+        assert_eq!(nested_dir, root);
+        assert_eq!(nested_indicator, root.join("sorbet/config"));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
