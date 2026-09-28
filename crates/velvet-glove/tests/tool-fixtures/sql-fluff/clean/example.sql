@@ -1,0 +1,2 @@
+SELECT a
+FROM mytable
