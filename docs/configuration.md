@@ -34,13 +34,16 @@ Enabled tools named in `run` are validated when the policy loads: unknown
 `run` entries, `phaseOrder`/`workflowOrder` entries that name nothing, an exit
 code in two classes, a verify phase or workflow check that declares writes,
 and a mutating phase or remedy without a write scope are all rejected with an
-itemised error. The immediate hook reports a load error to the user only;
-no tool runs, and the tool call is never blocked.
+itemised error. The hooks report a load error to the user only: no tool runs,
+and neither the tool call nor Stop is blocked (unless
+`deferredReporting.blockOnOperationalErrors` is set). `doctor` and `check`
+print it and exit nonzero.
 
 ## Discovery and merge order
 
 When `--config PATH` is present, Velvet Glove loads only that file and anchors
-relative project behavior on the event workspace. Otherwise it merges:
+relative project behavior on the event workspace (for `doctor` and `check`,
+on `--dir`). Otherwise it merges:
 
 1. the home policy, `~/.velvet-glove/post-tool-use.pkl`;
 2. project policies, `<dir>/.velvet-glove/post-tool-use.pkl`, for every
@@ -302,12 +305,14 @@ line.
 
 ## Built-in tools
 
-The embedded catalog currently contains 134 reusable specifications, including
-Ruff, Prettier, ESLint, Biome, Cargo fmt, and Cargo Clippy. Each enabled entry
-either has explicit deferred workflows or a validated compatibility
-translation. The generated [built-in workflow audit](builtin-deferred-workflow-audit.md)
-is the authoritative inventory of commands, scopes, invocation granularity,
-and known limitations. `velvet-glove tools [--json]` lists every entry's Pkl
+The embedded catalog currently contains 134 reusable specifications (122
+enabled), including Ruff, Prettier, ESLint, Biome, Cargo fmt, and Cargo
+Clippy. Each enabled entry either has explicit deferred workflows or a
+validated compatibility translation. The generated
+[built-in workflow audit](builtin-deferred-workflow-audit.md) is the
+authoritative inventory of commands, scopes, invocation granularity, and
+known limitations; [tool support status](tool-support.md) tracks which
+builtins have been validated against real tools. `velvet-glove tools [--json]` lists every entry's Pkl
 key (the name used in `tools` and `run`, e.g. `cargoFmt`), id, file globs, and
 where its executable resolves (`project-local` under the default
 `localBinDirs`, `found` on `PATH`, or `missing`).
@@ -370,7 +375,9 @@ agent would see for remaining issues, any tool problems, and the directory
 holding every command log and a `summary.json`
 (`$TMPDIR/velvet-glove/check/<run>`, newest 20 kept). `--json` prints the
 same information as one object (`status`, `exitCode`, `files`, `issues`,
-`problems`, `outOfScope`, `logDirectory`, `summaryPath`).
+`problems`, `outOfScope`, `logDirectory`, `summaryPath`); `status` is
+`clean`, `auto-fixed`, `manual`, `operational`, or, when nothing could run,
+`error` with an `error` message.
 
 | Exit | Meaning |
 | --- | --- |
@@ -400,6 +407,12 @@ existing files, the issues are out of scope and never block; if it names no
 file at all, every candidate is blamed. Git-ignored files (build outputs, for
 example) are never candidates.
 
+Each Stop that runs tools writes every command's log and a `summary.json`
+(the complete result, block decision, and rendered messages) to a run
+directory under the state root, `$TMPDIR/velvet-glove/state/…/runs/<run>/`;
+each session keeps its newest 20 runs. The user message for a block names
+that directory.
+
 `settings.deferredReporting` defines ordered file groups plus `clean`,
 `autoFixed`, `manualFixesNeeded`, and `operationalError` user/agent templates.
 `masterUser` and `masterAgent` combine the rendered buckets. Templates use
@@ -421,8 +434,8 @@ committed as operational artifacts.
 | --- | --- | --- |
 | `deferredReporting.blockOnOperationalErrors` | `false` | Also block Stop on tool crashes and configuration errors. |
 | `deferredReporting.maxConsecutiveBlocks` | `3` | Blocks allowed in one chain of stop-hook continuations; `0` disables the cap. |
-| `deferredReporting.excerptMaxLines` | `60` | Total final-check lines quoted to the agent across all issues. |
-| `deferredReporting.excerptMaxChars` | `6000` | Total final-check characters quoted to the agent across all issues. |
+| `deferredReporting.excerptMaxLines` | `60` | Total check-output lines quoted to the agent across all issues (at Stop, and per call in immediate mode). |
+| `deferredReporting.excerptMaxChars` | `6000` | Total check-output characters quoted to the agent across all issues (likewise). |
 
 Missing executables follow `settings.missingToolPolicy` at Stop too:
 `user-notice` notifies without blocking or keeping the files pending,

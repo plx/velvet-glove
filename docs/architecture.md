@@ -37,15 +37,19 @@ add a dedicated benchmark/measurement lane before publishing performance claims.
 ## Immediate PostToolUse
 
 `velvet-glove post-tool-immediate` observes the call's exact file candidates
-first and returns `{}` without evaluating Pkl when there are none. Otherwise
-it runs each `run` tool's phases over the matching files, one tool after
-another; a tool's independent jobs run in parallel (`jobs = 0` is available
-parallelism, capped at 8). Claude and Codex output uses the native channels:
-agent text in `hookSpecificOutput.additionalContext`, user notices in the
-user-only `systemMessage`, and never exit-0 stderr. Auto-fixes collapse into
-one line for both audiences; full command output goes only to diagnostics
-files, which default to `$TMPDIR/velvet-glove/state/post-tool-immediate`.
-Policy load errors become a user notice rather than a hook failure.
+first, drops Git-ignored ones (the same `vcs.rs` helper Stop uses), and
+returns `{}` without evaluating Pkl when none remain. Otherwise it runs each
+`run` tool's phases over the matching files, one tool after another; a tool's
+independent jobs run in parallel (`jobs = 0` is available parallelism, capped
+at 8). Claude and Codex output uses the native channels: agent text in
+`hookSpecificOutput.additionalContext`, user notices in the user-only
+`systemMessage`, and never exit-0 stderr. Auto-fixes collapse into one line
+for both audiences. Remaining issues reach the agent as the files plus a
+bounded excerpt (`excerpt.rs`) of the output of the phases that decided them,
+under the same `deferredReporting.excerptMax*` budget as Stop; full command
+output goes only to diagnostics files, which default to
+`$TMPDIR/velvet-glove/state/post-tool-immediate`. Policy load errors become a
+user notice rather than a hook failure.
 
 Both hooks share command plumbing: bare program names resolve through
 `settings.localBinDirs` before `PATH`, each tool's `env` is applied, and every
@@ -63,7 +67,9 @@ PostToolUse observer delegates structured, patch, and shell analysis to
 The immediate runner uses the same observation path for exact file candidates
 instead of maintaining a second open-payload walker. Before taking the entity view, it
 reconciles workspace mtimes from the prior durable cursor, using current-session
-start metadata only as the first lower bound. The aligned lifecycle is Claude,
+start metadata only as the first lower bound; the scan never enters
+`fileActivity.ignoredDirectoryNames` (VCS metadata, dependency trees, build
+output, and tool caches such as `.ruff_cache`). The aligned lifecycle is Claude,
 Codex, or Antigravity Stop. Antigravity lacks a precise session-start
 producer but its PostToolUse tool-call evidence can feed the tracker directly.
 
@@ -93,7 +99,11 @@ compatibility translation has a read-only final phase before it can ship as
 enabled. The generated
 [`builtin-deferred-workflow-audit.md`](builtin-deferred-workflow-audit.md)
 records every command, inferred or explicit scope, invocation granularity, and
-known limitation. Immediate PostToolUse continues to use legacy `phases`.
+known limitation. Immediate PostToolUse continues to use legacy `phases`. A
+user-defined tool whose phases only mutate (a formatter with no verify phase)
+translates to check-less workflows: the remedy runs, files it changed are
+reported as auto-fixed with `unverified` set on the report, and it never
+blocks; only a failing remedy is operational.
 
 Every executed deferred command writes its own artifact under a deterministic
 tool/workflow/job/phase path in a unique run bundle. Artifact metadata includes

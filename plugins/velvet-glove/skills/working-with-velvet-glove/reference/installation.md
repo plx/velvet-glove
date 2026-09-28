@@ -22,10 +22,13 @@
    ```sh
    velvet-glove init      # writes .velvet-glove/post-tool-use.pkl
    velvet-glove doctor    # config chain, run list, tool and Pkl status
+   velvet-glove check     # run the Stop-time checks on changed files now
    ```
 
    `init --print` previews without writing; `init --force` regenerates.
-   Without a policy the hooks run nothing.
+   Without a policy the hooks run nothing. `check` exits 0 when everything is
+   clean or auto-fixed, 1 when manual fixes remain, and 2 when a tool could
+   not run.
 
 ## Modes
 

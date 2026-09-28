@@ -15,6 +15,14 @@ the state directory, and exits nonzero when the hooks cannot work.
   `settings.localBinDirs`, or install the tool on `PATH`.
 - **Pkl errors:** install Pkl 0.31.1 or newer; `doctor` shows the evaluation
   error for a broken policy.
+- **Unexpected verdicts:** run `velvet-glove check FILES` (add `--json` for
+  detail) to see what the Stop hook would report, and read the logs in the
+  directory it prints. After a real Stop, the user message names the run
+  directory holding every command log and `summary.json`.
+- **Hand-registered hooks exit 1 with no output:** the pinned HookKit rejects
+  a lone `CLAUDE_PLUGIN_ROOT` or `CLAUDE_PLUGIN_DATA` inherited from another
+  plugin's environment. Use the plugin, or prefix the command with
+  `env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_PLUGIN_DATA`.
 - **Wrong harness:** the plugin launcher picks Codex when `PLUGIN_ROOT` and
   `PLUGIN_DATA` are both set and Claude Code otherwise. Set
   `VELVET_GLOVE_HARNESS=claude|codex` to override.
