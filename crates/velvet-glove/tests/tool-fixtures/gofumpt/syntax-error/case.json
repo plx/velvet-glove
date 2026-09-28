@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.go has a syntax error: gofumpt -l/-w exit 2, distinct from the clean (0) exit code, with `example.go:5:1: expected operand`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

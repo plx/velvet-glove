@@ -1,0 +1,8 @@
+{
+  "outcome": "manual",
+  "files": {
+    "example.go": "auto-fixed",
+    "example.invalid.go": "manual"
+  },
+  "note": "example.invalid.go does not parse: gofmt exits 2 with `example.invalid.go:3:15: expected ')'`. Its failure names that file at a source location, so it is a syntax error for the agent to fix, not an operational failure, and it no longer stops the batch: gofmt still formats example.go, which parses."
+}

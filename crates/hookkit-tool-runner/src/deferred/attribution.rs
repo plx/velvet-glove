@@ -1,6 +1,8 @@
 //! Attribute a failing check's output to the files it names.
 
+use super::execution::combined_output;
 use crate::excerpt::strip_ansi;
+use crate::{PhaseLog, PhaseStatus};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -103,6 +105,50 @@ pub(crate) fn attribute<B: AsRef<Path>>(
     }
 }
 
+/// Candidates that `output` names at a source location: any spelling
+/// [`attribute`] recognizes, immediately followed by `:<line>` (and
+/// optionally `:<column>`), as in `x.py:3: error: invalid syntax` or
+/// ` --> src/lib.rs:3:5`. Returned as given, in order.
+pub(crate) fn located_candidates<B: AsRef<Path>>(
+    output: &str,
+    candidates: &BTreeSet<PathBuf>,
+    bases: &[B],
+) -> Vec<PathBuf> {
+    let bases = bases.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+    let text = strip_ansi(output);
+    candidates
+        .iter()
+        .filter(|original| {
+            let canonical =
+                std::fs::canonicalize(original).unwrap_or_else(|_| original.to_path_buf());
+            spellings(&canonical, original, &bases)
+                .iter()
+                .any(|spelling| mentions_at_location(&text, spelling))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The candidates a command that exited with a failure code names at a
+/// source location: such a command found a problem in those files (a parser
+/// error such as mypy's or `ruff format`'s exit 2), not a problem running, so
+/// a check doing this reports issues in them. Empty for a failure naming no
+/// candidate at a location (a usage error, a crash, a broken config file),
+/// for a spawn error, timeout, or signal, and for any other result.
+pub(crate) fn source_failure_files<B: AsRef<Path>>(
+    log: &PhaseLog,
+    candidates: &BTreeSet<PathBuf>,
+    bases: &[B],
+) -> Vec<PathBuf> {
+    if log.error.is_some()
+        || log.status.is_none()
+        || log.classification != Some(PhaseStatus::Failure)
+    {
+        return Vec::new();
+    }
+    located_candidates(&combined_output(log), candidates, bases)
+}
+
 /// Every way a tool is likely to print `candidate`: absolute (as given and
 /// canonical) and relative to each base, with `/` separators.
 fn spellings(canonical: &Path, original: &Path, bases: &[&Path]) -> BTreeSet<String> {
@@ -148,6 +194,24 @@ fn mentions(text: &str, spelling: &str) -> bool {
         from = start + text[start..].chars().next().map_or(1, char::len_utf8);
     }
     false
+}
+
+/// Whether `text` mentions `spelling` as a whole path followed by a
+/// `:<line>` location.
+fn mentions_at_location(text: &str, spelling: &str) -> bool {
+    if spelling.is_empty() {
+        return false;
+    }
+    text.match_indices(spelling).any(|(start, _)| {
+        let starts_cleanly = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| is_delimiter(c) || c == ':');
+        let mut after = text[start + spelling.len()..].chars();
+        starts_cleanly
+            && after.next() == Some(':')
+            && after.next().is_some_and(|c| c.is_ascii_digit())
+    })
 }
 
 fn is_delimiter(character: char) -> bool {
@@ -344,6 +408,91 @@ mod tests {
         assert_eq!(path_part("C:/src/a.py:3"), "C:/src/a.py");
         assert_eq!(path_part("src/a.py:3:1:"), "src/a.py");
         assert_eq!(path_part("a.py."), "a.py");
+    }
+
+    #[test]
+    fn located_candidates_need_a_line_after_the_path() {
+        let tree = Tree::new("located");
+        let candidates = BTreeSet::from([tree.path("src/a.py"), tree.path("src/b.py")]);
+        let bases = [&tree.0];
+        // mypy, rustc/Ruff, and absolute spellings name a location.
+        let mypy = "src/a.py:3: error: invalid syntax  [syntax]\nFound 1 error";
+        assert_eq!(
+            located_candidates(mypy, &candidates, &bases),
+            vec![tree.path("src/a.py")]
+        );
+        let ruff = format!(
+            "error: Failed to parse {}:3:1: unexpected EOF\n --> src/b.py:1:2\n",
+            tree.path("src/a.py").display()
+        );
+        assert_eq!(
+            located_candidates(&ruff, &candidates, &bases),
+            vec![tree.path("src/a.py"), tree.path("src/b.py")]
+        );
+        // A bare mention, another file's location, or a longer path is not.
+        for output in [
+            "error: cannot read src/a.py",
+            "src/a.py: permission denied",
+            "src/a.py:: odd",
+            "src/other.py:3: error: invalid syntax",
+            "lib/src/a.py:3: error",
+        ] {
+            assert!(
+                located_candidates(output, &candidates, &bases).is_empty(),
+                "{output}"
+            );
+        }
+    }
+
+    fn failed_log(status: Option<i32>, classification: PhaseStatus, stderr: &str) -> PhaseLog {
+        PhaseLog {
+            phase: "verify".into(),
+            command: "tool".into(),
+            program: "tool".into(),
+            arguments: Vec::new(),
+            status,
+            classification: Some(classification),
+            stdout: String::new(),
+            stderr: stderr.into(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn only_a_located_failure_exit_is_a_source_failure() {
+        let tree = Tree::new("source-failure");
+        std::fs::write(tree.path("pyproject.toml"), "x\n").unwrap();
+        let candidates = BTreeSet::from([tree.path("src/a.py")]);
+        let bases = [&tree.0];
+        let syntax = "src/a.py:3: error: invalid syntax  [syntax]\n";
+        assert_eq!(
+            source_failure_files(
+                &failed_log(Some(2), PhaseStatus::Failure, syntax),
+                &candidates,
+                &bases
+            ),
+            vec![tree.path("src/a.py")]
+        );
+        // A broken config, even at a location, or a usage error is operational.
+        for stderr in [
+            "error: bad config pyproject.toml",
+            "pyproject.toml:2:1: error: unknown key",
+            "usage: mypy [-h]\nmypy: error: unrecognized arguments: --bogus-flag",
+        ] {
+            let log = failed_log(Some(2), PhaseStatus::Failure, stderr);
+            assert!(
+                source_failure_files(&log, &candidates, &bases).is_empty(),
+                "{stderr}"
+            );
+        }
+        // Only a failure exit qualifies: not issues, a signal, or a spawn error.
+        let issues = failed_log(Some(1), PhaseStatus::Issues, syntax);
+        assert!(source_failure_files(&issues, &candidates, &bases).is_empty());
+        let signal = failed_log(None, PhaseStatus::Failure, syntax);
+        assert!(source_failure_files(&signal, &candidates, &bases).is_empty());
+        let mut timeout = failed_log(Some(2), PhaseStatus::Failure, syntax);
+        timeout.error = Some("timed out".into());
+        assert!(source_failure_files(&timeout, &candidates, &bases).is_empty());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use super::attribution::{Attribution, attribute, resolution_bases};
+use super::attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 use super::{CheckOutcome, DeferredRunResult, OperationalProblem, ToolReport};
 use crate::{
     CheckScope, CommandPhase, PhaseLog, PhaseStatus, RenderedCommand, Snapshot, ToolContext,
@@ -69,6 +69,10 @@ struct WorkflowState {
     /// Outcome and combined output of the most recent check.
     last_check: Option<CheckOutcome>,
     last_output: String,
+    /// Candidates the most recent check named at a source location while
+    /// exiting with a failure code (a parser error), which made it an issues
+    /// result for exactly these files.
+    last_located: Vec<PathBuf>,
     /// Number of write impacts that the most recent check already observed.
     checked_at: usize,
     fix_attempted: bool,
@@ -281,7 +285,11 @@ pub(crate) fn execute_deferred_workflows(
         report.normalize();
 
         if report.final_check == Some(CheckOutcome::Issues) && !state.operational {
-            attribute_issues(&mut report, &state.last_output, scheduled);
+            if state.last_located.is_empty() {
+                attribute_issues(&mut report, &state.last_output, scheduled);
+            } else {
+                report.issue_files = state.last_located.clone();
+            }
         }
         if let Some(failure) = remedy_failure {
             if report.issue_files.is_empty() {
@@ -344,9 +352,23 @@ fn record_check(
     state: &mut WorkflowState,
     scheduled: &ScheduledWorkflow,
     phase: CommandPhase,
-    log: PhaseLog,
+    mut log: PhaseLog,
     checked_at: usize,
 ) -> Option<CheckOutcome> {
+    // A check that fails while naming a candidate at a source location
+    // (`x.py:3: error: invalid syntax`) found a source problem in it.
+    let scope = scheduled
+        .job
+        .files
+        .iter()
+        .chain(state.changed_files.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let bases = resolution_bases(&scheduled.job.workspace_dir, &scheduled.project_root);
+    state.last_located = source_failure_files(&log, &scope, &bases);
+    if !state.last_located.is_empty() {
+        log.classification = Some(PhaseStatus::Issues);
+    }
     let outcome = check_outcome(&log);
     state.checked_at = checked_at;
     match &outcome {

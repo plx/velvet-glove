@@ -23,7 +23,7 @@ use deferred::{
     Attribution, BlockReasons, DEFAULT_BLOCK_REASON, DeferredLog, DeferredReporter, LoopGuardState,
     RenderedBuckets, RenderedMessages, ScheduledWorkflow, StopLoweringMetadata, TemplateRun,
     attribute, combined_output, decide_loop_guard, execute_deferred_workflows, issue_fingerprint,
-    plan_stop_lowering, resolution_bases,
+    plan_stop_lowering, resolution_bases, source_failure_files,
 };
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -3287,11 +3287,23 @@ fn resolve_worker_count(jobs_setting: u32, job_count: usize) -> usize {
 fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     let before_scope = snapshot_scope(job, context);
     let before = Snapshot::read(&before_scope);
+    let bases = resolution_bases(&job.workspace_dir, context.project_root);
+    let job_files = job.files.iter().cloned().collect::<BTreeSet<_>>();
     let mut logs = Vec::new();
     let mut saw_issues = false;
     let mut verify_state = None;
     let mut verifier_issue_output = Vec::new();
     let mut phase_issue_output = Vec::new();
+    // Verifier output that blames files by mentioning them, and the job files
+    // that verifiers failing at a source location named: those are blamed
+    // exactly, as at Stop, not by everything else their output mentions.
+    let mut attributable_output = Vec::new();
+    let mut located = BTreeSet::new();
+    // A mutating phase that failed on a source problem in a job file (a
+    // formatter that cannot parse a syntax error): as at Stop, later phases
+    // still run, and the failure stands only if they report no issues in the
+    // job's files to explain it.
+    let mut source_failure = None;
 
     for phase in &context.spec.phases {
         if !phase.enabled {
@@ -3299,7 +3311,18 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
         }
 
         let command = render_command(phase, job, context);
-        let log = run_phase_command(phase, &command, &job.workspace_dir);
+        let mut log = run_phase_command(phase, &command, &job.workspace_dir);
+        // A failure naming a job file at a source location (mypy's or
+        // `ruff format`'s exit 2 on a syntax error) is that file's problem.
+        let source_files = source_failure_files(&log, &job_files, &bases);
+        if !source_files.is_empty() {
+            if !phase.is_verifier() {
+                source_failure.get_or_insert((phase.id.clone(), log.status));
+                logs.push(log);
+                continue;
+            }
+            log.classification = Some(PhaseStatus::Issues);
+        }
 
         if let Some(error) = &log.error {
             if error == "not found" {
@@ -3335,6 +3358,11 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 if phase.is_verifier() {
                     verify_state = Some(IssueState::Issues);
                     verifier_issue_output.push(combined_output(&log));
+                    if source_files.is_empty() {
+                        attributable_output.push(combined_output(&log));
+                    } else {
+                        located.extend(source_files);
+                    }
                 }
             }
             Some(PhaseStatus::Failure) | None => {
@@ -3360,10 +3388,10 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     } else {
         IssueState::Clean
     });
-    let issue_output = match (issues, verify_state) {
-        (IssueState::Clean, _) => Vec::new(),
-        (IssueState::Issues, Some(_)) => verifier_issue_output,
-        (IssueState::Issues, None) => phase_issue_output,
+    let (issue_output, attributable_output) = match (issues, verify_state) {
+        (IssueState::Clean, _) => (Vec::new(), Vec::new()),
+        (IssueState::Issues, Some(_)) => (verifier_issue_output, attributable_output),
+        (IssueState::Issues, None) => (phase_issue_output.clone(), phase_issue_output),
     };
     let issue_output = issue_output.join("\n");
     // As at Stop, blame the files the deciding output names: a workspace-wide
@@ -3371,6 +3399,9 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
     // file this call changed.
     let (files, out_of_scope) = match issues {
         IssueState::Clean => (job.files.clone(), Vec::new()),
+        IssueState::Issues if attributable_output.is_empty() => {
+            (located.into_iter().collect(), Vec::new())
+        }
         IssueState::Issues => {
             let scope = job
                 .files
@@ -3378,14 +3409,30 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 .chain(&changed_files)
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            let bases = resolution_bases(&job.workspace_dir, context.project_root);
-            match attribute(&issue_output, &scope, &bases) {
-                Attribution::Named(files) => (files, Vec::new()),
-                Attribution::OutOfScope(others) => (Vec::new(), others),
+            match attribute(&attributable_output.join("\n"), &scope, &bases) {
+                Attribution::Named(files) => {
+                    located.extend(files);
+                    (located.into_iter().collect(), Vec::new())
+                }
+                Attribution::OutOfScope(others) if located.is_empty() => (Vec::new(), others),
+                Attribution::OutOfScope(_) => (located.into_iter().collect(), Vec::new()),
                 Attribution::Unnamed => (job.files.clone(), Vec::new()),
             }
         }
     };
+    if let Some((phase, exit_code)) = source_failure {
+        let explained =
+            issues == IssueState::Issues && files.iter().any(|file| job_files.contains(file));
+        if !explained {
+            return ToolRunOutcome::ToolFailed {
+                phase,
+                exit_code,
+                error: None,
+                diagnostics: format_logs(&logs),
+                changed_files,
+            };
+        }
+    }
     let changes = if changed_files.is_empty() {
         ChangeState::Unchanged
     } else {

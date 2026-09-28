@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "Unparseable Starlark makes buildifier exit 1 in both check and fix mode (neither the clean 0 nor the issues 4 declared here) with `BUILD.bazel:4:1: syntax error`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

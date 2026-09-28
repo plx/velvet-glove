@@ -236,6 +236,10 @@ if [[ "$mode" == "format" ]]; then
     echo "format crashed" >&2
     exit 2
   fi
+  if grep -q "syntax_error" "$file"; then
+    echo "error: Failed to parse ${file}:1:19: Expected ')', found newline" >&2
+    exit 2
+  fi
   if grep -q "needs_format" "$file"; then
     if [[ "$check" == "1" ]]; then
       echo "Would reformat: $file"
@@ -276,6 +280,11 @@ if [[ "$mode" == "check" ]]; then
   if grep -q "check_crash" "$file"; then
     echo "check crashed" >&2
     exit 2
+  fi
+
+  if grep -q "syntax_error" "$file"; then
+    echo "${file}:1:19: SyntaxError: Expected ')', found newline"
+    exit 1
   fi
 
   if grep -q "manual_issue" "$file"; then
@@ -2405,6 +2414,180 @@ fn turn_completion_format_failure_does_not_hide_the_lint_diagnostic() {
 }
 
 #[test]
+fn turn_completion_syntax_error_is_a_manual_fix_not_a_tool_failure() {
+    require_pkl!();
+    let project = temp_project("turn-completion-syntax-error");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/broken.py");
+    std::fs::write(&file, "print(syntax_error\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block", "{response}");
+    let reason = response["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("src/broken.py:1:19: SyntaxError"),
+        "{reason}"
+    );
+    assert!(!reason.contains("could not run"), "{reason}");
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    assert_eq!(
+        summary["result"]["operationalProblems"],
+        serde_json::json!({}),
+        "ruff format's exit 2 on the syntax error is the file's problem"
+    );
+}
+
+/// A mypy-like checker: exit 2 with `<file>:3: error: invalid syntax` for a
+/// syntax error, exit 2 naming only its config file for a broken config.
+fn write_located_failure_config(project: &Path) {
+    let checker = write_executable(
+        project,
+        "typecheck",
+        r#"#!/bin/sh
+for file in "$@"; do
+  if grep -q bad_config "$file"; then
+    echo "error: bad config pyproject.toml" >&2
+    exit 2
+  fi
+  if grep -q syntax_error "$file"; then
+    echo "${file#"$PWD"/}:3: error: invalid syntax  [syntax]"
+    echo "Found 1 error in 1 file (errors prevented further checking)"
+    exit 2
+  fi
+done
+exit 0
+"#,
+    );
+    std::fs::write(project.join("pyproject.toml"), "[tool.typecheck]\n").unwrap();
+    let checker = checker.to_string_lossy().replace('\\', "\\\\");
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{ fileActivity {{ filesystemMtime = false }} }}
+
+tools {{
+  ["typecheck"] = new ToolSpec {{
+    id = "typecheck"
+    displayName = "Typecheck"
+    executable = "{checker}"
+    files {{ include = new Listing {{ "**/*.py" }} }}
+    phaseInvocation = "per-file"
+    phases {{
+      ["verify"] = new Phase {{
+        mode = "verify"
+        argv = new Listing {{ new Files {{}} }}
+        exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+      }}
+    }}
+    workflows {{
+      ["check"] = new Workflow {{
+        check = new WorkflowCommand {{
+          argv = new Listing {{ new Files {{}} }}
+          exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+        }}
+        invocation = "per-file"
+      }}
+    }}
+    workflowOrder = new Listing {{ "check" }}
+  }}
+}}
+run = new Listing {{ "typecheck" }}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_check_failure_at_a_candidate_location_is_manual_and_a_config_error_is_not() {
+    require_pkl!();
+    let project = temp_project("located-check-failure");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    write_located_failure_config(&project);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let broken = project.join("src/broken.py");
+    let configured = project.join("src/configured.py");
+    std::fs::write(&broken, "def f(:  # syntax_error\n").unwrap();
+    std::fs::write(&configured, "x = 1  # bad_config\n").unwrap();
+
+    // Immediate: the syntax error reaches the agent; the config error only
+    // the user.
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/broken.py"),
+        &["--claude"],
+    );
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        context.contains("src/broken.py:3: error: invalid syntax"),
+        "{json}"
+    );
+    assert!(!user.contains("failed"), "{user}");
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/configured.py"),
+        &["--claude"],
+    );
+    let (json, user) = immediate_response(&output);
+    assert!(json.get("hookSpecificOutput").is_none(), "{json}");
+    assert!(user.contains("Typecheck"), "{user}");
+
+    // Stop: the syntax error blocks as a manual fix; the config error is an
+    // operational problem for its file only.
+    for path in [&broken, &configured] {
+        seed_pending_file(&state_dir, "codex", path);
+    }
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block", "{response}");
+    assert!(
+        response["reason"]
+            .as_str()
+            .unwrap()
+            .contains("src/broken.py:3: error: invalid syntax"),
+        "{response}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    assert!(
+        summary["manualFixFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("src/broken.py")
+    );
+    let problems = summary["result"]["operationalProblems"]
+        .as_object()
+        .unwrap();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    let problem = problems.values().next().unwrap();
+    assert_eq!(problem["affectedFiles"].as_array().unwrap().len(), 1);
+    assert!(
+        problem["affectedFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("src/configured.py")
+    );
+}
+
+#[test]
 fn turn_completion_batch_blames_only_the_files_the_output_names() {
     require_pkl!();
     let project = temp_project("turn-completion-batch-attribution");
@@ -3073,6 +3256,34 @@ fn post_tool_use_manual_issues_quote_a_bounded_project_relative_excerpt() {
             && context.contains("velvet-glove/state/post-tool-immediate"),
         "{context}"
     );
+}
+
+#[test]
+fn post_tool_use_syntax_error_reports_the_diagnostic_not_a_formatter_failure() {
+    require_pkl!();
+    let project = temp_project("ruff-syntax-error");
+    let fake_ruff = write_fake_ruff(&project);
+    write_default_ruff_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/broken.py"), "print(syntax_error\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/broken.py"),
+        &["--claude"],
+    );
+
+    // `ruff format` fails at the syntax error; the verify phase still runs
+    // and its diagnostic explains the failure.
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        context.contains("src/broken.py:1:19: SyntaxError"),
+        "{json}"
+    );
+    assert!(!user.contains("failed"), "{user}");
 }
 
 #[test]

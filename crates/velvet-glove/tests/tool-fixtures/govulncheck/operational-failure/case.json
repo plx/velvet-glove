@@ -1,4 +1,0 @@
-{
-  "outcome": "operational",
-  "note": "example.go has a syntax error, so govulncheck can't load the package. It exits 1 (no network call is made), distinct from its clean (0) and issues (3) exit codes."
-}

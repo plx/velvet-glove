@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.hs does not parse: ormolu exits 3 in check and in-place mode with `example.hs:2:1` and the GHC parse error. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

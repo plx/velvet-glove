@@ -1,0 +1,7 @@
+{
+  "outcome": "manual",
+  "cite": [
+    "lib/broken.ex"
+  ],
+  "note": "lib/broken.ex does not compile, so mix test exits 1 (a Mix error) rather than 2 (failing tests), reporting a mismatched delimiter at `lib/broken.ex:3:1`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

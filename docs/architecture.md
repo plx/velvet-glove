@@ -138,7 +138,12 @@ candidate's absolute and relative spellings (so paths with spaces work), with
 other paths resolved against every directory from the command's workspace up
 to the project root; output naming only other existing files is out of scope
 and does not block; output naming no file is conservatively attributed to
-every candidate.
+every candidate. A check that exits with a failure code but names candidates
+at a source location (`path:line[:column]` in any spelling attribution
+understands, as mypy and `ruff format` report a syntax error) found a source
+problem: it counts as issues in exactly those candidates
+(`deferred/attribution.rs` holds the matcher, which the immediate runner
+reuses). Other failures stay operational.
 
 The runner commits `summary.json` only after every command artifact is durable
 and before changing pending state. The summary contains run identity, counts,
