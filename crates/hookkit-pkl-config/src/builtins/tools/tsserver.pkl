@@ -2,6 +2,16 @@
 ///
 /// Uses `tsc-files` (a thin shim around `tsc`) so individual files can be
 /// checked while still respecting the nearest `tsconfig.json`.
+///
+/// `tsc-files` resolves the `tsc` binary as `<typescript-package-dir>/../.bin/tsc`
+/// (see https://github.com/gustavopch/tsc-files/issues/44). That relative path
+/// only exists under classic npm's flat/hoisted `node_modules` layout; under an
+/// isolated pnpm-style install (no `.bin` sibling next to the `typescript`
+/// package) the resolved path doesn't exist, `spawnSync` fails, and tsc-files
+/// silently exits 0 without ever running `tsc` — a `tsc-files` bug, not a
+/// spec bug. Verified with tsc-files 1.1.4: a standard
+/// `npm install typescript tsc-files` (matching this spec's installHint)
+/// produces a working `.bin/tsc` and correctly reports type errors.
 
 module velvet_glove.builtins.tools.Tsserver
 
