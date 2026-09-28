@@ -303,8 +303,11 @@ phase that found the issues (or, for a tool without one, of the phases that
 did), with ANSI escapes removed and project paths made relative. The
 `deferredReporting.excerptMaxLines`/`excerptMaxChars` budget is divided among
 the tools that report issues in one call exactly as at Stop (an equal share
-each, at least 5 lines and 400 characters while budget remains); a cut
-excerpt ends with `…truncated; full log: <path>`. The texts come from the
+each, at least 5 lines and 400 characters while budget remains). Output
+that does not fit its share first has repeated lines collapsed (the first
+copy ends in `(repeated N times)`), so noise such as a warning printed once
+per target cannot crowd out the real error; a cut excerpt ends with
+`…truncated; full log: <path>`. The texts come from the
 tool's `messages.issuesAgent` / `issuesChangedAgent` templates, which receive
 `excerpt` alongside `tool`, `changed_files`, `issue_files`, and the
 `diagnostics_*` paths. A template that fails to render falls back to the
