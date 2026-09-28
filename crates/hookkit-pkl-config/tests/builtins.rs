@@ -515,6 +515,12 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
         clippy.messages.issues_changed_agent,
         hookkit_pkl_config::schema::default_issues_changed_agent()
     );
+    // The runner recognizes the default `cleanChangedAgent` by equality to
+    // share one auto-fix line, so Config.pkl must emit exactly the schema's.
+    assert_eq!(
+        clippy.messages.clean_changed_agent,
+        hookkit_pkl_config::schema::default_clean_changed_agent()
+    );
 }
 
 #[test]
@@ -733,4 +739,17 @@ run = new Listing<String> { "ruff" }
         error.contains("ruff (ruff): files.include has an invalid glob `**/*.{py`"),
         "{error}"
     );
+}
+
+#[test]
+fn auto_fixed_file_limit_matches_the_default_stop_templates() {
+    let reporting = hookkit_pkl_config::DeferredReporting::default();
+    let limit = hookkit_pkl_config::schema::AUTO_FIXED_LISTED_FILES;
+    for template in [&reporting.auto_fixed.user, &reporting.auto_fixed.agent] {
+        assert!(
+            template.contains(&format!("auto_fixed_files[:{limit}]"))
+                && template.contains(&format!("counts.auto_fixed > {limit}")),
+            "{template}"
+        );
+    }
 }
