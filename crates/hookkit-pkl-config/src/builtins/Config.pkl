@@ -18,7 +18,11 @@ class Settings {
   /// Continue running later tools after an earlier tool reports issues.
   continueAfterIssues: Boolean?
 
-  /// Global file exclusions applied before per-tool selection.
+  /// Global file exclusions applied before per-tool selection. Patterns are
+  /// matched against project-relative paths and APPEND to the inherited list,
+  /// which starts from the defaults (`**/.git/**`, `**/node_modules/**`,
+  /// `**/.venv/**`, `**/__pycache__/**`, `**/target/**`). Set
+  /// `merge.resetExclude = true` to replace the list instead.
   exclude: Listing<String>?
 
   /// How to handle optional common-output intents the harness cannot represent.
@@ -108,6 +112,10 @@ class Merge {
   /// Restore built-in groups/templates before applying this file's optional
   /// deferredReporting patch.
   resetDeferredReporting: Boolean = false
+
+  /// Clear inherited `settings.exclude` patterns (including the defaults) so
+  /// this file's `settings.exclude` replaces the list instead of appending.
+  resetExclude: Boolean = false
 }
 
 class FileSelection {

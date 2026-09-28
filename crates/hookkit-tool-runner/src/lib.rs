@@ -2541,15 +2541,16 @@ impl FileMatcher {
         })
     }
 
+    /// Globs match the project-relative path. Only a path outside the project
+    /// root is matched as an absolute path, so unanchored excludes such as
+    /// `**/target/**` never fire on the directories *containing* the project.
     fn matches(&self, absolute_path: &Path, project_root: &Path) -> bool {
-        let rel = absolute_path
-            .strip_prefix(project_root)
-            .unwrap_or(absolute_path);
-        let rel = slash_path(rel);
-        let abs = slash_path(absolute_path);
-
-        (self.include_all || self.include.is_match(&rel) || self.include.is_match(&abs))
-            && !(self.exclude.is_match(&rel) || self.exclude.is_match(&abs))
+        let path = slash_path(
+            absolute_path
+                .strip_prefix(project_root)
+                .unwrap_or(absolute_path),
+        );
+        (self.include_all || self.include.is_match(&path)) && !self.exclude.is_match(&path)
     }
 }
 
@@ -3447,6 +3448,27 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn default_excludes_are_unanchored_and_ignore_directories_above_the_project() {
+        let matcher = FileMatcher::new(&FileSelection {
+            include: vec!["**/*.py".into()],
+            exclude: pkl::default_excludes(),
+        })
+        .unwrap();
+        let root = Path::new("/home/user/target/project");
+        assert!(matcher.matches(&root.join("src/a.py"), root));
+        for excluded in [
+            "node_modules/x.py",
+            "web/node_modules/pkg/x.py",
+            "svc/.venv/lib/x.py",
+            "pkg/__pycache__/x.py",
+            "crates/a/target/x.py",
+            ".git/hooks/x.py",
+        ] {
+            assert!(!matcher.matches(&root.join(excluded), root), "{excluded}");
+        }
+    }
 
     #[test]
     fn domain_outcomes_keep_clean_failure_and_unsupported_distinct() {

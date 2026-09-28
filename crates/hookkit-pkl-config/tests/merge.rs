@@ -414,3 +414,38 @@ run = new Listing<String> { "ruff" }
     let verify = ruff.phases.get("verify").expect("verify phase");
     assert!(!verify.enabled, "verify should be disabled by override");
 }
+
+#[test]
+fn settings_exclude_appends_to_defaults_unless_reset() {
+    require_pkl!();
+    let defaults = hookkit_pkl_config::schema::default_excludes();
+    let home = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings { exclude { "**/vendor/**" } }
+"#,
+    )
+    .unwrap();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings { exclude { "generated/**"; "**/vendor/**" } }
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([home.clone(), project].into_iter());
+    let mut expected = defaults.clone();
+    expected.extend(["**/vendor/**".to_owned(), "generated/**".to_owned()]);
+    assert_eq!(merged.settings.exclude, expected);
+
+    let reset = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+merge { resetExclude = true }
+settings { exclude { "only/**" } }
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([home, reset].into_iter());
+    assert_eq!(merged.settings.exclude, vec!["only/**"]);
+}

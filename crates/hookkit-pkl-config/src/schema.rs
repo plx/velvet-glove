@@ -80,7 +80,7 @@ impl Default for Settings {
             jobs: 0,
             fail_fast: true,
             continue_after_issues: true,
-            exclude: vec![".git/**".into(), "node_modules/**".into()],
+            exclude: default_excludes(),
             lowering_policy: LoweringPolicy::default(),
             diagnostics_directory: Some(".velvet-glove/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
@@ -88,6 +88,28 @@ impl Default for Settings {
             deferred_reporting: DeferredReporting::default(),
         }
     }
+}
+
+/// Global exclusions that apply unless a layer sets `merge.resetExclude`.
+///
+/// Every pattern is unanchored so nested copies are excluded too:
+///
+/// - `**/.git/**`: version-control internals, never source;
+/// - `**/node_modules/**`: installed JavaScript dependencies;
+/// - `**/.venv/**`: the conventional Python virtual environment;
+/// - `**/__pycache__/**`: Python bytecode caches;
+/// - `**/target/**`: Cargo (and Maven) build output.
+pub fn default_excludes() -> Vec<String> {
+    [
+        "**/.git/**",
+        "**/node_modules/**",
+        "**/.venv/**",
+        "**/__pycache__/**",
+        "**/target/**",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 /// Field-preserving settings overlay for one Pkl file.
@@ -109,7 +131,9 @@ pub struct SettingsPatch {
     pub fail_fast: Option<bool>,
     /// Optional `continue_after_issues` override.
     pub continue_after_issues: Option<bool>,
-    /// Optional replacement for the global exclusion list.
+    /// Optional additions to the global exclusion list. Patterns append to
+    /// the inherited list (which starts from [`default_excludes`]); a layer
+    /// replaces the list only together with `merge.resetExclude`.
     pub exclude: Option<Vec<String>>,
     /// Optional lowering-policy override.
     pub lowering_policy: Option<LoweringPolicy>,
@@ -138,8 +162,10 @@ impl SettingsPatch {
         if let Some(continue_after_issues) = self.continue_after_issues {
             settings.continue_after_issues = continue_after_issues;
         }
-        if let Some(exclude) = self.exclude {
-            settings.exclude = exclude;
+        for pattern in self.exclude.into_iter().flatten() {
+            if !settings.exclude.contains(&pattern) {
+                settings.exclude.push(pattern);
+            }
         }
         if let Some(lowering_policy) = self.lowering_policy {
             settings.lowering_policy = lowering_policy;
@@ -454,6 +480,9 @@ pub struct Merge {
     pub reset_tools: Vec<String>,
     /// Restore deferred reporting configuration to its defaults before merging.
     pub reset_deferred_reporting: bool,
+    /// Clear the inherited global exclusion list, including the defaults, so
+    /// this layer's `settings.exclude` replaces it instead of appending.
+    pub reset_exclude: bool,
 }
 
 /// Top-level configuration section that a merge layer can reset.
