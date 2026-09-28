@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.go has a syntax error. With `-quiet` (the prior spec), gosec exits 0 with no output at all here, silently reporting the broken package as clean. Without `-quiet`, gosec exits 1 and reports the build error, which this catalog treats the same as a lint issue (gosec has no distinct exit code for a build failure)."
+}

@@ -1,4 +1,10 @@
 /// go vet — Go's built-in static analyzer.
+///
+/// `go vet` exits 1 both for reported vet issues and for a package that
+/// fails to build (e.g. a syntax error). There is no flag that separates the
+/// two, so a build failure is classified as a source issue rather than an
+/// operational failure; no fixture demonstrates the latter because the real
+/// tool cannot produce it.
 
 module velvet_glove.builtins.tools.GoVet
 

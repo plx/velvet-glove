@@ -1,0 +1,5 @@
+{
+  "outcome": "clean",
+  "immediate": false,
+  "note": "errcheck runs ./..., so the unchecked os.Remove in sub/lib.go is always in scope for the tool, but the agent never touched that file. The deferred runner treats an issue in an untouched file as out of scope, so the cited example.go stays clean and Stop does not block. post-tool-immediate has no out-of-scope rule and still reports the workspace diagnostic."
+}

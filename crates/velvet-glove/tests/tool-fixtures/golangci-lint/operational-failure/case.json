@@ -1,0 +1,4 @@
+{
+  "outcome": "operational",
+  "note": ".golangci.yml enables an unknown linter. golangci-lint exits 3 before it looks at any file, distinct from its clean (0) and issues (1) exit codes."
+}

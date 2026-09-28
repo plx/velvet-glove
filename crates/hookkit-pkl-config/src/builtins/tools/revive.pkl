@@ -1,4 +1,9 @@
 /// revive — fast, configurable Go linter, replacement for golint.
+///
+/// `-set_exit_status` makes revive exit 1 for both reported issues and a
+/// file it cannot parse; there is no distinct exit code for the latter, so
+/// no operational-failure fixture is included (the real tool can't produce
+/// one distinguishable from a lint issue).
 
 module velvet_glove.builtins.tools.Revive
 

@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "The ineffassign default linter flags the dead first assignment to x. `--fix` cannot rewrite this finding, so the fix phase leaves the file unchanged and the verify phase reports it as a manual issue."
+}
