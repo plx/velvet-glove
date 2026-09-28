@@ -214,23 +214,27 @@ test` invocation runs every selected case. The workflow's selection step
 therefore excludes a short list of fixture tools that installed and ran
 correctly in CI but whose outcome didn't match the case's contract:
 `cue-fmt`, `deno`, `ghalint-action`, `ghalint-workflow`, `gleam-format`,
-`gomod-tidy`, `hclfmt`, `mise`, `mypy`, `oxfmt`, `reek`, `rubocop`,
-`tsserver` and `vacuum` on both platforms; `taplo` additionally on
-ubuntu-latest only (matching the tool-validation sweep's own note that it
-"is not run on hosted Linux"; `taplo-format` is unaffected); `gosec` and
-`lychee` additionally on macos-latest only. Two failure shapes recur: a
-"format phase disambiguates operational-vs-manual" case reports an
-operational problem while still classifying the cited file
+`gomod-tidy`, `hclfmt`, `mise`, `mypy`, `oxfmt`, `reek`, `rubocop`, `taplo`,
+`tsserver` and `vacuum` on both platforms, plus `gosec` and `lychee` on
+macos-latest only (both passed cleanly on ubuntu-latest). Two failure
+shapes recur: a "format phase disambiguates operational-vs-manual" case
+reports an operational problem while still classifying the cited file
 manual-fixes-needed (violating `case.json`'s `operational` contract), and a
 "manual" (block) case blocks again on the loop-guard's
 `stop_hook_active=true` retry (violating the no-double-block contract).
-Both look like a harness/spec interaction gap rather than a per-tool bug,
-surfaced by running every fixture tool's real binary in CI for the first
-time; they are recorded here for spec/harness review, not fixed in this
-lane (workflow and provisioning only, not tool specs, fixtures or the
-harness). `gomod-tidy` and (on ubuntu-latest) `taplo` are consequently
-excluded from `VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS` too, even though both
-are otherwise core-tier tools.
+`taplo` hits the loop-guard shape too, but flakily on *both* platforms —
+it failed on ubuntu-latest in one run and on macos-latest in the next, not
+a clean per-OS split — which matches, and extends, the tool-validation
+sweep's own note that it "is not run on hosted Linux" (hosted macOS isn't
+reliable either); `taplo-format` is unaffected on both platforms so far
+and stays selected and required. The other failures look like a
+harness/spec interaction gap rather than a per-tool bug, surfaced by
+running every fixture tool's real binary in CI for the first time; they
+are recorded here for spec/harness review, not fixed in this lane
+(workflow and provisioning only, not tool specs, fixtures or the harness).
+`gomod-tidy` and `taplo` are consequently excluded from
+`VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS` too, even though both are otherwise
+core-tier tools.
 
 A few fixture tools need no installation at all: `detect-private-key`,
 `check-merge-conflict` and `python-debug-statements` shell out to `grep`,

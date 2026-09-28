@@ -58,10 +58,11 @@ jobs:
         # regardless of required-ness, so the broad tier's best-effort
         # install can't paper over these the way it does a missing
         # executable. Found by running every fixture tool's real binary in
-        # CI for the first time (2026-09-28, run
-        # https://github.com/plx/velvet-glove/actions/runs/36451989208);
-        # recorded for spec/harness review, not fixed here per this lane's
-        # scope (workflow/provisioning only, not tool specs or fixtures).
+        # CI for the first time (2026-09-28, runs
+        # https://github.com/plx/velvet-glove/actions/runs/36451989208 and
+        # .../36456123824); recorded for spec/harness review, not fixed
+        # here per this lane's scope (workflow/provisioning only, not tool
+        # specs or fixtures).
         run: |
           # Fails identically on both ubuntu-latest and macos-latest.
           # Two failure shapes recur across these, both look like a
@@ -75,18 +76,20 @@ jobs:
           #   - a "manual" (block) case (deno, ghalint-action,
           #     ghalint-workflow, mypy, reek, rubocop, tsserver, vacuum)
           #     blocks again on the loop-guard's stop_hook_active=true
-          #     retry, which the no-double-block contract forbids.
-          exclude="cue-fmt,deno,ghalint-action,ghalint-workflow,gleam-format,gomod-tidy,hclfmt,mise,mypy,oxfmt,reek,rubocop,tsserver,vacuum,zig-fmt"
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            # taplo: the tool-validation sweep already documented this as
-            # "not run on hosted Linux"; reproduced here (the "taplo"
-            # fixture fails the loop-guard the same way as above, only on
-            # ubuntu-latest — taplo-format is unaffected and stays selected).
-            exclude="$exclude,taplo"
-          fi
+          #     retry, which the no-double-block contract forbids. taplo
+          #     hits this same shape too, but flakily on *both* platforms
+          #     (failed on ubuntu-latest in run 36451989208, then on
+          #     macos-latest instead in run 36456123824 — not a clean
+          #     per-OS split), so it is excluded unconditionally rather
+          #     than per-`$RUNNER_OS`. This matches the tool-validation
+          #     sweep's own note that taplo "is not run on hosted Linux";
+          #     it turns out hosted macOS isn't reliable either.
+          #     taplo-format is unaffected on both platforms so far and
+          #     stays selected and required.
+          exclude="cue-fmt,deno,ghalint-action,ghalint-workflow,gleam-format,gomod-tidy,hclfmt,mise,mypy,oxfmt,reek,rubocop,taplo,tsserver,vacuum,zig-fmt"
           if [ "$RUNNER_OS" = "macOS" ]; then
-            # gosec and lychee only fail their "manual" loop-guard case on
-            # macos-latest; both pass cleanly on ubuntu-latest.
+            # gosec and lychee only failed their "manual" loop-guard case
+            # on macos-latest; both passed cleanly on ubuntu-latest.
             exclude="$exclude,gosec,lychee"
           fi
 
@@ -101,12 +104,8 @@ jobs:
           echo "VELVET_GLOVE_FIXTURE_TOOLS=$tools" >> "$GITHUB_ENV"
 
           # The core tier (.github/real-tools/mise.toml), minus gomod-tidy
-          # (excluded above on both platforms) and taplo (excluded above,
-          # Linux only).
+          # and taplo (both excluded above, on every platform).
           required="actionlint,buf-format,buf-lint,cargo-check,cargo-clippy,cargo-fmt,go-fmt,go-vet,gofumpt,golangci-lint,hadolint,jq,pkl,pkl-format,ruff,ruff-format,rustfmt,shellcheck,shfmt,staticcheck,stylua,taplo-format,terraform,typos,yq"
-          if [ "$RUNNER_OS" != "Linux" ]; then
-            required="$required,taplo"
-          fi
           echo "VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS=$required" >> "$GITHUB_ENV"
       - name: Install Rosetta 2 (macOS)
         # A handful of broad-tier tools (e.g. hlint) ship only an x86_64
