@@ -1,6 +1,9 @@
 //! `velvet-glove tools`: list the built-in catalog.
 
-use super::project::{resolve_tool, summarize_globs};
+use super::project::{
+    as_path_refs, list_project_files, resolve_tool, summarize_globs, tool_search_dirs,
+};
+use hookkit_pkl_config::schema::Settings;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
@@ -8,7 +11,9 @@ use std::process::ExitCode;
 
 /// Print every builtin tool with its Pkl key, id, executable status, and globs.
 /// Executables resolve as the hooks resolve them with the default
-/// `settings.localBinDirs` (`doctor` applies the project's own settings).
+/// `settings.localBinDirs`, searched from the directories of each tool's own
+/// matching project files up to the project root (`doctor` applies the
+/// project's own settings).
 pub fn run(dir: &Path, json: bool) -> ExitCode {
     let catalog = match hookkit_pkl_config::builtin_specs() {
         Ok(catalog) => catalog,
@@ -17,13 +22,22 @@ pub fn run(dir: &Path, json: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let local_bin_dirs = hookkit_pkl_config::schema::default_local_bin_dirs();
+    let Settings {
+        exclude: global_exclude,
+        local_bin_dirs,
+        ..
+    } = Settings::default();
+    let files = list_project_files(dir);
+    let resolve = |spec: &hookkit_pkl_config::schema::ToolSpec| {
+        let search_dirs = tool_search_dirs(dir, &spec.files, &global_exclude, &files);
+        resolve_tool(spec, dir, &local_bin_dirs, &as_path_refs(&search_dirs))
+    };
 
     if json {
         let entries: Vec<serde_json::Value> = catalog
             .iter()
             .map(|(key, spec)| {
-                let (program, resolution) = resolve_tool(spec, dir, &local_bin_dirs);
+                let (program, resolution) = resolve(spec);
                 let detect = spec.detect.clone().unwrap_or_default();
                 serde_json::json!({
                     "key": key,
@@ -56,7 +70,7 @@ pub fn run(dir: &Path, json: bool) -> ExitCode {
     let rows: Vec<[String; 5]> = catalog
         .iter()
         .map(|(key, spec)| {
-            let (program, resolution) = resolve_tool(spec, dir, &local_bin_dirs);
+            let (program, resolution) = resolve(spec);
             let status = match resolution.path() {
                 Some(path) => format!("{} ({})", resolution.status(), path.display()),
                 None => format!("{program}: missing"),

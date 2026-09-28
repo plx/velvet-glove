@@ -4,6 +4,7 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_pkl_config::schema::{FileSelection, TOOL_CACHE_DIRECTORIES, ToolSpec};
 use hookkit_tool_runner::is_executable_file;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -12,6 +13,12 @@ pub const MIN_PKL_VERSION: (u64, u64, u64) = (0, 31, 1);
 
 /// Upper bound on files listed when inspecting a project.
 const MAX_PROJECT_FILES: usize = 100_000;
+
+/// Upper bound on the distinct directories searched for a project-local
+/// executable, so a tool matching files across many directories in a huge
+/// repo stays fast. The project root is always searched in addition to this
+/// many of the tool's matching files' own directories.
+const MAX_RESOLVE_SEARCH_DIRS: usize = 32;
 
 /// Other conventional project-local install directories. Hooks search them
 /// only when `settings.localBinDirs` names them; a tool found only there is
@@ -98,14 +105,18 @@ pub fn required_programs(spec: &ToolSpec) -> Vec<String> {
 }
 
 /// Resolve every program a tool needs; the first unrunnable one decides.
+/// `search_from` is searched for a project-local executable the way the
+/// runner searches from a job's files (see [`resolve_search_dirs`]); it
+/// should include the project root.
 pub fn resolve_tool(
     spec: &ToolSpec,
     project_dir: &Path,
     local_bin_dirs: &[String],
+    search_from: &[&Path],
 ) -> (String, Resolution) {
     let mut first = None;
     for program in required_programs(spec) {
-        let resolution = resolve_program(&program, project_dir, local_bin_dirs);
+        let resolution = resolve_program(&program, project_dir, local_bin_dirs, search_from);
         if !resolution.runnable() {
             return (program, resolution);
         }
@@ -114,14 +125,72 @@ pub fn resolve_tool(
     first.unwrap_or_else(|| (spec.executable.clone(), Resolution::Missing))
 }
 
-/// Resolve one program the way the hook runner does for a file at the project
-/// root, with the runner's own resolver: a path with a separator relative to
-/// the project root (where the hooks run it for a tool without a workspace
-/// indicator); a bare name in each `local_bin_dirs` entry, then on `PATH`.
-/// (At run time the runner also searches from each file's directory and
-/// nested workspaces, nearest first.) Other conventional project-local
-/// directories are checked last, for reporting only.
-pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[String]) -> Resolution {
+/// Directories to search for a tool's project-local executable: the
+/// directories of `matching_files` (deepest first, so a nested package's own
+/// `node_modules/.bin` beats the repository root's), then the project root
+/// itself, mirroring [`hookkit_tool_runner::local_program`]'s own per-file
+/// resolution. Bounded (see [`MAX_RESOLVE_SEARCH_DIRS`]) and built only from
+/// the already-collected file list, so it stays fast on large repos.
+pub fn resolve_search_dirs(project_dir: &Path, matching_files: &[&str]) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    for file in matching_files {
+        let Some(parent) = Path::new(file)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            continue;
+        };
+        let dir = project_dir.join(parent);
+        if seen.insert(dir.clone()) {
+            dirs.push(dir);
+            if seen.len() >= MAX_RESOLVE_SEARCH_DIRS {
+                break;
+            }
+        }
+    }
+    dirs.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+    dirs.push(project_dir.to_path_buf());
+    dirs
+}
+
+/// [`resolve_search_dirs`] for a tool's own file selection, matched against
+/// an already-listed project. Falls back to just the project root when
+/// `selection` has an invalid glob.
+pub fn tool_search_dirs(
+    project_dir: &Path,
+    selection: &FileSelection,
+    global_exclude: &[String],
+    files: &[String],
+) -> Vec<PathBuf> {
+    let Ok(matcher) = FileMatcher::new(selection, global_exclude) else {
+        return vec![project_dir.to_path_buf()];
+    };
+    let matching: Vec<&str> = files
+        .iter()
+        .filter(|file| matcher.matches(file))
+        .map(String::as_str)
+        .collect();
+    resolve_search_dirs(project_dir, &matching)
+}
+
+/// Borrow every directory in `dirs` for a call that wants `&[&Path]`.
+pub fn as_path_refs(dirs: &[PathBuf]) -> Vec<&Path> {
+    dirs.iter().map(PathBuf::as_path).collect()
+}
+
+/// Resolve one program the way the hook runner does: a path with a separator
+/// relative to the project root (where the hooks run it for a tool without a
+/// workspace indicator); a bare name in each `local_bin_dirs` entry, searched
+/// from every directory in `search_from` up to the project root, nearest
+/// first; then `PATH`. Other conventional project-local directories are
+/// checked last (from `search_from` too), for reporting only.
+pub fn resolve_program(
+    program: &str,
+    project_dir: &Path,
+    local_bin_dirs: &[String],
+    search_from: &[&Path],
+) -> Resolution {
     if program.is_empty() {
         return Resolution::Missing;
     }
@@ -134,7 +203,7 @@ pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[Stri
         };
     }
     if let Some(path) =
-        hookkit_tool_runner::local_program(program, &[project_dir], project_dir, local_bin_dirs)
+        hookkit_tool_runner::local_program(program, search_from, project_dir, local_bin_dirs)
     {
         return Resolution::ProjectLocal(path);
     }
@@ -149,8 +218,15 @@ pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[Stri
     OTHER_PROJECT_BIN_DIRS
         .iter()
         .filter(|dir| !local_bin_dirs.iter().any(|configured| configured == *dir))
-        .map(|dir| project_dir.join(dir).join(program))
-        .find(|candidate| is_executable_file(candidate))
+        .find_map(|dir| {
+            search_from.iter().find_map(|start| {
+                start
+                    .ancestors()
+                    .take_while(|candidate_dir| candidate_dir.starts_with(project_dir))
+                    .map(|candidate_dir| candidate_dir.join(dir).join(program))
+                    .find(|candidate| is_executable_file(candidate))
+            })
+        })
         .map_or(Resolution::Missing, Resolution::Unconfigured)
 }
 
@@ -353,29 +429,62 @@ mod tests {
             std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let defaults = hookkit_pkl_config::schema::default_local_bin_dirs();
+        let here = [root.as_path()];
 
-        let local = resolve_program("vg-test-tool", &root, &defaults);
+        let local = resolve_program("vg-test-tool", &root, &defaults, &here);
         assert_eq!(
             local,
             Resolution::ProjectLocal(root.join("node_modules/.bin/vg-test-tool"))
         );
         assert!(local.runnable());
 
-        let unconfigured = resolve_program("vg-test-tool", &root, &[".venv/bin".to_string()]);
+        let unconfigured =
+            resolve_program("vg-test-tool", &root, &[".venv/bin".to_string()], &here);
         assert_eq!(
             unconfigured,
             Resolution::Unconfigured(root.join("node_modules/.bin/vg-test-tool"))
         );
         assert!(!unconfigured.runnable());
-        let venv = resolve_program("vg-test-tool", &root, &["venv/bin".to_string()]);
+        let venv = resolve_program("vg-test-tool", &root, &["venv/bin".to_string()], &here);
         assert_eq!(
             venv,
             Resolution::ProjectLocal(root.join("venv/bin/vg-test-tool"))
         );
         assert_eq!(
-            resolve_program("vg-absent-tool", &root, &defaults),
+            resolve_program("vg-absent-tool", &root, &defaults, &here),
             Resolution::Missing
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_local_executables_resolve_from_a_nested_workspace() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "vg-resolve-nested-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin = root.join("frontend/node_modules/.bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("eslint");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let defaults = hookkit_pkl_config::schema::default_local_bin_dirs();
+
+        // Searching from the project root alone misses it, matching the
+        // runner's own per-file resolution (which never sees it either).
+        let root_only = resolve_program("eslint", &root, &defaults, &[&root]);
+        assert_eq!(root_only, Resolution::Missing);
+
+        // Searching from the matching file's own directory (as `init` and
+        // `doctor` now do) finds it by walking up to the workspace.
+        let dirs = resolve_search_dirs(&root, &["frontend/src/app.tsx"]);
+        let refs = as_path_refs(&dirs);
+        let found = resolve_program("eslint", &root, &defaults, &refs);
+        assert_eq!(found, Resolution::ProjectLocal(tool));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -418,15 +527,20 @@ mod tests {
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(
-            resolve_program("bin/mylint", &root, &[]),
+            resolve_program("bin/mylint", &root, &[], &[&root]),
             Resolution::Path(tool.clone())
         );
         assert_eq!(
-            resolve_program(&tool.to_string_lossy(), Path::new("/"), &[]),
+            resolve_program(
+                &tool.to_string_lossy(),
+                Path::new("/"),
+                &[],
+                &[Path::new("/")]
+            ),
             Resolution::Path(tool)
         );
         assert_eq!(
-            resolve_program("bin/absent", &root, &[]),
+            resolve_program("bin/absent", &root, &[], &[&root]),
             Resolution::Missing
         );
         assert!(in_policy_directory(".velvet-glove/post-tool-use.pkl"));

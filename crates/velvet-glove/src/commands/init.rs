@@ -1,7 +1,10 @@
 //! `velvet-glove init`: detect which builtins fit a project and write a
 //! commented starter policy.
 
-use super::project::{FileMatcher, Resolution, build_globset, list_project_files, resolve_tool};
+use super::project::{
+    FileMatcher, Resolution, as_path_refs, build_globset, list_project_files, resolve_search_dirs,
+    resolve_tool,
+};
 use hookkit_pkl_config::schema::{Detect, Settings, ToolSpec};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -13,6 +16,39 @@ pub const POLICY_PATH: &str = ".velvet-glove/post-tool-use.pkl";
 
 /// Largest file `contains` indicators will read.
 const MAX_INDICATOR_BYTES: u64 = 1024 * 1024;
+
+/// Bound on how many same-named files (e.g. every `package.json`) a
+/// `contains` check reads for one tool, so a monorepo with many workspaces
+/// stays fast.
+const MAX_CONTAINS_CANDIDATES: usize = 25;
+
+/// Bound on how many "installed, opt-in" tools `init` suggests, and how
+/// broadly one of them may match before it looks like generic hygiene tooling
+/// rather than something specific to this project.
+const MAX_OPT_IN_SUGGESTIONS: usize = 5;
+const OPT_IN_MAX_FILES: usize = 50;
+
+/// Evidence that a project uses a tool: an indicator glob matched a project
+/// file, or a `contains` needle turned up inside one.
+#[derive(Debug, Clone)]
+pub enum Indicator {
+    /// An indicator glob matched this project-relative file.
+    File(String),
+    /// This needle was found inside this project-relative file.
+    Contains { needle: String, file: String },
+}
+
+impl Indicator {
+    /// How this reads in the generated policy's comments: the bare file for
+    /// a glob match, or the needle (quoted, since it may be a truncated
+    /// bracket like `[tool.ruff`) and the file it was found in.
+    fn describe(&self) -> String {
+        match self {
+            Self::File(file) => file.clone(),
+            Self::Contains { needle, file } => format!("{needle:?} in {file}"),
+        }
+    }
+}
 
 /// One builtin whose file globs match something in the project.
 #[derive(Debug)]
@@ -28,7 +64,7 @@ pub struct Candidate {
     /// One selected file, for the generated comment.
     pub example_file: String,
     /// Evidence that the project uses this tool, if any.
-    pub indicator: Option<String>,
+    pub indicator: Option<Indicator>,
     /// The program that decided `resolution`.
     pub program: String,
     /// Where that program resolved.
@@ -118,9 +154,14 @@ fn selected_keys(candidates: &[Candidate]) -> Vec<String> {
 /// Decide which enabled builtins fit the project whose files are `files`.
 ///
 /// A tool is selected when its globs match a project file, its programs
-/// resolve the way the hooks resolve them (the default `localBinDirs` at the
-/// project root, then `PATH`), and either one of its indicators is present or
-/// it is its role's default and no tool in that role has an indicator.
+/// resolve the way the hooks resolve them (the default `localBinDirs`,
+/// searched from the directories of its own matching files up to the project
+/// root, then `PATH`), and either one of its indicators is present anywhere
+/// in the project or it is its role's default and no tool in that role has an
+/// indicator. A bare indicator glob (no `/`) matches in any directory, and a
+/// `contains` check reads every project file with that name, not just the
+/// one at the project root, so a nested workspace (`frontend/package.json`)
+/// counts the same as a root one.
 pub fn detect(
     root: &Path,
     files: &[String],
@@ -132,17 +173,24 @@ pub fn detect(
         ..
     } = Settings::default();
     let mut contents = BTreeMap::<String, Option<String>>::new();
+    let by_basename = index_by_basename(files);
     let mut candidates: Vec<Candidate> = catalog
         .iter()
         .filter(|(_, spec)| spec.enabled)
         .filter_map(|(key, spec)| {
             let matcher = FileMatcher::new(&spec.files, &global_exclude).ok()?;
-            let mut matching = files.iter().filter(|file| matcher.matches(file));
-            let example_file = matching.next()?.clone();
-            let file_count = 1 + matching.count();
+            let matching: Vec<&str> = files
+                .iter()
+                .filter(|file| matcher.matches(file))
+                .map(String::as_str)
+                .collect();
+            let example_file = matching.first()?.to_string();
+            let file_count = matching.len();
             let detect = spec.detect.clone().unwrap_or_default();
-            let indicator = find_indicator(root, files, &detect, &mut contents);
-            let (program, resolution) = resolve_tool(spec, root, &local_bin_dirs);
+            let indicator = find_indicator(root, &by_basename, &detect, &mut contents);
+            let search_dirs = resolve_search_dirs(root, &matching);
+            let (program, resolution) =
+                resolve_tool(spec, root, &local_bin_dirs, &as_path_refs(&search_dirs));
             Some(Candidate {
                 key: key.clone(),
                 display_name: spec.display_name.clone(),
@@ -175,7 +223,7 @@ pub fn detect(
         candidate.selected = candidate.wanted && candidate.resolution.runnable();
         if candidate.wanted {
             candidate.reason = match &candidate.indicator {
-                Some(indicator) => format!("found {indicator}"),
+                Some(indicator) => format!("found {}", indicator.describe()),
                 None => format!(
                     "default {} tool",
                     candidate.detect.role.as_deref().unwrap_or("project")
@@ -223,30 +271,83 @@ fn unselected_reason(candidate: &Candidate, selected_roles: &BTreeMap<String, St
     if let Some(chosen) = role.and_then(|role| selected_roles.get(role)) {
         return format!("alternative to {chosen} for {}", role.unwrap_or_default());
     }
-    candidate
-        .detect
-        .note
-        .clone()
-        .unwrap_or_else(|| "not selected automatically".to_string())
+    // Installed, matches project files, but opt-in: explain what would turn
+    // it on, so "not installed" is never claimed for a tool that plainly is.
+    if let Some(note) = &candidate.detect.note {
+        return note.clone();
+    }
+    if !candidate.detect.indicators.is_empty() {
+        return format!("add {} to enable", candidate.detect.indicators.join(" or "));
+    }
+    if let Some((file, needle)) = candidate.detect.contains.iter().next() {
+        return format!("add {needle:?} to {file} to enable");
+    }
+    "installed, opt-in; add its key to `run` to enable".to_string()
+}
+
+/// Index project files by basename, nearest-to-root first and bounded, so a
+/// `contains` check can look at every same-named file (every `package.json`,
+/// not just the root one) without walking the project again.
+fn index_by_basename(files: &[String]) -> BTreeMap<&str, Vec<&str>> {
+    let mut by_basename: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for file in files {
+        if let Some(name) = Path::new(file).file_name().and_then(|name| name.to_str()) {
+            by_basename.entry(name).or_default().push(file.as_str());
+        }
+    }
+    for matches in by_basename.values_mut() {
+        matches.sort_by_key(|file| file.matches('/').count());
+        matches.truncate(MAX_CONTAINS_CANDIDATES);
+    }
+    by_basename
+}
+
+/// A bare indicator glob (no `/`) also matches nested files, e.g. a
+/// `frontend/eslint.config.mjs` counts as evidence for `eslint.config.*`.
+fn indicator_globset(patterns: &[String]) -> globset::GlobSet {
+    let mut expanded: Vec<String> = Vec::with_capacity(patterns.len() * 2);
+    for pattern in patterns {
+        expanded.push(pattern.clone());
+        if !pattern.contains('/') {
+            expanded.push(format!("**/{pattern}"));
+        }
+    }
+    build_globset(&expanded)
 }
 
 fn find_indicator(
     root: &Path,
-    files: &[String],
+    by_basename: &BTreeMap<&str, Vec<&str>>,
     detect: &Detect,
     contents: &mut BTreeMap<String, Option<String>>,
-) -> Option<String> {
-    let indicators = build_globset(&detect.indicators);
-    if let Some(file) = files.iter().find(|file| indicators.is_match(file.as_str())) {
-        return Some(file.clone());
+) -> Option<Indicator> {
+    let indicators = indicator_globset(&detect.indicators);
+    let mut matching_files: Vec<&str> = by_basename
+        .values()
+        .flatten()
+        .copied()
+        .filter(|file| indicators.is_match(*file))
+        .collect();
+    matching_files.sort_by_key(|file| file.matches('/').count());
+    if let Some(file) = matching_files.first() {
+        return Some(Indicator::File((*file).to_string()));
     }
-    detect.contains.iter().find_map(|(file, needle)| {
-        let text = contents
-            .entry(file.clone())
-            .or_insert_with(|| read_small(&root.join(file)));
-        text.as_deref()
-            .is_some_and(|text| text.contains(needle.as_str()))
-            .then(|| format!("{needle} in {file}"))
+    detect.contains.iter().find_map(|(name, needle)| {
+        by_basename
+            .get(name.as_str())
+            .into_iter()
+            .flatten()
+            .find_map(|file| {
+                let text = contents
+                    .entry((*file).to_string())
+                    .or_insert_with(|| read_small(&root.join(file)));
+                text.as_deref()
+                    .is_some_and(|text| text.contains(needle.as_str()))
+                    .then(|| Indicator::Contains {
+                        needle: needle.clone(),
+                        file: (*file).to_string(),
+                    })
+            })
     })
 }
 
@@ -257,27 +358,47 @@ fn read_small(path: &Path) -> Option<String> {
         .flatten()
 }
 
+/// One labeled, commented-out group of unselected tools in the generated
+/// policy, e.g. "wanted but not installed".
+struct OptionGroup<'a> {
+    heading: &'a str,
+    candidates: Vec<&'a Candidate>,
+}
+
 /// Render the generated policy. Unselected tools appear as commented-out
-/// options when the project wants them but they are not installed, or when
-/// they are installed alternatives in the role of a selected tool.
+/// options, grouped by why they are not enabled: the project wants them but
+/// they (or a program they need) are not installed; they are an installed
+/// alternative already covered by a selected tool in the same role; or they
+/// are installed and match project files but are opt-in and undetected.
 pub fn render(candidates: &[Candidate]) -> String {
     let selected: Vec<&Candidate> = candidates.iter().filter(|c| c.selected).collect();
     let selected_roles: BTreeSet<&str> = selected
         .iter()
         .filter_map(|c| c.detect.role.as_deref())
         .collect();
-    let options: Vec<&Candidate> = candidates
+    let is_alternative = |c: &&Candidate| {
+        c.resolution.runnable()
+            && c.detect
+                .role
+                .as_deref()
+                .is_some_and(|role| selected_roles.contains(role))
+    };
+
+    let wanted_missing: Vec<&Candidate> = candidates
         .iter()
-        .filter(|c| !c.selected)
-        .filter(|c| {
-            c.wanted
-                || (c.resolution.runnable()
-                    && c.detect
-                        .role
-                        .as_deref()
-                        .is_some_and(|role| selected_roles.contains(role)))
-        })
+        .filter(|c| !c.selected && c.wanted)
         .collect();
+    let alternatives: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| !c.selected && !c.wanted && is_alternative(c))
+        .collect();
+    let mut opt_in: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| !c.selected && !c.wanted && !is_alternative(c) && c.resolution.runnable())
+        .filter(|c| c.file_count <= OPT_IN_MAX_FILES)
+        .collect();
+    opt_in.sort_by_key(|c| (c.file_count, c.key.as_str()));
+    opt_in.truncate(MAX_OPT_IN_SUGGESTIONS);
 
     let mut out = String::new();
     out.push_str(HEADER);
@@ -299,11 +420,25 @@ pub fn render(candidates: &[Candidate]) -> String {
             "  // No builtin tool fits this project automatically; see `velvet-glove tools`.\n",
         );
     }
-    if !options.is_empty() {
-        out.push_str(
-            "\n  // Alternatives and tools this project seems to use but that are not\n  // installed. To enable one, uncomment it and add its key to `run`.\n",
-        );
-        for candidate in &options {
+    for group in [
+        OptionGroup {
+            heading: "Wanted but not installed. Install the tool (or point settings.localBinDirs\n  // at it), then uncomment and add its key to `run`.",
+            candidates: wanted_missing,
+        },
+        OptionGroup {
+            heading: "Installed alternatives not enabled: this project already has another tool\n  // for the same role. Swap by uncommenting one of these and removing the\n  // selected tool above (and in `run`).",
+            candidates: alternatives,
+        },
+        OptionGroup {
+            heading: "Installed, opt-in: on PATH and match project files, but need an explicit\n  // choice (see the reason) rather than being auto-enabled.",
+            candidates: opt_in,
+        },
+    ] {
+        if group.candidates.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "\n  // {}", group.heading);
+        for candidate in &group.candidates {
             let _ = writeln!(
                 out,
                 "  // [\"{0}\"] = Builtins.{0}  // {1}",
@@ -453,10 +588,16 @@ mod tests {
         let candidates = detect(Path::new("/nonexistent"), &files, &catalog);
         assert!(selected(&candidates).is_empty());
         let source = render(&candidates);
+        assert!(source.contains("Wanted but not installed"), "{source}");
         assert!(source.contains("// [\"missing\"] = Builtins.missing  // "));
+        // Installed and matches a project file, but declares no detect signal
+        // at all: still surfaced as an opt-in suggestion, not silently
+        // dropped (the old "not installed" header would have been wrong for
+        // it anyway, since it *is* installed).
+        assert!(source.contains("Installed, opt-in"), "{source}");
         assert!(
-            !source.contains("optIn"),
-            "unwanted opt-in tools stay out: {source}"
+            source.contains("// [\"optIn\"] = Builtins.optIn  // installed, opt-in"),
+            "{source}"
         );
         assert!(source.contains("run {\n}\n"));
     }
@@ -479,7 +620,42 @@ mod tests {
         let candidates = detect(&root, &files, &catalog);
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(selected(&candidates), ["black"]);
-        assert_eq!(candidates[0].reason, "found [tool.black] in pyproject.toml");
+        // The needle is quoted so a truncated-looking bracket like
+        // `[tool.ruff` reads clearly as a substring, not a typo.
+        assert_eq!(
+            candidates[0].reason,
+            "found \"[tool.black]\" in pyproject.toml"
+        );
+    }
+
+    #[test]
+    fn contains_indicators_check_every_same_named_file() {
+        let root =
+            std::env::temp_dir().join(format!("vg-init-nested-contains-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("backend")).unwrap();
+        std::fs::write(root.join("pyproject.toml"), "[project]\nname = \"demo\"\n").unwrap();
+        std::fs::write(
+            root.join("backend/pyproject.toml"),
+            "[tool.ruff.lint]\nselect = [\"E\"]\n",
+        )
+        .unwrap();
+        let detect_ruff = Detect {
+            contains: BTreeMap::from([("pyproject.toml".into(), "[tool.ruff".into())]),
+            ..Detect::default()
+        };
+        let catalog = BTreeMap::from([("ruff".to_string(), spec(PRESENT, "*.py", detect_ruff))]);
+        let files = [
+            "app.py".to_string(),
+            "pyproject.toml".to_string(),
+            "backend/pyproject.toml".to_string(),
+        ];
+        let candidates = detect(&root, &files, &catalog);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(selected(&candidates), ["ruff"]);
+        assert_eq!(
+            candidates[0].reason,
+            "found \"[tool.ruff\" in backend/pyproject.toml"
+        );
     }
 
     #[test]
