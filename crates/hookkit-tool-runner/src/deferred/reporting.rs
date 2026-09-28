@@ -1,5 +1,5 @@
 use super::execution::command_phase_label;
-use super::{DeferredRunResult, FileResult, FileStatus};
+use super::{DeferredRunResult, FileResult, FileStatus, ToolReport};
 use crate::excerpt;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_pkl_config::schema as pkl;
@@ -459,6 +459,27 @@ impl DeferredReporter {
             }
             let log_path =
                 artifact.map(|artifact| artifact.absolute_path.to_string_lossy().into_owned());
+            // Two workflows of one tool often quote the same diagnostic (a
+            // syntax error reported by both a linter and a formatter check,
+            // one with an extra summary line): quote it once, keeping the
+            // fuller text.
+            let same_scope = |entry: &(&ToolReport, Vec<String>, String, Option<String>)| {
+                entry.0.tool_id == report.tool_id && entry.1 == files
+            };
+            let trimmed = output.trim();
+            if !trimmed.is_empty()
+                && entries
+                    .iter()
+                    .any(|entry| same_scope(entry) && entry.2.contains(trimmed))
+            {
+                continue;
+            }
+            if let Some(entry) = entries.iter_mut().find(|entry| {
+                same_scope(entry) && !entry.2.trim().is_empty() && trimmed.contains(entry.2.trim())
+            }) {
+                *entry = (report, files, output, log_path);
+                continue;
+            }
             entries.push((report, files, output, log_path));
         }
         let outputs = entries
@@ -847,6 +868,32 @@ mod tests {
             .agent
             .unwrap();
         assert_eq!(agent.matches("same output").count(), 1, "{agent}");
+    }
+
+    #[test]
+    fn a_diagnostic_quoted_by_two_workflows_of_one_tool_appears_once() {
+        let mut result = DeferredRunResult::default();
+        let diagnostic = "invalid-syntax: Expected `)`, found newline\n --> broken.py:1:25";
+        for (id, output) in [
+            ("format", diagnostic.to_string()),
+            ("lint", format!("{diagnostic}\n\nFound 1 error.")),
+        ] {
+            result.record_report(manual_report(id, "Tool", &["/repo/broken.py"]));
+            result.record_artifact(artifact(
+                &format!("{id}-final-check"),
+                id,
+                &format!("/state/run/{id}.log"),
+                &output,
+            ));
+        }
+        let agent = render(&mut result, &pkl::DeferredReporting::default())
+            .agent
+            .unwrap();
+        assert_eq!(agent.matches("invalid-syntax").count(), 1, "{agent}");
+        assert!(
+            agent.contains("Found 1 error."),
+            "keeps the fuller quote: {agent}"
+        );
     }
 
     #[test]
