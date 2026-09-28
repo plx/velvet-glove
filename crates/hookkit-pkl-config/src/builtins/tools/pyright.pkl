@@ -1,0 +1,49 @@
+/// Pyright — Microsoft's static type checker for Python.
+///
+/// Documented exit codes: 0 clean, 1 type errors reported, 2 fatal error,
+/// 3 config file could not be parsed, 4 illegal command-line parameters.
+/// Unlike mypy/black/flake8, pyright's config-error code (3) is distinct from
+/// its issues code (1), so a broken `pyrightconfig.json` is a genuine,
+/// separately classifiable operational failure (probed empirically). Without
+/// a project config pointing at the right interpreter/venv, third-party
+/// imports outside the standard library may report as missing; this mirrors
+/// running pyright directly and is not something a hook spec can paper over.
+/// The PyPI `pyright` wrapper downloads Node and the npm package on first
+/// run; the npm install needs no network at check time.
+
+module velvet_glove.builtins.tools.Pyright
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "pyright"
+  displayName = "Pyright"
+  executable = "pyright"
+  installHint = "install pyright with `npm install -g pyright` or `pipx install pyright`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py"; "*.pyi"; "**/*.pyi" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2; 3; 4 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "pyrightconfig.json" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.pyright]" }
+    role = "python-typecheck"
+  }
+}

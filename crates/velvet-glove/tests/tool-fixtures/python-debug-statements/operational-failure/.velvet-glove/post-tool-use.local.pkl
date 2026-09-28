@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["python-debug-statements"] = (Builtins.pythonDebugStatements) {
+    phases {
+      // grep exits 2 when any cited path does not exist, distinct from its
+      // 0/1 match/no-match codes, so a missing file is a genuine operational
+      // failure rather than "no debug statements found".
+      ["verify"] {
+        extraArgs = new Listing<String> { "missing-operational.py" }
+      }
+    }
+  }
+}

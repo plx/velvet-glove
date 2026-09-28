@@ -1,0 +1,11 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff-format"] = (Builtins.ruffFormat) {
+    // An unrecognized flag is a usage error (exit 2, declared failure), not a formatting issue.
+    // Tool-level extraArgs reach every command, so the immediate phases and
+    // the deferred check/remedy all hit the same exit-2 usage error.
+    extraArgs = new Listing<String> { "--bogus-flag" }
+  }
+}

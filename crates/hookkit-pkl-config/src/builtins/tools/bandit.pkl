@@ -1,0 +1,48 @@
+/// Bandit — security-issue scanner for Python source.
+///
+/// No autofix: bandit only reports findings (SQL injection, shell=True,
+/// hardcoded secrets, etc.), so this is a plain checker like flake8. Exit
+/// codes (probed with bandit 1.9.4, matching its documented CLI): 0 clean,
+/// 1 issues found, 2 usage or config error (unreadable or unparseable `-c`
+/// config, unrecognized flag); 2 falls through to the default
+/// `unexpected = "failure"` classification.
+///
+/// Known limitations of bandit itself: a missing or syntactically invalid
+/// target file is skipped with exit 0; `pyproject.toml` settings are read
+/// only with `-c pyproject.toml` (add it via `extraArgs`); and B101
+/// (`assert_used`) flags every pytest `assert` unless skipped.
+
+module velvet_glove.builtins.tools.Bandit
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "bandit"
+  displayName = "Bandit"
+  executable = "bandit"
+  installHint = "install bandit with `pipx install bandit`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".bandit" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.bandit]" }
+  }
+}
