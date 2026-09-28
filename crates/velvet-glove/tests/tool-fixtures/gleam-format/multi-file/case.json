@@ -1,0 +1,1 @@
+{"outcome": "auto-fixed", "files": {"example.clean.gleam": "clean", "example.dirty.gleam": "auto-fixed"}}

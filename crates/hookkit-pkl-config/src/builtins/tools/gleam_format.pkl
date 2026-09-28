@@ -1,0 +1,62 @@
+/// gleam format — Gleam's bundled formatter.
+///
+/// `gleam format --check` reports both an unformatted file and a syntax
+/// error through the same exit code (1), so exit-code classification alone
+/// can't tell them apart. As with zig fmt, the mutating `format` phase runs
+/// first and declares only `clean = 0`; a syntax error there falls through
+/// to the default `unexpected = "failure"` before `verify` is reached, so
+/// the phase order is what makes a broken file an operational failure
+/// rather than a source issue. A batch `gleam format` call stops at the
+/// first unparseable file without formatting files listed after it, so
+/// per-file invocation isolates a broken file from its siblings.
+
+module velvet_glove.builtins.tools.GleamFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "gleam-format"
+  displayName = "gleam format"
+  executable = "gleam"
+  installHint = "install the Gleam toolchain (gleam format ships with it)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.gleam"; "**/*.gleam" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "gleam.toml" }
+    role = "gleam-format"
+    default = true
+  }
+}
