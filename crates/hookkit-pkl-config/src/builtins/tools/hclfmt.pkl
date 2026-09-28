@@ -2,7 +2,10 @@
 ///
 /// Operates workspace-wide (Terragrunt walks the working directory
 /// recursively) rather than per-file; the underlying CLI only accepts a
-/// single explicit `--file` value at a time.
+/// single explicit `--file` value at a time. The deferred check/remedy
+/// declare an explicit `workflows` entry with `checkScope = "workspace"`
+/// (instead of the `target-files` scope the phase-derived default would
+/// assume) to match that whole-cwd behavior.
 
 module velvet_glove.builtins.tools.Hclfmt
 
@@ -17,6 +20,37 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> { "*.hcl"; "**/*.hcl" }
   }
+
+  workflows = new Mapping<String, Config.Workflow> {
+    ["format"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "hcl"
+          "fmt"
+          "--check"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+        }
+      }
+      remedy = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "hcl"
+          "fmt"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+        }
+        writes = "matching-globs"
+      }
+      checkScope = "workspace"
+      invocation = "workspace"
+    }
+  }
+  workflowOrder = new Listing<String> { "format" }
 
   phases = new Mapping<String, Config.Phase> {
     ["format"] = new Config.Phase {
