@@ -1,4 +1,19 @@
 /// cargo clippy — Rust linter with auto-fix.
+///
+/// `cargo`/`rustc` use exit 101 as a generic failure code for *everything*:
+/// an ordinary compile error in the code being edited, a lint violation, a
+/// malformed `clippy.toml`, and a malformed `Cargo.toml` all exit 101 alike
+/// (confirmed empirically). The `fix` phase used to list 101 as `failure`,
+/// so an in-progress compile error mid-edit — the common case while an agent
+/// is still editing — aborted the run as an "operational failure" instead of
+/// surfacing as an ordinary source issue the agent must fix. There is no
+/// exit-code-level way to tell a compile error apart from a broken
+/// `clippy.toml` here, so `fix` now classifies 101 as `issues`, the same as
+/// `verify` already did; both phases agree, and the diagnostics text (shown
+/// either way) still tells a reader which kind of problem it was. A
+/// genuinely distinguishable operational failure remains reachable through
+/// `cargo`'s own usage errors (e.g. an unrecognized flag), which exit 1 and
+/// fall through to `unexpected = "failure"` below.
 
 module velvet_glove.builtins.tools.CargoClippy
 
@@ -33,7 +48,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        failure = new Listing<Int> { 101 }
+        issues = new Listing<Int> { 101 }
         unexpected = "failure"
       }
       writes = "matching-globs"
