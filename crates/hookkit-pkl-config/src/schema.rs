@@ -64,7 +64,9 @@ pub struct Settings {
     pub exclude: Vec<String>,
     /// Handling for common output that the native harness cannot represent.
     pub lowering_policy: LoweringPolicy,
-    /// Directory used for full tool diagnostics, or `None` to disable files.
+    /// Directory for immediate-mode diagnostic files. Relative paths resolve
+    /// from the project root; `None` (the default) keeps them out of the
+    /// project, under `$TMPDIR/velvet-glove/state/post-tool-immediate`.
     pub diagnostics_directory: Option<String>,
     /// Behavior when a configured executable cannot be found.
     pub missing_tool_policy: MissingToolPolicy,
@@ -72,6 +74,20 @@ pub struct Settings {
     pub file_activity: Option<FileActivitySettings>,
     /// Templates and file groups used to render deferred results.
     pub deferred_reporting: DeferredReporting,
+    /// Per-command wall-clock limit in seconds; zero disables the limit. A
+    /// tool's `timeoutSeconds` overrides it.
+    pub command_timeout_seconds: u64,
+    /// Project-local executable directories searched, nearest first from the
+    /// job's workspace up to the project root, before `PATH`.
+    pub local_bin_dirs: Vec<String>,
+}
+
+/// Default per-command timeout in seconds.
+pub const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 120;
+
+/// Default project-local executable directories, in search order.
+pub fn default_local_bin_dirs() -> Vec<String> {
+    vec!["node_modules/.bin".into(), ".venv/bin".into()]
 }
 
 impl Default for Settings {
@@ -82,10 +98,12 @@ impl Default for Settings {
             continue_after_issues: true,
             exclude: default_excludes(),
             lowering_policy: LoweringPolicy::default(),
-            diagnostics_directory: Some(".velvet-glove/post-tool-use".into()),
+            diagnostics_directory: None,
             missing_tool_policy: MissingToolPolicy::default(),
             file_activity: None,
             deferred_reporting: DeferredReporting::default(),
+            command_timeout_seconds: DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            local_bin_dirs: default_local_bin_dirs(),
         }
     }
 }
@@ -148,6 +166,10 @@ pub struct SettingsPatch {
     pub file_activity: Option<FileActivitySettings>,
     /// Optional deferred-reporting settings overlay.
     pub deferred_reporting: Option<DeferredReportingPatch>,
+    /// Optional per-command timeout override.
+    pub command_timeout_seconds: Option<u64>,
+    /// Optional replacement for the project-local executable directories.
+    pub local_bin_dirs: Option<Vec<String>>,
 }
 
 impl SettingsPatch {
@@ -181,6 +203,12 @@ impl SettingsPatch {
         }
         if let Some(deferred_reporting) = self.deferred_reporting {
             deferred_reporting.apply_to(&mut settings.deferred_reporting);
+        }
+        if let Some(seconds) = self.command_timeout_seconds {
+            settings.command_timeout_seconds = seconds;
+        }
+        if let Some(dirs) = self.local_bin_dirs {
+            settings.local_bin_dirs = dirs;
         }
     }
 }
@@ -531,6 +559,12 @@ pub struct ToolSpec {
     pub diagnostics: Diagnostics,
     /// Whether the tool participates when referenced by the run list.
     pub enabled: bool,
+    /// Arguments prepended to every command's `ExtraArgs` expansion.
+    pub extra_args: Vec<String>,
+    /// Environment variables set for every command of this tool.
+    pub env: BTreeMap<String, String>,
+    /// Per-command timeout override in seconds; zero disables the limit.
+    pub timeout_seconds: Option<u64>,
 }
 
 impl Default for ToolSpec {
@@ -551,6 +585,9 @@ impl Default for ToolSpec {
             messages: Messages::default(),
             diagnostics: Diagnostics::default(),
             enabled: true,
+            extra_args: Vec::new(),
+            env: BTreeMap::new(),
+            timeout_seconds: None,
         }
     }
 }
@@ -569,6 +606,9 @@ pub struct Workflow {
     pub invocation: InvocationGranularity,
     /// Whether this workflow participates in deferred execution.
     pub enabled: bool,
+    /// Arguments added to the `ExtraArgs` expansion of both check and remedy,
+    /// after the tool's and before the command's own.
+    pub extra_args: Vec<String>,
 }
 
 impl Default for Workflow {
@@ -579,6 +619,7 @@ impl Default for Workflow {
             check_scope: CheckScope::default(),
             invocation: InvocationGranularity::default(),
             enabled: true,
+            extra_args: Vec::new(),
         }
     }
 }
@@ -723,7 +764,8 @@ pub enum ArgToken {
     ProjectRoot,
     /// Executable selected for the current tool command.
     ToolExecutable,
-    /// Literal extra arguments configured on the phase.
+    /// Extra arguments: the tool's, then the workflow's, then the command's
+    /// or phase's own `extraArgs`.
     ExtraArgs,
 }
 

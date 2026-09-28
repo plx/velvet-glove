@@ -8,8 +8,8 @@ module velvet_glove.PostToolUseConfig
 
 /// Top-level runner settings.
 class Settings {
-  /// Number of independent tool jobs to run concurrently. 0 means auto.
-  /// v0 honors `1` and `>=1`; auto is reserved for future use.
+  /// Number of independent tool jobs to run concurrently. 0 (the default)
+  /// means auto: the available parallelism, capped at 8. 1 runs serially.
   jobs: UInt?
 
   /// Stop after an operational failure (missing tool, configured failure code).
@@ -28,8 +28,9 @@ class Settings {
   /// How to handle optional common-output intents the harness cannot represent.
   loweringPolicy: ("strict" | "best-effort" | "best-effort-with-warnings")?
 
-  /// Default directory for diagnostic artifacts. Relative paths resolve from
-  /// the project root.
+  /// Directory for immediate-mode diagnostic files. Relative paths resolve
+  /// from the project root. When unset, files go under
+  /// `$TMPDIR/velvet-glove/state/post-tool-immediate`, outside the project.
   diagnosticsDirectory: String?
 
   /// What to do when a configured tool executable is missing.
@@ -42,6 +43,16 @@ class Settings {
   /// Optional field-preserving overrides for deferred Stop reporting. Rust
   /// supplies the built-in defaults; null nested fields inherit prior layers.
   deferredReporting: DeferredReporting?
+
+  /// Wall-clock limit for each external command, in seconds (default 120).
+  /// A command that exceeds it is killed and reported as an operational
+  /// failure. 0 disables the limit. `ToolSpec.timeoutSeconds` overrides it.
+  commandTimeoutSeconds: UInt?
+
+  /// Project-local executable directories searched before `PATH`, each from
+  /// the job's workspace up to the project root (nearest first). Default:
+  /// `node_modules/.bin`, then `.venv/bin`. Replaces the inherited list.
+  localBinDirs: Listing<String>?
 }
 
 class TemplatePair {
@@ -191,6 +202,9 @@ class Workflow {
   checkScope: "target-files" | "workspace" = "target-files"
   invocation: "per-file" | "batch" | "workspace" = "batch"
   enabled: Boolean = true
+  /// Arguments for the `ExtraArgs` token of both `check` and `remedy`, after
+  /// the tool's `extraArgs` and before the command's own.
+  extraArgs: Listing<String> = new Listing<String> {}
 }
 
 class ToolSpec {
@@ -213,12 +227,21 @@ class ToolSpec {
   /// validation rejects such entries unless this limitation is explicit.
   unverifiedRemedyFallback: String?
   phases: Mapping<String, Phase> = new Mapping<String, Phase> {}
-  /// Optional explicit phase ordering. If empty, runtime iterates `phases`
-  /// in insertion order (Pkl mappings preserve order).
+  /// Optional explicit phase ordering. Phases not listed run after the
+  /// listed ones, sorted by mode (format, fix, verify, check-only), then id.
   phaseOrder: Listing<String> = new Listing<String> {}
   messages: Messages = new Messages {}
   diagnostics: Diagnostics = new Diagnostics {}
   enabled: Boolean = true
+  /// Arguments placed first in every command's `ExtraArgs` expansion (every
+  /// phase, workflow check, and remedy). Only useful when every command of
+  /// the tool accepts them; otherwise use Workflow/Phase `extraArgs`.
+  extraArgs: Listing<String> = new Listing<String> {}
+  /// Environment variables set for every command of this tool.
+  env: Mapping<String, String> = new Mapping<String, String> {}
+  /// Per-command timeout in seconds, overriding
+  /// `settings.commandTimeoutSeconds`. 0 disables the limit.
+  timeoutSeconds: UInt?
 }
 
 settings: Settings = new Settings {}

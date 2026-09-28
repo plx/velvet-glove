@@ -85,6 +85,12 @@ pub struct ToolSpec {
     pub diagnostics_directory: Option<String>,
     /// Whether this specification participates in execution.
     pub enabled: bool,
+    /// Environment variables set for every command of this tool.
+    pub env: Vec<(String, String)>,
+    /// Wall-clock limit per command, or `None` for no limit.
+    pub timeout: Option<Duration>,
+    /// Project-local executable directories searched before `PATH`.
+    pub local_bin_dirs: Vec<String>,
 }
 
 impl ToolSpec {
@@ -107,6 +113,9 @@ impl ToolSpec {
             messages: ToolMessages::default(),
             diagnostics_directory: None,
             enabled: true,
+            env: Vec::new(),
+            timeout: Some(Duration::from_secs(pkl::DEFAULT_COMMAND_TIMEOUT_SECONDS)),
+            local_bin_dirs: Vec::new(),
         }
     }
 
@@ -988,30 +997,26 @@ fn run_turn_completion_view(
         }
     };
 
-    let (plan, planned_tools) = match build_deferred_plan(
-        &tools,
-        &candidates,
-        &project_root,
-        &loaded.config.settings.exclude,
-    ) {
-        Ok(plan) => plan,
-        Err(error) => {
-            let run = run.take().expect("run bundle is available");
-            return commit_deferred_config_failure(
-                ctx,
-                activity_store,
-                run,
-                DeferredFailureContext {
-                    project_root: &project_root,
-                    candidates: &candidates,
-                    resolution: &resolution,
-                },
-                (source_entry_count, source_entry_ids),
-                lowering_policy,
-                error.to_string(),
-            );
-        }
-    };
+    let (plan, planned_tools) =
+        match build_deferred_plan(&tools, &candidates, &project_root, &loaded.config.settings) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let run = run.take().expect("run bundle is available");
+                return commit_deferred_config_failure(
+                    ctx,
+                    activity_store,
+                    run,
+                    DeferredFailureContext {
+                        project_root: &project_root,
+                        candidates: &candidates,
+                        resolution: &resolution,
+                    },
+                    (source_entry_count, source_entry_ids),
+                    lowering_policy,
+                    error.to_string(),
+                );
+            }
+        };
     let mut execution = execute_deferred_workflows(
         &plan,
         loaded.config.settings.jobs,
@@ -1114,7 +1119,7 @@ fn build_deferred_plan(
     schemas: &[&pkl::ToolSpec],
     candidates: &[PathBuf],
     project_root: &Path,
-    global_exclude: &[String],
+    settings: &pkl::Settings,
 ) -> hookkit_core::Result<(Vec<ScheduledWorkflow>, Vec<PlannedDeferredTool>)> {
     let mut plan = Vec::new();
     let mut planned_tools = Vec::new();
@@ -1130,7 +1135,7 @@ fn build_deferred_plan(
                 )));
             }
         }
-        let spec = Arc::new(convert_tool_spec(schema, global_exclude));
+        let spec = Arc::new(convert_tool_spec(schema, settings));
         let matcher = FileMatcher::new(&spec.file_selection)?;
         let files = candidates
             .iter()
@@ -1832,14 +1837,13 @@ fn run_post_tool_input(
         );
     }
 
-    let global_exclude = &loaded.config.settings.exclude;
     let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.clone();
 
     for schema_spec in tools {
         if !schema_spec.enabled {
             continue;
         }
-        let spec = convert_tool_spec(schema_spec, global_exclude);
+        let spec = convert_tool_spec(schema_spec, &loaded.config.settings);
         let context = ToolContext {
             spec: &spec,
             project_root: &project_root,
@@ -2261,15 +2265,25 @@ struct ToolBatchStatus {
 }
 
 /// Convert a Pkl-shaped tool spec to the runtime execution type.
-fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpec {
+///
+/// `ExtraArgs` expands to the tool's `extraArgs`, then the workflow's (for
+/// explicit workflows), then the phase's or command's own.
+fn convert_tool_spec(spec: &pkl::ToolSpec, settings: &pkl::Settings) -> ToolSpec {
     let phases: Vec<ToolPhase> = ordered_phases(spec)
         .into_iter()
-        .map(convert_phase)
+        .map(|(id, phase)| {
+            let mut converted = convert_phase((id, phase));
+            converted.extra_args = concat_args(&[&spec.extra_args, &phase.extra_args]);
+            converted
+        })
         .collect();
 
-    let mut exclude = global_exclude.to_vec();
+    let mut exclude = settings.exclude.clone();
     exclude.extend(spec.files.exclude.clone());
     let workflows = convert_workflows(spec, &phases);
+    let timeout_seconds = spec
+        .timeout_seconds
+        .unwrap_or(settings.command_timeout_seconds);
 
     ToolSpec {
         id: spec.id.clone(),
@@ -2287,7 +2301,18 @@ fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpe
         messages: convert_messages(&spec.messages),
         diagnostics_directory: spec.diagnostics.directory.clone(),
         enabled: spec.enabled,
+        env: spec
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        timeout: (timeout_seconds > 0).then(|| Duration::from_secs(timeout_seconds)),
+        local_bin_dirs: settings.local_bin_dirs.clone(),
     }
+}
+
+fn concat_args(parts: &[&[String]]) -> Vec<String> {
+    parts.iter().flat_map(|part| part.iter().cloned()).collect()
 }
 
 fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWorkflow> {
@@ -2297,10 +2322,18 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
             .map(|(id, workflow)| ToolWorkflow {
                 id: id.clone(),
                 check: workflow.check.as_ref().map(|command| {
-                    convert_workflow_command(format!("{id}.check"), command, PhaseMode::Verify)
+                    let mut check =
+                        convert_workflow_command(format!("{id}.check"), command, PhaseMode::Verify);
+                    check.extra_args =
+                        concat_args(&[&spec.extra_args, &workflow.extra_args, &command.extra_args]);
+                    check
                 }),
                 remedy: workflow.remedy.as_ref().map(|command| {
-                    convert_workflow_command(format!("{id}.remedy"), command, PhaseMode::Fix)
+                    let mut remedy =
+                        convert_workflow_command(format!("{id}.remedy"), command, PhaseMode::Fix);
+                    remedy.extra_args =
+                        concat_args(&[&spec.extra_args, &workflow.extra_args, &command.extra_args]);
+                    remedy
                 }),
                 check_scope: match workflow.check_scope {
                     pkl::CheckScope::TargetFiles => CheckScope::TargetFiles,
@@ -2646,6 +2679,8 @@ enum ToolRunOutcome {
     ToolFailed {
         phase: String,
         exit_code: Option<i32>,
+        /// Spawn or timeout error, when the command did not simply exit.
+        error: Option<String>,
         diagnostics: String,
         changed_files: Vec<PathBuf>,
     },
@@ -2729,18 +2764,23 @@ fn run_jobs(jobs: &[ToolJob], context: &ToolContext<'_>, jobs_setting: u32) -> V
     outcomes.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
+/// Upper bound for `jobs = 0` (auto).
+const AUTO_JOBS_CAP: usize = 8;
+
 /// Resolve `settings.jobs` to a worker-thread count for a batch of `job_count`
 /// independent jobs.
 ///
-/// `jobs = 0` selects "auto", which is reserved for future use and runs
-/// serially for now. `jobs = n >= 1` runs up to `n` jobs concurrently, capped
-/// at `job_count` since extra workers would have nothing to claim.
+/// `jobs = 0` selects "auto": the available parallelism, capped at
+/// [`AUTO_JOBS_CAP`]. `jobs = n >= 1` runs up to `n` jobs concurrently. Both
+/// are capped at `job_count` since extra workers would have nothing to claim.
 fn resolve_worker_count(jobs_setting: u32, job_count: usize) -> usize {
     if job_count == 0 {
         return 0;
     }
     let requested = match jobs_setting {
-        0 => 1, // auto: reserved for future use; serial for now
+        0 => std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(AUTO_JOBS_CAP),
         n => n as usize,
     };
     requested.clamp(1, job_count)
@@ -2771,10 +2811,12 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                     changed_files: changed_files_since(&before, job, context),
                 };
             }
+            let error = error.clone();
             logs.push(log);
             return ToolRunOutcome::ToolFailed {
                 phase: phase.id.clone(),
                 exit_code: None,
+                error: Some(error),
                 diagnostics: format_logs(&logs),
                 changed_files: changed_files_since(&before, job, context),
             };
@@ -2798,6 +2840,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 return ToolRunOutcome::ToolFailed {
                     phase: phase.id.clone(),
                     exit_code: logs.last().and_then(|log| log.status),
+                    error: None,
                     diagnostics: format_logs(&logs),
                     changed_files: changed_files_since(&before, job, context),
                 };
@@ -2845,13 +2888,16 @@ fn changed_files_since(
 struct RenderedCommand {
     program: String,
     args: Vec<String>,
+    env: Vec<(String, String)>,
+    timeout: Option<Duration>,
 }
 
 fn render_command(phase: &ToolPhase, job: &ToolJob, context: &ToolContext<'_>) -> RenderedCommand {
-    let program = phase
-        .program
-        .clone()
-        .unwrap_or_else(|| context.spec.executable.clone());
+    let program = resolve_program(
+        phase.program.as_deref().unwrap_or(&context.spec.executable),
+        job,
+        context,
+    );
     let mut args = Vec::new();
     for arg in &phase.args {
         match arg {
@@ -2871,21 +2917,169 @@ fn render_command(phase: &ToolPhase, job: &ToolJob, context: &ToolContext<'_>) -
                 }
             }
             CommandArgTemplate::ProjectRoot => args.push(path_arg(context.project_root)),
-            CommandArgTemplate::ToolExecutable => args.push(context.spec.executable.clone()),
+            CommandArgTemplate::ToolExecutable => {
+                args.push(resolve_program(&context.spec.executable, job, context))
+            }
             CommandArgTemplate::ExtraArgs => args.extend(phase.extra_args.iter().cloned()),
         }
     }
-    RenderedCommand { program, args }
+    RenderedCommand {
+        program,
+        args,
+        env: context.spec.env.clone(),
+        timeout: context.spec.timeout,
+    }
+}
+
+/// Resolve a bare program name against the configured project-local bin
+/// directories: each directory (in order) is tried from the job's workspace up
+/// to the project root, nearest first. Anything else is left to `PATH`.
+fn resolve_program(program: &str, job: &ToolJob, context: &ToolContext<'_>) -> String {
+    if Path::new(program).components().count() != 1 {
+        return program.to_owned();
+    }
+    for bin_dir in &context.spec.local_bin_dirs {
+        for dir in job
+            .workspace_dir
+            .ancestors()
+            .take_while(|dir| dir.starts_with(context.project_root))
+        {
+            let candidate = dir.join(bin_dir).join(program);
+            if is_executable_file(&candidate) {
+                return path_arg(&candidate);
+            }
+        }
+    }
+    program.to_owned()
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
+struct CommandOutput {
+    status: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: Option<Duration>,
+}
+
+/// Run a command with captured output, killing it (and, on Unix, its process
+/// group) if it outlives `command.timeout`.
+fn execute_command(command: &RenderedCommand, cwd: &Path) -> std::io::Result<CommandOutput> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+        let (sender, receiver) = mpsc::channel();
+        if let Some(mut pipe) = pipe {
+            std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                let _ = pipe.read_to_end(&mut buffer);
+                let _ = sender.send(buffer);
+            });
+        }
+        receiver
+    }
+
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.process_group(0);
+    }
+    let mut child = process.spawn()?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+
+    let mut timed_out = None;
+    let status = match command.timeout {
+        None => child.wait()?,
+        Some(timeout) => {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut delay = Duration::from_millis(1);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    break status;
+                }
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    kill_process_tree(&mut child);
+                    timed_out = Some(timeout);
+                    break child.wait()?;
+                }
+                std::thread::sleep(delay.min(deadline - now));
+                delay = (delay * 2).min(Duration::from_millis(20));
+            }
+        }
+    };
+    // A timed-out tool may leave descendants holding the pipes open; take
+    // whatever output arrives promptly rather than waiting for them.
+    let collect = |receiver: mpsc::Receiver<Vec<u8>>| match timed_out {
+        None => receiver.recv().unwrap_or_default(),
+        Some(_) => receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_default(),
+    };
+    Ok(CommandOutput {
+        status: status.code(),
+        stdout: collect(stdout),
+        stderr: collect(stderr),
+        timed_out,
+    })
+}
+
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+            // SAFETY: `kill` has no memory-safety preconditions; the child was
+            // spawned as the leader of its own process group.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill();
 }
 
 fn run_phase_command(phase: &ToolPhase, command: &RenderedCommand, cwd: &Path) -> PhaseLog {
-    match Command::new(&command.program)
-        .args(&command.args)
-        .current_dir(cwd)
-        .output()
-    {
+    match execute_command(command, cwd) {
+        Ok(output) if output.timed_out.is_some() => PhaseLog {
+            phase: phase.id.clone(),
+            command: display_command(&command.program, &command.args),
+            program: command.program.clone(),
+            arguments: command.args.clone(),
+            status: output.status,
+            classification: None,
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            error: Some(format!(
+                "timed out after {}s and was killed (settings.commandTimeoutSeconds / tool timeoutSeconds)",
+                output.timed_out.unwrap_or_default().as_secs()
+            )),
+        },
         Ok(output) => {
-            let status = output.status.code();
+            let status = output.status;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let mut classification = status.map(|code| classify_exit_code(&phase.exit_codes, code));
             if phase.issues_on_stdout
@@ -3086,11 +3280,12 @@ fn accumulate_outcomes(
             ToolRunOutcome::ToolFailed {
                 phase,
                 exit_code,
+                error,
                 diagnostics,
                 changed_files: files,
             } => {
                 changed_files.extend(files);
-                failure_diagnostics.push((phase, exit_code, diagnostics));
+                failure_diagnostics.push((phase, exit_code, error, diagnostics));
             }
         }
     }
@@ -3135,7 +3330,7 @@ fn accumulate_outcomes(
     if !failure_diagnostics.is_empty() {
         let diagnostics = failure_diagnostics
             .iter()
-            .map(|(phase, exit_code, diagnostics)| {
+            .map(|(phase, exit_code, _, diagnostics)| {
                 format!(
                     "== phase {phase} failed (exit {exit_code:?}) ==\n{}",
                     diagnostics.trim()
@@ -3144,7 +3339,8 @@ fn accumulate_outcomes(
             .collect::<Vec<_>>()
             .join("\n\n");
         let artifact = write_diagnostics("tool-failure", &diagnostics, context, ctx)?;
-        let message = render_failed_message(context, &artifact, failure_diagnostics[0].0.as_str())?;
+        let (phase, _, error, _) = &failure_diagnostics[0];
+        let message = render_failed_message(context, &artifact, phase, error.as_deref())?;
         *output = std::mem::take(output)
             .with_user_notice(UserNotice::error(message))
             .with_diagnostic_report(report_with_artifact(
@@ -3246,6 +3442,7 @@ fn render_failed_message(
     context: &ToolContext<'_>,
     diagnostics_path: &Path,
     phase: &str,
+    error: Option<&str>,
 ) -> hookkit_core::Result<String> {
     if let Some(template) = context.spec.messages.failed_user.as_ref() {
         return render_template(
@@ -3258,8 +3455,9 @@ fn render_failed_message(
         );
     }
 
+    let reason = error.map(|error| format!(" ({error})")).unwrap_or_default();
     Ok(format!(
-        "{}: phase `{phase}` failed; diagnostics: {}",
+        "{}: phase `{phase}` failed{reason}; diagnostics: {}",
         context.spec.display_name,
         diagnostics_path.display()
     ))
@@ -3313,7 +3511,10 @@ fn write_diagnostics(
     ) {
         (Some(dir), _) => absolute_from(Path::new(dir), context.project_root),
         (None, Some(dir)) => absolute_from(Path::new(dir), context.project_root),
-        (None, None) => std::env::temp_dir().join("velvet-glove").join("artifacts"),
+        (None, None) => std::env::temp_dir()
+            .join("velvet-glove")
+            .join("state")
+            .join("post-tool-immediate"),
     };
     let manager = ArtifactManager::new(base_dir)?;
     manager
@@ -3671,8 +3872,12 @@ mod tests {
 
     #[test]
     fn resolve_worker_count_honors_jobs_setting() {
-        // auto (0) is reserved for future use and runs serially for now.
-        assert_eq!(resolve_worker_count(0, 5), 1);
+        // auto (0) uses the available parallelism, capped at 8.
+        let auto = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(AUTO_JOBS_CAP);
+        assert_eq!(resolve_worker_count(0, 64), auto);
+        assert!(resolve_worker_count(0, 5) <= 5);
         // explicit serial.
         assert_eq!(resolve_worker_count(1, 5), 1);
         // bounded parallelism up to the requested count.
@@ -3802,11 +4007,14 @@ mod tests {
             let actual = resolve_worker_count(jobs_setting, job_count);
             let expected = if job_count == 0 {
                 0
+            } else if jobs_setting == 0 {
+                resolve_worker_count(0, usize::MAX).min(job_count)
             } else {
-                usize::try_from(jobs_setting.max(1)).unwrap_or(usize::MAX).min(job_count)
+                usize::try_from(jobs_setting).unwrap_or(usize::MAX).min(job_count)
             };
 
             prop_assert_eq!(actual, expected);
+            prop_assert!(jobs_setting != 0 || actual <= AUTO_JOBS_CAP);
             prop_assert!(actual <= job_count);
             prop_assert_eq!(actual == 0, job_count == 0);
         }
@@ -3903,6 +4111,179 @@ mod tests {
     }
 
     #[test]
+    fn extra_args_expand_tool_then_workflow_then_command() {
+        let args = |values: &[&str]| values.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        let command = |extra: &[&str]| pkl::WorkflowCommand {
+            argv: vec![pkl::ArgvElement::Token(pkl::ArgToken::ExtraArgs)],
+            extra_args: args(extra),
+            ..pkl::WorkflowCommand::default()
+        };
+        let explicit = pkl::ToolSpec {
+            id: "ruff".into(),
+            executable: "ruff".into(),
+            extra_args: args(&["--tool"]),
+            env: BTreeMap::from([("RUFF_CACHE_DIR".into(), "/tmp/cache".into())]),
+            timeout_seconds: Some(7),
+            workflows: BTreeMap::from([(
+                "lint".into(),
+                pkl::Workflow {
+                    check: Some(command(&["--check"])),
+                    remedy: Some(pkl::WorkflowCommand {
+                        writes: pkl::WriteBehavior::TargetFiles,
+                        ..command(&["--remedy"])
+                    }),
+                    extra_args: args(&["--ignore", "F401"]),
+                    ..pkl::Workflow::default()
+                },
+            )]),
+            ..pkl::ToolSpec::default()
+        };
+        let settings = pkl::Settings {
+            local_bin_dirs: args(&["bin"]),
+            ..pkl::Settings::default()
+        };
+        let spec = convert_tool_spec(&explicit, &settings);
+        let workflow = &spec.workflows[0];
+        assert_eq!(
+            workflow.check.as_ref().unwrap().extra_args,
+            args(&["--tool", "--ignore", "F401", "--check"])
+        );
+        assert_eq!(
+            workflow.remedy.as_ref().unwrap().extra_args,
+            args(&["--tool", "--ignore", "F401", "--remedy"])
+        );
+        assert_eq!(
+            spec.env,
+            vec![("RUFF_CACHE_DIR".to_owned(), "/tmp/cache".to_owned())]
+        );
+        assert_eq!(spec.timeout, Some(Duration::from_secs(7)));
+        assert_eq!(spec.local_bin_dirs, args(&["bin"]));
+
+        let phased = pkl::ToolSpec {
+            id: "fmt".into(),
+            executable: "fmt".into(),
+            extra_args: args(&["--tool"]),
+            timeout_seconds: Some(0),
+            phases: BTreeMap::from([
+                (
+                    "format".into(),
+                    pkl::Phase {
+                        mode: pkl::PhaseMode::Format,
+                        writes: pkl::WriteBehavior::TargetFiles,
+                        extra_args: args(&["--format"]),
+                        ..pkl::Phase::default()
+                    },
+                ),
+                (
+                    "verify".into(),
+                    pkl::Phase {
+                        extra_args: args(&["--verify"]),
+                        ..pkl::Phase::default()
+                    },
+                ),
+            ]),
+            ..pkl::ToolSpec::default()
+        };
+        let spec = convert_tool_spec(&phased, &pkl::Settings::default());
+        assert_eq!(spec.phases[0].extra_args, args(&["--tool", "--format"]));
+        assert_eq!(spec.phases[1].extra_args, args(&["--tool", "--verify"]));
+        // Phase-translated workflows reuse the converted phases.
+        let translated = &spec.workflows[0];
+        assert_eq!(
+            translated.remedy.as_ref().unwrap().extra_args,
+            args(&["--tool", "--format"])
+        );
+        assert_eq!(
+            translated.check.as_ref().unwrap().extra_args,
+            args(&["--tool", "--verify"])
+        );
+        assert_eq!(spec.timeout, None, "timeoutSeconds = 0 disables the limit");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_bin_dirs_resolve_nearest_first_before_path() {
+        let root = unique_test_directory("local-bin");
+        let workspace = root.join("packages/web");
+        for dir in [
+            root.join("node_modules/.bin"),
+            workspace.join("node_modules/.bin"),
+            workspace.join(".venv/bin"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        let write_tool = |path: PathBuf, mode: u32| {
+            std::fs::write(&path, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+        let root_eslint = write_tool(root.join("node_modules/.bin/eslint"), 0o755);
+        let nested_eslint = write_tool(workspace.join("node_modules/.bin/eslint"), 0o755);
+        let venv_eslint = write_tool(workspace.join(".venv/bin/eslint"), 0o755);
+        write_tool(root.join("node_modules/.bin/not-executable"), 0o644);
+        let ruff = write_tool(workspace.join(".venv/bin/ruff"), 0o755);
+
+        let mut spec = ToolSpec::new("eslint", "ESLint", "eslint");
+        spec.local_bin_dirs = pkl::default_local_bin_dirs();
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &root,
+            global_diagnostics_dir: None,
+        };
+        let job = job_with_file(&workspace, "a.ts");
+        let root_job = job_with_file(&root, "a.ts");
+        let resolve = |program: &str, job: &ToolJob| resolve_program(program, job, &context);
+
+        assert_eq!(resolve("eslint", &job), path_arg(&nested_eslint));
+        assert_eq!(resolve("eslint", &root_job), path_arg(&root_eslint));
+        assert_eq!(resolve("ruff", &job), path_arg(&ruff));
+        assert_eq!(resolve("not-executable", &job), "not-executable");
+        assert_eq!(resolve("absent", &job), "absent");
+        assert_eq!(resolve("/usr/bin/env", &job), "/usr/bin/env");
+        assert_ne!(resolve("eslint", &job), path_arg(&venv_eslint));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commands_receive_tool_env_and_are_killed_at_the_timeout() {
+        let root = std::env::temp_dir();
+        let phase = ToolPhase::new("verify", PhaseMode::Verify);
+        let command = |script: &str, timeout_ms: u64| RenderedCommand {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![("VELVET_GLOVE_PROBE".into(), "probe-value".into())],
+            timeout: Some(Duration::from_millis(timeout_ms)),
+        };
+
+        let log = run_phase_command(
+            &phase,
+            &command("printf %s \"$VELVET_GLOVE_PROBE\"", 5_000),
+            &root,
+        );
+        assert_eq!(log.stdout, "probe-value");
+        assert_eq!(log.classification, Some(PhaseStatus::Clean));
+
+        let started = std::time::Instant::now();
+        let log = run_phase_command(
+            &phase,
+            &command("printf started; sleep 30 & wait", 200),
+            &root,
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timeout must kill the command"
+        );
+        assert_eq!(log.classification, None);
+        assert!(
+            log.error.as_deref().unwrap().contains("timed out after"),
+            "{log:?}"
+        );
+        assert_eq!(log.stdout, "started");
+    }
+
+    #[test]
     fn compatibility_workflows_inherit_phase_invocation() {
         let schema = pkl::ToolSpec {
             id: "jq".into(),
@@ -3913,7 +4294,7 @@ mod tests {
             ..pkl::ToolSpec::default()
         };
 
-        let spec = convert_tool_spec(&schema, &[]);
+        let spec = convert_tool_spec(&schema, &pkl::Settings::default());
 
         assert_eq!(spec.phase_invocation, InvocationGranularity::PerFile);
         assert_eq!(spec.workflows.len(), 1);
