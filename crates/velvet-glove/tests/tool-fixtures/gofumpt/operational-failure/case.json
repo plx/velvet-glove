@@ -1,0 +1,4 @@
+{
+  "outcome": "operational",
+  "note": "example.go has a syntax error. gofumpt -l/-w exits 2 for a file it cannot parse, distinct from its clean (0) exit code."
+}
