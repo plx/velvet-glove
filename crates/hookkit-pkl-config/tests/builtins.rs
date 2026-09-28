@@ -204,7 +204,12 @@ fn actionlint_builtin_classifies_findings_and_operational_failures() {
     assert_eq!(actionlint.executable, "actionlint");
     assert_eq!(
         actionlint.files.include,
-        vec!["*.yml", "*.yaml", "**/*.yml", "**/*.yaml"]
+        vec![
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml",
+            "**/.github/workflows/*.yml",
+            "**/.github/workflows/*.yaml"
+        ]
     );
     assert_eq!(actionlint.phase_order, vec!["verify"]);
 

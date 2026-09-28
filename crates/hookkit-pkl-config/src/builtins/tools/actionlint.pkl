@@ -1,4 +1,10 @@
 /// actionlint — GitHub Actions workflow linter.
+///
+/// actionlint treats any YAML file as a workflow document: on a non-workflow
+/// YAML file it still parses successfully and then reports "jobs section is
+/// missing" / "on section is missing" as lint findings, which would be a
+/// false positive if the glob matched arbitrary YAML. Workflows only ever
+/// live under `.github/workflows/`, so the glob is scoped there.
 
 module velvet_glove.builtins.tools.Actionlint
 
@@ -12,8 +18,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
 
   files = new Config.FileSelection {
     include = new Listing<String> {
-      "*.yml"; "*.yaml"
-      "**/*.yml"; "**/*.yaml"
+      ".github/workflows/*.yml"; ".github/workflows/*.yaml"
+      "**/.github/workflows/*.yml"; "**/.github/workflows/*.yaml"
     }
   }
 
