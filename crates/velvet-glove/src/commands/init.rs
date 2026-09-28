@@ -136,7 +136,7 @@ pub fn detect(
         .iter()
         .filter(|(_, spec)| spec.enabled)
         .filter_map(|(key, spec)| {
-            let matcher = FileMatcher::new(&spec.files, &global_exclude);
+            let matcher = FileMatcher::new(&spec.files, &global_exclude).ok()?;
             let mut matching = files.iter().filter(|file| matcher.matches(file));
             let example_file = matching.next()?.clone();
             let file_count = 1 + matching.count();

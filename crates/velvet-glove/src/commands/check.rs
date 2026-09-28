@@ -5,7 +5,7 @@
 //! files, then renders the report for a person or as JSON. It never touches
 //! hook session state.
 
-use super::project::list_project_files;
+use super::project::{in_policy_directory, list_project_files};
 use hookkit_tool_runner::{CheckReport, CheckRequest, CheckStatus, FileStatus};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -98,7 +98,8 @@ fn candidate_files(dir: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>, String
     Ok(candidates)
 }
 
-/// Modified, staged, and untracked (not ignored) files under `dir`.
+/// Modified, staged, and untracked (not ignored) files under `dir`, except
+/// the policy files in `.velvet-glove/` (as for named directories).
 fn git_changed_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let git = |args: &[&str]| Command::new("git").arg("-C").arg(dir).args(args).output();
     let toplevel = git(&["rev-parse", "--show-toplevel"])
@@ -128,6 +129,7 @@ fn git_changed_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     }
     Ok(porcelain_paths(&output.stdout)
         .into_iter()
+        .filter(|relative| !in_policy_directory(relative))
         .map(|relative| toplevel.join(relative))
         .filter(|path| path.is_file())
         .collect())

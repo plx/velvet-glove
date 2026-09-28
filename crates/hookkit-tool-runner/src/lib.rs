@@ -2710,13 +2710,15 @@ fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
         && output.harness_block.is_none()
 }
 
-/// Resolve the `run` list to ordered tool specs.
+/// Resolve the `run` list to ordered tool specs. Loading already rejects a
+/// `run` entry naming no tool, so a missing one is an internal invariant
+/// violation rather than a user error.
 fn resolve_run_order(config: &pkl::RunnerConfig) -> hookkit_core::Result<Vec<&pkl::ToolSpec>> {
     let mut tools = Vec::with_capacity(config.run.len());
     for id in &config.run {
         let Some(spec) = config.tools.get(id) else {
             return Err(invalid_data(format!(
-                "run references unknown tool `{id}`; define it under `tools` or remove it from `run`"
+                "internal error: validated run list names unknown tool `{id}`"
             )));
         };
         tools.push(spec);

@@ -83,14 +83,12 @@ pub fn run(dir: &Path, config: Option<&Path>, state_dir: &Path) -> ExitCode {
             run.len(),
             if run.len() == 1 { "" } else { "s" }
         );
-        for key in run {
-            let Some(spec) = loaded.config.tools.get(key) else {
-                println!("  {key:<20} not defined in `tools`");
-                problems.push(format!(
-                    "`run` names {key:?}, which no `tools` entry defines; add `[\"{key}\"] = Builtins.{key}` or remove it"
-                ));
-                continue;
-            };
+        // Loading validated that every `run` entry names a `tools` entry; an
+        // unknown one is reported above as a load error.
+        for (key, spec) in run
+            .iter()
+            .filter_map(|key| Some((key, loaded.config.tools.get(key)?)))
+        {
             if !spec.enabled {
                 println!("  {key:<20} disabled (enabled = false)");
                 warnings.push(format!("{key} is in `run` but disabled, so it never runs"));

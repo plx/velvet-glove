@@ -270,8 +270,17 @@ fn check_defaults_to_git_changed_and_untracked_files() {
     sandbox.write("edited.txt", "messy\n");
     sandbox.write("new/untracked.txt", "fine\n");
     sandbox.write("ignored/skip.txt", "FIXME\n");
+    let policy = sandbox.read(".velvet-glove/post-tool-use.pkl");
+    sandbox.write(
+        ".velvet-glove/post-tool-use.pkl",
+        &format!("{policy}// edited\n"),
+    );
 
     let report = json(&sandbox.check(&["--json"]));
+    assert!(
+        !report.to_string().contains(".velvet-glove"),
+        "the policy itself is never a candidate: {report}"
+    );
 
     assert_eq!(report["status"], "auto-fixed", "{report}");
     let paths = report["files"]

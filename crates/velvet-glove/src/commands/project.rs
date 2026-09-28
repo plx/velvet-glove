@@ -3,6 +3,7 @@
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_pkl_config::schema::{FileSelection, TOOL_CACHE_DIRECTORIES, ToolSpec};
+use hookkit_tool_runner::is_executable_file;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -114,26 +115,26 @@ pub fn resolve_tool(
 }
 
 /// Resolve one program the way the hook runner does for a file at the project
-/// root: a path with a separator as given; a bare name in each
-/// `local_bin_dirs` entry, then on `PATH`. (At run time the runner also tries
-/// those directories in nested workspaces, nearest first.) Other conventional
-/// project-local directories are checked last, for reporting only.
+/// root, with the runner's own resolver: a path with a separator relative to
+/// the project root (where the hooks run it for a tool without a workspace
+/// indicator); a bare name in each `local_bin_dirs` entry, then on `PATH`.
+/// (At run time the runner also searches from each file's directory and
+/// nested workspaces, nearest first.) Other conventional project-local
+/// directories are checked last, for reporting only.
 pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[String]) -> Resolution {
     if program.is_empty() {
         return Resolution::Missing;
     }
-    if program.contains('/') {
-        let path = PathBuf::from(program);
-        return if is_executable(&path) {
+    if Path::new(program).components().count() != 1 {
+        let path = project_dir.join(program);
+        return if is_executable_file(&path) {
             Resolution::Path(path)
         } else {
             Resolution::Missing
         };
     }
-    if let Some(path) = local_bin_dirs
-        .iter()
-        .map(|dir| project_dir.join(dir).join(program))
-        .find(|candidate| is_executable(candidate))
+    if let Some(path) =
+        hookkit_tool_runner::local_program(program, &[project_dir], project_dir, local_bin_dirs)
     {
         return Resolution::ProjectLocal(path);
     }
@@ -141,7 +142,7 @@ pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[Stri
         .iter()
         .flat_map(std::env::split_paths)
         .map(|dir| dir.join(program))
-        .find(|candidate| is_executable(candidate))
+        .find(|candidate| is_executable_file(candidate))
     {
         return Resolution::Path(path);
     }
@@ -149,20 +150,8 @@ pub fn resolve_program(program: &str, project_dir: &Path, local_bin_dirs: &[Stri
         .iter()
         .filter(|dir| !local_bin_dirs.iter().any(|configured| configured == *dir))
         .map(|dir| project_dir.join(dir).join(program))
-        .find(|candidate| is_executable(candidate))
+        .find(|candidate| is_executable_file(candidate))
         .map_or(Resolution::Missing, Resolution::Unconfigured)
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 /// Installed Pkl version as reported by `pkl --version`.
@@ -198,13 +187,19 @@ fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
+/// Whether a slash-separated relative path lies in a `.velvet-glove/`
+/// policy directory, which is never a lint candidate.
+pub fn in_policy_directory(relative: &str) -> bool {
+    relative.split('/').any(|part| part == ".velvet-glove")
+}
+
 /// Project files as slash-separated paths relative to `root`: `git ls-files`
 /// (tracked plus untracked-but-not-ignored) when available, otherwise a
 /// bounded walk that skips common build and dependency directories and the
 /// simple patterns of the root `.gitignore`. `.velvet-glove/` is excluded.
 pub fn list_project_files(root: &Path) -> Vec<String> {
     let mut files = git_files(root).unwrap_or_else(|| walk_files(root));
-    files.retain(|file| !file.starts_with(".velvet-glove/"));
+    files.retain(|file| !in_policy_directory(file));
     files.truncate(MAX_PROJECT_FILES);
     files.sort();
     files
@@ -296,28 +291,24 @@ pub fn build_globset<S: AsRef<str>>(patterns: &[S]) -> GlobSet {
     builder.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
-/// File selection with the same semantics as the runner: an empty include
-/// list selects every file; excludes (tool plus global) always win.
-pub struct FileMatcher {
-    include: GlobSet,
-    include_all: bool,
-    exclude: GlobSet,
-}
+/// File selection through the runner's own matcher: an empty include list
+/// selects every file; excludes (global plus tool) always win.
+pub struct FileMatcher(hookkit_tool_runner::FileMatcher);
 
 impl FileMatcher {
-    /// Build a matcher from a tool's selection plus global excludes.
-    pub fn new(selection: &FileSelection, global_exclude: &[String]) -> Self {
-        let exclude: Vec<&String> = global_exclude.iter().chain(&selection.exclude).collect();
-        Self {
-            include: build_globset(&selection.include),
-            include_all: selection.include.is_empty(),
-            exclude: build_globset(&exclude),
-        }
+    /// Build a matcher from a tool's selection plus global excludes; `Err`
+    /// describes an invalid glob.
+    pub fn new(selection: &FileSelection, global_exclude: &[String]) -> Result<Self, String> {
+        let selection = hookkit_tool_runner::FileSelection::include(selection.include.iter())
+            .with_exclude(global_exclude.iter().chain(&selection.exclude));
+        hookkit_tool_runner::FileMatcher::new(&selection)
+            .map(Self)
+            .map_err(|error| error.to_string())
     }
 
     /// Whether a project-relative path is selected.
     pub fn matches(&self, relative: &str) -> bool {
-        (self.include_all || self.include.is_match(relative)) && !self.exclude.is_match(relative)
+        self.0.matches_relative(relative)
     }
 }
 
@@ -404,10 +395,45 @@ mod tests {
             include: vec!["*.py".into()],
             exclude: vec!["gen/**".into()],
         };
-        let matcher = FileMatcher::new(&selection, &["node_modules/**".to_string()]);
+        let matcher = FileMatcher::new(&selection, &["node_modules/**".to_string()]).unwrap();
         assert!(matcher.matches("src/app.py"));
         assert!(!matcher.matches("gen/app.py"));
         assert!(!matcher.matches("node_modules/x.py"));
         assert!(!matcher.matches("src/app.rs"));
+        let invalid = FileSelection {
+            include: vec!["src/{a".into()],
+            exclude: Vec::new(),
+        };
+        assert!(FileMatcher::new(&invalid, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn program_paths_resolve_from_the_project_root_not_the_process_cwd() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("vg-resolve-path-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let tool = root.join("bin/mylint");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            resolve_program("bin/mylint", &root, &[]),
+            Resolution::Path(tool.clone())
+        );
+        assert_eq!(
+            resolve_program(&tool.to_string_lossy(), Path::new("/"), &[]),
+            Resolution::Path(tool)
+        );
+        assert_eq!(
+            resolve_program("bin/absent", &root, &[]),
+            Resolution::Missing
+        );
+        assert!(in_policy_directory(".velvet-glove/post-tool-use.pkl"));
+        assert!(in_policy_directory(
+            "sub/.velvet-glove/post-tool-use.local.pkl"
+        ));
+        assert!(!in_policy_directory("src/velvet-glove.rs"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
