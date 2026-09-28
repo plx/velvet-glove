@@ -218,7 +218,9 @@ cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
 
 The weekly/manual [real-tool CI lane](.github/workflows/real-tool-fixtures.yml)
-tests the five v2 reference tools on Ubuntu and macOS. See the
+tests the five v2 reference tools on Ubuntu and macOS. It runs each fixture
+case through the deferred plugin flow and the immediate hook, and checks
+semantic outcomes and file post-state rather than output transcripts. See the
 [fixture README](crates/velvet-glove/tests/tool-fixtures/README.md#scheduled-real-tool-ci)
 for its scope, local reproduction, reports, and how to add tools.
 
