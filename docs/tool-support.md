@@ -61,7 +61,7 @@ this validation group.
 | Tool | What it does | Status | Tested with | Picked by `init` | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `cargo-check` (`cargoCheck`) | check only | ✅ validated | cargo 1.97.1 | opt-in only (cargo-clippy covers cargo check) | |
-| `cargo-clippy` (`cargoClippy`) | lint + autofix | 🔧 fixed & validated | clippy 0.1.97 | if `**/Cargo.toml` | Workspace-scoped; a broken clippy.toml now blocks as a manual issue. |
+| `cargo-clippy` (`cargoClippy`) | lint + autofix | 🔧 fixed & validated | clippy 0.1.97 | if `**/Cargo.toml` | Scoped to the touched crate, not the whole workspace; a broken clippy.toml now blocks as a manual issue. |
 | `cargo-deny` (`cargoDeny`) | dependency/license audit | 🆕 new & validated | cargo-deny 0.20.2 | if `**/deny.toml` | Fetches the RustSec advisory database over the network. |
 | `cargo-fmt` (`cargoFmt`) | format | ✅ validated | rustfmt 1.9.0 | if `**/Cargo.toml` | |
 | `just-format` (`justFormat`) | format Justfiles | 🔧 fixed & validated | just 1.45.0 | opt-in only (just's formatter is unstable) | |
