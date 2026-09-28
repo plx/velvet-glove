@@ -1,4 +1,11 @@
 /// hadolint — Dockerfile linter.
+///
+/// hadolint lints a `Containerfile` (the Podman/Buildah name) exactly like a
+/// `Dockerfile`; the glob covers both names.
+/// A missing `--config` file also exits 1, the same code as a lint finding;
+/// hadolint does not expose a distinct exit status for the two. `--no-color`
+/// keeps ANSI escapes out of diagnostics piped to a non-TTY, which hadolint
+/// otherwise emits unconditionally.
 
 module velvet_glove.builtins.tools.Hadolint
 
@@ -16,6 +23,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       "Dockerfile.*"
       "**/Dockerfile"
       "**/Dockerfile.*"
+      "Containerfile"
+      "Containerfile.*"
+      "**/Containerfile"
+      "**/Containerfile.*"
     }
   }
 
@@ -23,6 +34,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
+        "--no-color"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
