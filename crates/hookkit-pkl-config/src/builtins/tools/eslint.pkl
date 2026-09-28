@@ -13,8 +13,12 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> {
       "*.js"; "**/*.js"
+      "*.mjs"; "**/*.mjs"
+      "*.cjs"; "**/*.cjs"
       "*.jsx"; "**/*.jsx"
       "*.ts"; "**/*.ts"
+      "*.mts"; "**/*.mts"
+      "*.cts"; "**/*.cts"
       "*.tsx"; "**/*.tsx"
     }
   }

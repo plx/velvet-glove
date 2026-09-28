@@ -1,0 +1,19 @@
+error: ESLint: phase `fix` failed; diagnostics: <workspace>/.velvet-glove/eslint-agent-hook/test-session_test-turn_eslint-tool_eslint-tool-failure.txt
+ESLint failure diagnostics:
+== phase fix failed (exit Some(2)) ==
+[fix] command: eslint --fix <workspace>/example.js
+status: Some(2)
+classification: Some(Failure)
+stderr:
+
+Oops! Something went wrong! :(
+
+ESLint: 10.11.0
+
+Configuration for rule "semi" is invalid. Expected severity of "off", 0, "warn", 1, "error", or 2.
+
+You passed '"not-a-valid-severity"'.
+
+See https://eslint.org/docs/latest/use/configure/rules#use-configuration-files for configuring rules.
+artifact: <workspace>/.velvet-glove/eslint-agent-hook/test-session_test-turn_eslint-tool_eslint-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
