@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"mix compile reports issues; inspect diagnostics at <workspace>/.velvet-glove/mix-compile-agent-hook/test-session_test-turn_mix-compile-tool_mix-compile-tool-issues.txt.","hookEventName":"PostToolUse"}}

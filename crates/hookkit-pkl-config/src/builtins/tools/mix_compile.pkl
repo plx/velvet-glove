@@ -1,7 +1,11 @@
 /// mix compile — Elixir compiler invocation.
 ///
-/// DRAFT: compilation always operates on the whole project; the file list is
-/// only used to gate when the runner triggers a build.
+/// Compilation always operates on the whole project; the file list is only
+/// used to gate when the runner triggers a build. Verified against Elixir
+/// 1.20.4 / mix 1.20.4: `--warnings-as-errors` makes both a compiler warning
+/// and a genuine parse/compile error exit 1, so there is no exit code that
+/// distinguishes a broken source file from a warnings-as-errors violation;
+/// both are treated as source issues for the agent to fix.
 
 module velvet_glove.builtins.tools.MixCompile
 
