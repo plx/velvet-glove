@@ -19,10 +19,8 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
             cli.config,
             state_dir,
         ),
+        // `Cli::validate` rejects Antigravity here; it has no exact SessionStart.
         Command::SessionStartState => {
-            if harness == hookkit_core::HarnessId::ANTIGRAVITY {
-                return std::process::ExitCode::from(2);
-            }
             crate::scaffold::runners::run_session_start(harness, state_dir)
         }
     }
