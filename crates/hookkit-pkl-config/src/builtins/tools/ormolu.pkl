@@ -1,15 +1,14 @@
 /// Ormolu — a Haskell formatter.
 ///
-/// Ormolu has real per-mode exit codes: `--mode check` exits 0 clean, 100
-/// unformatted (a diff on stdout), 3 a parse error; `--mode inplace` exits
-/// 0 on success and 102 on a parse error. Both modes accept several files
-/// and keep going after a parse error, still writing the files that did
-/// parse — but the process exit code reflects only the last file's outcome,
-/// so a batch invocation containing a broken file could misreport an
-/// earlier fixed file. Per-file invocation keeps each file's classification
-/// independent. Not the only Haskell formatter (fourmolu, brittany, and
-/// stylish-haskell are common alternatives), so it has no project-wide
-/// config file to detect and is not a role default.
+/// For a single file Ormolu has real per-mode exit codes: `--mode check`
+/// exits 0 clean, 100 unformatted (a diff on stdout), 3 a parse error;
+/// `--mode inplace` exits 0 on success and 3 on a parse error. With several
+/// files it still writes every file that parses but collapses any mix of
+/// outcomes into 102, so a batch containing one broken file would be
+/// charged as a whole. Per-file invocation keeps each file's classification
+/// independent. Not the only Haskell formatter (fourmolu and
+/// stylish-haskell are common alternatives) and it has no config file of
+/// its own to detect, so it is opt-in rather than a role default.
 
 module velvet_glove.builtins.tools.Ormolu
 
@@ -37,7 +36,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        failure = new Listing<Int> { 102 }
+        failure = new Listing<Int> { 3 }
       }
       writes = "target-files"
     }

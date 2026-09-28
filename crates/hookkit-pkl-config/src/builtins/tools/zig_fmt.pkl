@@ -1,17 +1,15 @@
 /// zig fmt — Zig's bundled formatter.
 ///
-/// `zig fmt --check` reports both an unformatted file and a file with a
-/// parse error through the same exit code (1); a parse error prints to
-/// stderr with no filename, while an unformatted file prints its own name
-/// to stdout, but our exit-code classification can't see that difference.
-/// The mutating `format` phase runs first and rewrites successfully-parsed
-/// files while leaving a broken file untouched; since it declares only
-/// `clean = 0`, a parse error there falls through to the default
-/// `unexpected = "failure"` before `verify` ever sees that file, so the
-/// two-phase order — not `verify` alone — is what makes the parse-error
-/// case classify as an operational failure instead of a source issue.
-/// Per-file invocation isolates that failure so a bad file next to a good
-/// one doesn't block the good one from being formatted.
+/// `zig fmt --check` exits 1 both for an unformatted file (its name on
+/// stdout) and for a parse error (a diagnostic on stderr), so the check's
+/// exit code alone can't tell them apart. The mutating `format` phase can:
+/// it exits 0 after rewriting a parseable file and 1 only when parsing
+/// fails, and it declares just `clean = 0`, so that 1 falls through to the
+/// default `unexpected = "failure"`. The immediate runner runs `format`
+/// before `verify`; the deferred flow runs `format` as the remedy for the
+/// check's "issues" verdict. Either way a broken file ends as an
+/// operational failure, not a source issue. Per-file invocation keeps one
+/// broken file's failure from being charged to its siblings.
 
 module velvet_glove.builtins.tools.ZigFmt
 

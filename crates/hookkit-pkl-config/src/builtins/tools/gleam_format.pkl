@@ -1,14 +1,15 @@
 /// gleam format — Gleam's bundled formatter.
 ///
-/// `gleam format --check` reports both an unformatted file and a syntax
-/// error through the same exit code (1), so exit-code classification alone
-/// can't tell them apart. As with zig fmt, the mutating `format` phase runs
-/// first and declares only `clean = 0`; a syntax error there falls through
-/// to the default `unexpected = "failure"` before `verify` is reached, so
-/// the phase order is what makes a broken file an operational failure
-/// rather than a source issue. A batch `gleam format` call stops at the
-/// first unparseable file without formatting files listed after it, so
-/// per-file invocation isolates a broken file from its siblings.
+/// `gleam format --check` exits 1 both for an unformatted file and for a
+/// syntax error, so the check's exit code alone can't tell them apart. The
+/// mutating `format` phase can: it exits 1 only when parsing fails, and it
+/// declares just `clean = 0`, so that 1 falls through to the default
+/// `unexpected = "failure"`. The immediate runner runs `format` before
+/// `verify`; the deferred flow runs `format` as the remedy for the check's
+/// "issues" verdict. Either way a broken file ends as an operational
+/// failure, not a source issue. A batch `gleam format` call formats nothing
+/// when any listed file fails to parse, so per-file invocation isolates a
+/// broken file from its siblings.
 
 module velvet_glove.builtins.tools.GleamFormat
 
