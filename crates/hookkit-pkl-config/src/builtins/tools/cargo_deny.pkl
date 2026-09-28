@@ -50,11 +50,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   }
   phaseOrder = new Listing<String> { "verify" }
 
-  messages = new Config.Messages {
-    issuesAgent =
-      "cargo deny reports issues; inspect diagnostics at {{ diagnostics_path }}."
-  }
-
   detect = new Config.Detect {
     indicators = new Listing<String> { "**/deny.toml" }
     note = "config-only: fetches the RustSec advisory database over the network"
