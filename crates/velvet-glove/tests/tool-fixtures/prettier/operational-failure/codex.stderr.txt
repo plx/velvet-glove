@@ -1,0 +1,22 @@
+error: Prettier: phase `format` failed; diagnostics: <workspace>/.velvet-glove/prettier-agent-hook/test-session_test-turn_prettier-tool_prettier-tool-failure.txt
+Prettier failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: prettier --write <workspace>/example.js
+status: Some(2)
+classification: Some(Failure)
+stderr:
+[error] Invalid configuration for file "<workspace>/example.js":
+[error] JSON Error in <workspace>/.prettierrc.json:
+[error] Expected property name or '}' in JSON at position 2 (line 1 column 3)
+[error] 
+[error] > 1 | { this is not valid json
+[error]     |   ^
+[error]   2 |
+[error] 
+[error] 
+[error] > 1 | { this is not valid json
+[error]     |   ^
+[error]   2 |
+[error]
+artifact: <workspace>/.velvet-glove/prettier-agent-hook/test-session_test-turn_prettier-tool_prettier-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
