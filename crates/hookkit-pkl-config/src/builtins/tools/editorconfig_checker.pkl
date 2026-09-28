@@ -1,4 +1,11 @@
 /// editorconfig-checker — validate files against `.editorconfig` rules.
+///
+/// Verified with editorconfig-checker 4.0.1: exits 0 clean, 1 when
+/// violations are found (never mutates), and a distinct 2 when `-config`
+/// can't be read or parsed, so that's made an explicit failure code rather
+/// than relying on the implicit "unexpected -> failure" default. With no
+/// `.editorconfig` anywhere above a file, the tool has no rules to apply and
+/// always exits 0 for that file — expected, not a bug.
 
 module velvet_glove.builtins.tools.EditorconfigChecker
 
@@ -28,6 +35,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
       }
     }
   }
