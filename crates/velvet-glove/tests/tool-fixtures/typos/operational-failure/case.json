@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "extraArgs point --config at malformed TOML, which typos exits 78 for (neither the tool's clean 0 nor issues 2)."}
