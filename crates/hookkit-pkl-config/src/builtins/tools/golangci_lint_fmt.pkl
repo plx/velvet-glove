@@ -75,9 +75,11 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   }
   phaseOrder = new Listing<String> { "format" }
 
+  // No indicators: gofmt already claims go-format for every go.mod, and a
+  // `.golangci.yml` usually configures only linters, so an indicator here
+  // would select two formatters for one mutually exclusive role.
   detect = new Config.Detect {
-    indicators = new Listing<String> { ".golangci.yml"; ".golangci.yaml"; ".golangci.toml"; ".golangci.json" }
     role = "go-format"
-    note = "requires golangci-lint v2+ (the `fmt` subcommand); opt-in alongside gofmt/gofumpt"
+    note = "opt-in only: needs golangci-lint v2+ (the `fmt` subcommand)"
   }
 }
