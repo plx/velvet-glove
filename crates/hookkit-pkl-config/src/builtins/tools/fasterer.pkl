@@ -1,4 +1,18 @@
 /// fasterer — Ruby performance hint scanner.
+///
+/// fasterer's CLI only ever reads `ARGV[0]`: a single file or a directory to
+/// scan recursively. Passing several paths in one invocation silently drops
+/// every path after the first (verified against fasterer 0.11.0), so batch
+/// invocation would miss issues in every cited file but the first. `per-file`
+/// gives each cited file its own `ARGV[0]`, which fasterer does handle
+/// correctly. There is no autofix; fasterer only reports.
+///
+/// Limitation: fasterer cannot distinguish an operational failure from a
+/// clean pass through its exit code. A syntax error in the scanned file is
+/// reported as an "unparsable file" note but still exits 0, and an invalid
+/// `.fasterer.yml` raises an uncaught exception that also exits 1 — the same
+/// code used for "offenses found". No `operational-failure` fixture case is
+/// included because no input reliably produces a distinguishable failure.
 
 module velvet_glove.builtins.tools.Fasterer
 
@@ -13,6 +27,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> { "*.rb"; "**/*.rb" }
   }
+  // fasterer only reads its first argument; invoke it once per file.
+  phaseInvocation = "per-file"
 
   phases = new Mapping<String, Config.Phase> {
     ["verify"] = new Config.Phase {
