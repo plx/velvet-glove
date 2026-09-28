@@ -475,6 +475,16 @@ fn deferred_checks_assert_per_file_semantics() {
         error.contains("expected auto-fixed, observed clean"),
         "{error}"
     );
+    // A workspace remedy that rewrote a file beyond the cited ones counts.
+    let mut workspace = summary("clean", "clean", false);
+    workspace["result"]["files"]["/fixture/workspace/member/src/lib.rs"] =
+        serde_json::json!({"status": "auto-fixed"});
+    assert!(check(&auto_fixed, &allowed, &workspace).is_ok());
+    let error = check(&clean, &allowed, &workspace).unwrap_err();
+    assert!(
+        error.contains("expected clean, observed auto-fixed"),
+        "{error}"
+    );
 
     let operational = CaseSpec::new(Outcome::Operational);
     assert!(check(&operational, &blocked, &summary("clean", "clean", true)).is_ok());
@@ -1611,8 +1621,10 @@ fn run_hook(
 }
 
 /// Compares a deferred run's `summary.json` per-file statuses and operational
-/// problems with the case's expectation. Stop output is checked only for its
-/// coarse block decision; its wording belongs to the UX templates.
+/// problems with the case's expectation. The aggregate is the worst status of
+/// the cited files and of any other file the run assessed (typically one a
+/// workspace-wide remedy changed). Stop output is checked only for its coarse
+/// block decision; its wording belongs to the UX templates.
 fn check_deferred_run(
     expect: &CaseSpec,
     cited: &[String],
@@ -1684,6 +1696,13 @@ fn check_deferred_run(
                     problems.push(format!("{file}: expected {expected}, observed {actual}"));
                 }
                 _ => {}
+            }
+        }
+        // Workspace-wide remedies rewrite files beyond the edited ones, and
+        // the run reports those files too.
+        for (file, outcome) in &observed {
+            if !cited.contains(file) {
+                worst = worst.max(Some(*outcome));
             }
         }
         match worst {

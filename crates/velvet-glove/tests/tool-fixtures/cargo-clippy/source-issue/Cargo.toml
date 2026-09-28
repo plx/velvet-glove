@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
+path = "lib.rs"
+
+# The edited file is an integration test, which only `--all-targets` checks.
+[[test]]
+name = "persistent"
 path = "example.rs"
 
 [workspace]

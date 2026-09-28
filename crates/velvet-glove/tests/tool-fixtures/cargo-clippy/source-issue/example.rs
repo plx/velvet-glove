@@ -1,3 +1,5 @@
-pub fn answer() -> u8 {
-    42
+#[warn(clippy::todo)]
+#[test]
+fn unfinished() {
+    todo!();
 }

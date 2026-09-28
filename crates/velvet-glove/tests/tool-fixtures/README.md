@@ -44,7 +44,7 @@ tests/tool-fixtures/<tool-id>/<case-name>/
 
 | Key | Meaning |
 | --- | --- |
-| `outcome` | Required. The aggregate result for the cited files: `clean`, `auto-fixed`, `manual` or `operational`. |
+| `outcome` | Required. The aggregate result of the run: `clean`, `auto-fixed`, `manual` or `operational`. It covers the cited files plus any other file the run assessed, such as a workspace member a workspace-wide fix rewrote. Issues the tool reports only in files the edit did not touch never block, so a `manual` case must put its issue in a cited file. |
 | `files` | Optional, for mixed multi-file cases. Maps a cited file to its exact outcome (`clean`, `auto-fixed` or `manual`). |
 | `immediate`, `deferred` | Optional booleans, default `true`. Set one to `false` to skip that lane for the case; a `note` is then required. |
 | `note` | A free-text explanation. It becomes the reason shown for a skipped lane. |
@@ -65,7 +65,8 @@ files through `post-tool`, then `turn-completion` (Stop). The case gets its own
 - for `operational`: at least one operational problem, and no cited file
   classified `manual-fixes-needed`;
 - otherwise: no operational problems, every cited file assessed, the worst
-  per-file status equal to `outcome`, and each `files` entry matched exactly;
+  status of all assessed files equal to `outcome`, and each `files` entry
+  matched exactly;
 - Stop output is checked only for its block decision: `manual` must block
   (`decision=block`), and `clean` and `auto-fixed` must not.
 - Loop guard: after a block, a second Stop with `stop_hook_active: true`
