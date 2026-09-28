@@ -1,0 +1,14 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["shellharden"] = (Builtins.shellharden) {
+    phases {
+      ["verify"] {
+        // shellharden exits 1 when it cannot open an input file, distinct
+        // from exit 2 (quoting changes suggested) and exit 0 (clean).
+        extraArgs = new Listing<String> { "missing-operational.sh" }
+      }
+    }
+  }
+}

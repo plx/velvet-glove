@@ -1,0 +1,8 @@
+{
+  "outcome": "auto-fixed",
+  "files": {
+    "example.1-a.yaml": "auto-fixed",
+    "example.2-b.yaml": "auto-fixed"
+  },
+  "note": "regression test: a batched `yq -iP a.yaml b.yaml` writes both documents into a.yaml and leaves b.yaml untouched, so the immediate phase must invoke yq once per file"
+}

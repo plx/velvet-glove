@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["yamllint"] = (Builtins.yamllint) {
+    phases {
+      ["verify"] {
+        // An invalid config's content (not just a missing/typo'd path)
+        // makes yamllint abort with `sys.exit(-1)` (exit 255 on POSIX),
+        // distinct from exit 1/2 (lint findings under --strict).
+        extraArgs = new Listing<String> { "-c"; "broken-config.yml" }
+      }
+    }
+  }
+}

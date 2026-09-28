@@ -1,0 +1,8 @@
+{
+  "outcome": "manual",
+  "files": {
+    "example.1-clean.sh": "clean",
+    "example.2-issue.sh": "manual"
+  },
+  "note": "batch invocation must attribute the issue to only the affected file"
+}

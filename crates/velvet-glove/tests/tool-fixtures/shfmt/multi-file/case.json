@@ -1,0 +1,8 @@
+{
+  "outcome": "auto-fixed",
+  "files": {
+    "example.1-clean.sh": "clean",
+    "example.2-unformatted.sh": "auto-fixed"
+  },
+  "note": "each file must be rewritten to itself, not mixed across a batched shfmt invocation"
+}
