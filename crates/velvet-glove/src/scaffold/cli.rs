@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[command(
     name = "velvet-glove",
     about = "Formatter and linter hooks for coding agents",
-    after_help = "Setup: run `velvet-glove init` in a project, then `velvet-glove doctor`."
+    after_help = "Setup: run `velvet-glove init` in a project, then `velvet-glove doctor` and `velvet-glove check`."
 )]
 pub struct Cli {
     /// Coding-agent harness that emitted this native hook event. Required
@@ -16,8 +16,9 @@ pub struct Cli {
     pub harness: Option<Harness>,
 
     /// Explicit Pkl policy. When omitted, Velvet Glove uses layered
-    /// user/project/local discovery rooted at the hook event's workspace.
-    #[arg(long, value_name = "PATH")]
+    /// user/project/local discovery rooted at the hook event's workspace
+    /// (or, for setup commands, at --dir).
+    #[arg(long, value_name = "PATH", global = true)]
     pub config: Option<PathBuf>,
 
 
@@ -51,11 +52,13 @@ impl Cli {
             if self.harness.is_some() {
                 return conflict("--harness is only valid with hook commands");
             }
-            let accepts_policy = matches!(&self.command, Command::Doctor(_));
-            if !accepts_policy && (self.config.is_some() || self.state_dir.is_some()) {
-                return conflict(
-                    "--config and --state-dir are only valid with hook commands and doctor",
-                );
+            let is_doctor = matches!(&self.command, Command::Doctor(_));
+            let accepts_config = is_doctor || matches!(&self.command, Command::Check(_));
+            if !accepts_config && self.config.is_some() {
+                return conflict("--config is only valid with hook commands, doctor, and check");
+            }
+            if !is_doctor && self.state_dir.is_some() {
+                return conflict("--state-dir is only valid with hook commands and doctor");
             }
             return Ok(self);
         }
@@ -109,6 +112,11 @@ pub enum Command {
     Doctor(DirArgs),
     /// Detect fitting builtin tools and write .velvet-glove/post-tool-use.pkl.
     Init(InitArgs),
+    /// Run the Stop-time checks and fixes on files now, outside any hook.
+    ///
+    /// Exits 0 when everything is clean or was auto-fixed, 1 when manual
+    /// fixes remain, and 2 when a tool could not run or the policy is broken.
+    Check(CheckArgs),
 }
 
 impl Command {
@@ -153,4 +161,18 @@ pub struct InitArgs {
     /// Overwrite an existing .velvet-glove/post-tool-use.pkl.
     #[arg(long)]
     pub force: bool,
+}
+
+/// Arguments for `check`.
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    #[command(flatten)]
+    pub dir: DirArgs,
+    /// Print machine-readable JSON instead of a summary.
+    #[arg(long)]
+    pub json: bool,
+    /// Files or directories to check, relative to DIR. Default: the Git
+    /// work tree's modified and untracked files under DIR.
+    #[arg(value_name = "FILES")]
+    pub files: Vec<PathBuf>,
 }

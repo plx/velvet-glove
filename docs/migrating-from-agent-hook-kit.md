@@ -13,8 +13,8 @@ Git dependencies until HookKit is published.
 | `turn-completion-agent-hook` | `velvet-glove turn-completion` |
 | `session-start-state-agent-hook` | `velvet-glove session-start-state` |
 
-Put global options such as `--harness`, `--config`, and `--state-dir` before
-the subcommand. The former executables are not installed by Velvet Glove;
+Put `--harness` and `--state-dir` before the subcommand (`--config` may go on
+either side). The former executables are not installed by Velvet Glove;
 update registrations to use the unified executable and matching subcommand.
 
 ## Configuration namespace

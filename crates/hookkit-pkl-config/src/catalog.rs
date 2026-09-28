@@ -47,10 +47,13 @@ pub fn validate_builtin_catalog(
 }
 
 /// Validate the tools a resolved configuration will run: every `run` entry
-/// must name a defined tool, and each enabled tool must pass the builtin
-/// catalog's structural rules. The one exception is a tool whose phases only
-/// mutate (an hk-style formatter): immediate mode runs it as written, so it
-/// is accepted without an `unverifiedRemedyFallback`.
+/// must name a defined tool, every glob (tool files and `settings.exclude`)
+/// must compile, and each enabled tool must pass the builtin catalog's
+/// structural rules. Two exceptions apply to user tools: one whose phases
+/// only mutate (an hk-style formatter) is accepted without an
+/// `unverifiedRemedyFallback`, since immediate mode runs it as written and
+/// the deferred runner reports its fixes as unverified auto-fixes; and one
+/// whose workflows are all disabled is accepted as immediate-only.
 pub fn validate_run_config(config: &RunnerConfig) -> Result<(), CatalogValidationError> {
     let mut errors = Vec::new();
     let mut selected = BTreeMap::new();
@@ -64,6 +67,7 @@ pub fn validate_run_config(config: &RunnerConfig) -> Result<(), CatalogValidatio
             )),
         }
     }
+    validate_globs("settings.exclude", &config.settings.exclude, &mut errors);
     validate_specs(&selected, Strictness::User, &mut errors);
     if errors.is_empty() {
         Ok(())
@@ -99,6 +103,16 @@ fn validate_specs(
         if spec.executable.trim().is_empty() {
             errors.push(format!("{prefix}: executable is empty"));
         }
+        validate_globs(
+            &format!("{prefix}: files.include"),
+            &spec.files.include,
+            errors,
+        );
+        validate_globs(
+            &format!("{prefix}: files.exclude"),
+            &spec.files.exclude,
+            errors,
+        );
         validate_order(
             &prefix,
             "workflowOrder",
@@ -117,7 +131,20 @@ fn validate_specs(
         if spec.workflows.is_empty() {
             validate_compatibility_tool(&prefix, spec, strictness, errors);
         } else {
-            validate_explicit_tool(&prefix, spec, errors);
+            validate_explicit_tool(&prefix, spec, strictness, errors);
+        }
+    }
+}
+
+/// Reject patterns the runner's glob matcher cannot compile, so a typo fails
+/// loudly at load time (and in `doctor`) instead of on every edit.
+fn validate_globs(label: &str, patterns: &[String], errors: &mut Vec<String>) {
+    for pattern in patterns {
+        if let Err(error) = globset::Glob::new(pattern) {
+            errors.push(format!(
+                "{label} has an invalid glob `{pattern}`: {}",
+                error.kind()
+            ));
         }
     }
 }
@@ -141,7 +168,12 @@ fn validate_order<'a>(
     }
 }
 
-fn validate_explicit_tool(prefix: &str, spec: &ToolSpec, errors: &mut Vec<String>) {
+fn validate_explicit_tool(
+    prefix: &str,
+    spec: &ToolSpec,
+    strictness: Strictness,
+    errors: &mut Vec<String>,
+) {
     if spec.unverified_remedy_fallback.is_some() {
         errors.push(format!(
             "{prefix}: unverifiedRemedyFallback is stale because explicit workflows exist"
@@ -163,7 +195,10 @@ fn validate_explicit_tool(prefix: &str, spec: &ToolSpec, errors: &mut Vec<String
             validate_command(&format!("{label} remedy"), remedy, false, errors);
         }
     }
-    if enabled == 0 {
+    // A user tool with every workflow disabled is immediate-only: Stop skips
+    // it, and immediate mode still runs its phases. Built-ins must support
+    // Stop.
+    if enabled == 0 && strictness == Strictness::Builtin {
         errors.push(format!("{prefix}: no deferred workflow is enabled"));
     }
 }

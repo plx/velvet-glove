@@ -37,21 +37,34 @@ add a dedicated benchmark/measurement lane before publishing performance claims.
 ## Immediate PostToolUse
 
 `velvet-glove post-tool-immediate` observes the call's exact file candidates
-first and returns `{}` without evaluating Pkl when there are none. Otherwise
-it runs each `run` tool's phases over the matching files, one tool after
-another; a tool's independent jobs run in parallel (`jobs = 0` is available
-parallelism, capped at 8). Claude and Codex output uses the native channels:
-agent text in `hookSpecificOutput.additionalContext`, user notices in the
-user-only `systemMessage`, and never exit-0 stderr. Auto-fixes collapse into
-one line for both audiences; full command output goes only to diagnostics
-files, which default to `$TMPDIR/velvet-glove/state/post-tool-immediate`.
-Policy load errors become a user notice rather than a hook failure.
+first, drops Git-ignored ones (the same `vcs.rs` helper Stop uses), and
+returns `{}` without evaluating Pkl when none remain. Candidates outside the
+loaded policy's project root are dropped too. Otherwise it runs each `run`
+tool's phases over the matching files, one tool after another; a tool's
+independent jobs run in parallel (`jobs = 0` is available parallelism, capped
+at 8). Claude and Codex output uses the native channels: agent text in
+`hookSpecificOutput.additionalContext`, user notices in the user-only
+`systemMessage`, and never exit-0 stderr. Auto-fixes collapse into one line
+for both audiences. Remaining issues are attributed with Stop's
+`deferred/attribution.rs` and reach the agent as the named files plus a
+bounded excerpt (`excerpt.rs`) of the output of the phases that decided them,
+dividing the same `deferredReporting.excerptMax*` budget as Stop the same
+way; issues naming only unchanged files become a user note. Full command
+output goes only to diagnostics files, which default to
+`$TMPDIR/velvet-glove/state/post-tool-immediate`. Policy load errors, message
+templates that fail to render, and unwritable diagnostics directories become
+user notices rather than hook failures.
 
 Both hooks share command plumbing: bare program names resolve through
-`settings.localBinDirs` before `PATH`, each tool's `env` is applied, and every
-command has a wall-clock timeout (`settings.commandTimeoutSeconds`, per-tool
-`timeoutSeconds`). A timed-out command is killed with its process group and
-reported as an operational failure.
+`settings.localBinDirs` (searched from each file's directory and the job's
+workspace up to the project root) before `PATH`, each tool's `env` is applied,
+and every command has a wall-clock timeout (`settings.commandTimeoutSeconds`,
+per-tool `timeoutSeconds`). A timed-out command is killed with its process
+group and reported as an operational failure; after a command exits, output
+is collected only until its pipes close, the deadline, or a short grace
+period, so a lingering descendant cannot hold the hook. Tool runs on one
+project (immediate, Stop, and `check`, across sessions) are serialized by an
+advisory lock keyed by the project root.
 
 ## Turn-completion batching
 
@@ -63,22 +76,30 @@ PostToolUse observer delegates structured, patch, and shell analysis to
 The immediate runner uses the same observation path for exact file candidates
 instead of maintaining a second open-payload walker. Before taking the entity view, it
 reconciles workspace mtimes from the prior durable cursor, using current-session
-start metadata only as the first lower bound. The aligned lifecycle is Claude,
+start metadata only as the first lower bound; the scan never enters
+`fileActivity.ignoredDirectoryNames` (VCS metadata, dependency trees, build
+output, and tool caches such as `.ruff_cache`). The aligned lifecycle is Claude,
 Codex, or Antigravity Stop. Antigravity lacks a precise session-start
 producer but its PostToolUse tool-call evidence can feed the tracker directly.
 
 One runner-family advisory lock serializes stop attempts for a native session.
 The consumer seals NDJSON generations and obtains their cached set projection
 before executing tools. Candidates that Git ignores (one `git check-ignore`
-call; a no-op outside a work tree) are dropped as not applicable.
+call per owning repository, so submodules and nested repositories answer for
+their own files; a no-op outside a work tree) are dropped as not applicable.
 Stop-time `workflows` are distinct from the immediate
 runner's legacy `phases`: all non-mutating initial checks run first, then one
 ordered remedy pass. Before a workflow whose check was clean decides against a
 remedy, it reruns that check if an earlier remedy wrote into its scope (for
 example, a Ruff lint fix that leaves a file unformatted). Snapshot-discovered
 writes then invalidate intersecting target-file or workspace checks for one
-authoritative final sweep. Identical check commands within one stage (the
-compatibility translation pairs several mutators with one verifier) run once.
+authoritative final sweep. Glob- and workspace-wide remedies are snapshotted
+from the outermost directory holding the tool's workspace indicator, so a
+`cargo clippy --fix --workspace` write in a sibling crate is seen and
+reported as an auto-fix rather than made silently. A remedy that fails operationally is recorded as such, but
+the final check that follows still decides its files. Identical check
+commands within one stage (the compatibility translation pairs several
+mutators with one verifier) run once.
 With `failFast`, an operational failure skips only the same tool's later
 remedies. Check stages retain bounded job parallelism and deterministic result
 ordering. The complex deferred policy is split across `deferred/model.rs`,
@@ -93,7 +114,11 @@ compatibility translation has a read-only final phase before it can ship as
 enabled. The generated
 [`builtin-deferred-workflow-audit.md`](builtin-deferred-workflow-audit.md)
 records every command, inferred or explicit scope, invocation granularity, and
-known limitation. Immediate PostToolUse continues to use legacy `phases`.
+known limitation. Immediate PostToolUse continues to use legacy `phases`. A
+user-defined tool whose phases only mutate (a formatter with no verify phase)
+translates to check-less workflows: the remedy runs, files it changed are
+reported as auto-fixed with `unverified` set on the report, and it never
+blocks; only a failing remedy is operational.
 
 Every executed deferred command writes its own artifact under a deterministic
 tool/workflow/job/phase path in a unique run bundle. Artifact metadata includes
@@ -104,9 +129,12 @@ while a file covered by several tools retains all distinct links.
 
 A file is auto-fixed only when a remedy changed its bytes and its final check
 passed. A failing check's output decides attribution: issues belong to the
-candidate (or remedy-changed) files it names; output naming only other
-existing files is out of scope and does not block; output naming no file is
-conservatively attributed to every candidate.
+candidate (or remedy-changed) files it names, found by searching for each
+candidate's absolute and relative spellings (so paths with spaces work), with
+other paths resolved against every directory from the command's workspace up
+to the project root; output naming only other existing files is out of scope
+and does not block; output naming no file is conservatively attributed to
+every candidate.
 
 The runner commits `summary.json` only after every command artifact is durable
 and before changing pending state. The summary contains run identity, counts,
@@ -127,10 +155,12 @@ Only manual issues block by default. Operational problems notify the user
 "harness-block"` opt into blocking), and strict coverage policy blocks on gaps.
 A loop guard in the family's session scope records the fingerprint of the
 issues behind the last block (tool, workflow, blamed files, normalized final
-check output). When the harness reports `stop_hook_active` and the fingerprint
-is unchanged, or `maxConsecutiveBlocks` is reached, completion is allowed with
-a user note instead of another block. Antigravity has no such flag, so a Stop
-right after a block is presumed to continue the chain.
+check output with digit runs masked on lines that name no blamed file, so
+timings and seeds do not count). When the harness reports `stop_hook_active`
+and the fingerprint is unchanged, or `maxConsecutiveBlocks` is reached,
+completion is allowed with a user note instead of another block. Antigravity
+has no such flag, so a Stop right after a block is presumed to continue the
+chain, and any allowed Stop (including one with nothing pending) ends it.
 
 Coverage gaps use the Pkl `fileActivity.coverageGapPolicy`. The default
 `best-effort` policy retains and records incomplete targets in the summary
@@ -158,3 +188,14 @@ single `reason` fallback and cannot preserve audience separation. A blocked
 completion never has an empty `reason`. The summary records emitted, omitted,
 empty, or unrepresentable status for each audience. Allowed completion stays
 allowed under both best-effort modes.
+
+## Direct checks
+
+`velvet-glove check` calls `hookkit_tool_runner::run_check`, which reuses the
+deferred planner (`build_deferred_plan`), executor, artifact writer, and the
+reporter's excerpt and problem summaries on an explicit candidate list. It
+skips everything hook-specific: no native input, session state, file-activity
+window, loop guard, or lowering. Logs and a `summary.json` go to a fresh
+`$TMPDIR/velvet-glove/check/<millis>-<pid>` directory. The command itself
+only chooses the files (explicit, expanded directories, or `git status`) and
+renders the report as text or JSON.

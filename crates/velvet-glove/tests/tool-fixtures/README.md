@@ -92,18 +92,22 @@ files through `post-tool`, then `turn-completion` (Stop). The case gets its own
   does not blame it, and it does not block;
 - Stop output is checked only for its block decision: `manual` must block
   (`decision=block`), and `clean` and `auto-fixed` must not.
+- Loop guard: after a block, a second Stop with `stop_hook_active: true`
+  and no edits in between (the agent's unsuccessful retry) must not block
+  again.
 
 The generated config disables the filesystem-mtime fallback, so the only
 candidates are the files the tool call cited.
 
 **`immediate-claude` and `immediate-codex`** (secondary) run
 `post-tool-immediate`. They check that the hook exits 0 and that stdout has
-the right shape: `clean` must produce exactly `{}`, `auto-fixed` and `manual`
-must produce something other than `{}`, and `operational` is not checked.
-The immediate hook has no out-of-scope rule: it still reports an issue that
-exists only in an untouched file. A case that depends on that rule, such as
-`cargo-clippy/untouched-file-issue`, sets `"immediate": false` and explains
-why in its `note`.
+the right shape: `clean` must say nothing to the agent (no
+`hookSpecificOutput`, `decision` or `reason`; a user-only `systemMessage`,
+such as the note about issues only in untouched files, is allowed),
+`auto-fixed` and `manual` must produce something other than `{}`, and
+`operational` is not checked. Both runners treat issues that exist only in
+files the call did not change as out of scope, so
+`cargo-clippy/untouched-file-issue` runs on every lane.
 
 **Post-state (all lanes).** When `expected/` exists, each file in it must
 match the workspace file after the run. Without `expected/`, every input must
@@ -178,9 +182,11 @@ are not a coverage claim for the enabled catalog.
 
 The `Real-tool fixtures` workflow runs weekly on Mondays at 07:23 UTC, and you
 can also start it manually from GitHub Actions. PRs that change the lane's
-workflow, installation or reporting configuration, run script, or harness also
-run it, so infrastructure changes are verified before merge. Other PRs run
-only the ordinary hermetic lane.
+workflow, installation or reporting configuration, run script, harness,
+fixture cases (`tests/tool-fixtures/**`), or builtin tool specs
+(`crates/hookkit-pkl-config/src/builtins/tools/**`) also run it, so those
+changes are verified before merge; it only runs the CI-selected tools, so
+this stays cheap. Other PRs run only the ordinary hermetic lane.
 
 The Ubuntu and macOS selection is `cargo-fmt`, `cargo-clippy`, `actionlint`,
 `jq` and `go-fmt`. All five are required, with no platform exceptions. Every

@@ -1,8 +1,8 @@
 use super::FileStatus;
 use super::execution::{DeferredExecution, ScheduledWorkflow, execute_deferred_workflows};
 use crate::{
-    CheckScope, CommandArgTemplate, ExitCodePolicy, PhaseMode, ToolJob, ToolPhase, ToolSpec,
-    UnexpectedExitPolicy, WriteBehavior,
+    CheckScope, CommandArgTemplate, ExitCodePolicy, FileSelection, PhaseMode, ToolJob, ToolPhase,
+    ToolSpec, UnexpectedExitPolicy, WriteBehavior,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,6 +126,11 @@ case "$action" in
     ;;
   crash)
     exit 2
+    ;;
+  fix-members)
+    for file in "$1"/../*/*.rs; do
+      sed 's/DIRTY/CLEAN/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    done
     ;;
 esac
 exit 0
@@ -719,19 +724,43 @@ fn failed_remedy_keeps_changed_files_and_operational_problem() {
 }
 
 #[test]
-fn legacy_mutating_only_workflow_is_operationally_unverifiable() {
-    let fixture = Fixture::new("missing-final-check");
-    let file = fixture.file("file.rs", "DIRTY\n");
-    let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("fix"));
+fn formatter_only_workflow_reports_unverified_auto_fixes_and_never_blocks() {
+    let fixture = Fixture::new("formatter-only");
+    let dirty = fixture.file("dirty.rs", "DIRTY\n");
+    let clean = fixture.file("clean.rs", "CLEAN\n");
+    let mut scheduled = scheduled_with_scope(
+        &fixture,
+        0,
+        vec![dirty.clone(), clean.clone()],
+        "check",
+        Some("fix"),
+        CheckScope::TargetFiles,
+        false,
+    );
     scheduled.check = None;
     scheduled.compatibility_translation = true;
     let execution = execute_deferred_workflows(&[scheduled], 1, true);
-    assert!(execution.result.files.is_empty());
-    assert!(execution.result.has_operational_problems());
+    assert!(!execution.result.has_operational_problems());
+    assert!(!execution.result.has_manual_fixes());
+    assert_eq!(only_status(&execution, &dirty), Some(FileStatus::AutoFixed));
+    assert_eq!(only_status(&execution, &clean), Some(FileStatus::Clean));
     let report = execution.result.reports.values().next().expect("report");
-    assert!(report.fix_attempted);
-    assert_eq!(report.changed_files, vec![file]);
+    assert!(report.fix_attempted && report.unverified);
+    assert_eq!(report.changed_files, vec![dirty]);
     assert!(report.final_check.is_none());
+    assert_eq!(fixture.trace_lines(), vec!["fix"], "no check exists to run");
+}
+
+#[test]
+fn failing_formatter_only_remedy_is_still_operational() {
+    let fixture = Fixture::new("formatter-only-failure");
+    let file = fixture.file("file.rs", "DIRTY\n");
+    let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("crash"));
+    scheduled.check = None;
+    scheduled.compatibility_translation = true;
+    let execution = execute_deferred_workflows(&[scheduled], 1, true);
+    assert!(execution.result.has_operational_problems());
+    assert!(execution.result.files.is_empty());
 }
 
 #[test]
@@ -830,4 +859,72 @@ fn parallel_and_serial_jobs_produce_the_same_ordered_result() {
     }
     let parallel = execute_deferred_workflows(&plan, 4, true).result;
     assert_eq!(serial, parallel);
+}
+
+#[test]
+fn a_failed_remedy_leaves_the_final_check_authoritative() {
+    let fixture = Fixture::new("failed-remedy-final-check");
+    let file = fixture.file("broken.rs", "MANUAL\n");
+    let plan = vec![scheduled(&fixture, 0, file.clone(), "check", Some("crash"))];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(
+        only_status(&execution, &file),
+        Some(FileStatus::ManualFixesNeeded),
+        "the final check's issues must still need manual fixes"
+    );
+    assert!(execution.result.has_manual_fixes());
+    let problem = execution
+        .result
+        .operational_problems
+        .values()
+        .next()
+        .expect("remedy failure stays an operational problem");
+    assert!(problem.message.contains("failed with exit code 2"));
+    assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
+}
+
+#[test]
+fn workspace_wide_remedies_report_writes_in_sibling_members() {
+    let fixture = Fixture::new("sibling-members");
+    for member in ["a", "b"] {
+        std::fs::create_dir_all(fixture.root.join(member)).expect("member dir");
+        fixture.file(&format!("{member}/ws.marker"), "");
+    }
+    fixture.file("ws.marker", "");
+    let candidate = fixture.file("a/x.rs", "DIRTY\n");
+    let sibling = fixture.file("b/y.rs", "DIRTY\n");
+    let mut workflow = scheduled(&fixture, 0, candidate.clone(), "check", None);
+    workflow.spec = Arc::new(
+        ToolSpec::new("tool-0", "Tool 0", fixture.executable.to_string_lossy())
+            .with_workspace_indicator("ws.marker")
+            .with_file_selection(FileSelection::include(["**/*.rs"])),
+    );
+    workflow.job.workspace_dir = fixture.root.join("a");
+    let mut remedy = command(
+        &fixture,
+        "remedy",
+        "fix-members",
+        WriteBehavior::MatchingGlobs,
+        true,
+    );
+    remedy.writes = WriteBehavior::MatchingGlobs;
+    workflow.remedy = Some(remedy);
+
+    let execution = execute_deferred_workflows(&[workflow], 1, true);
+
+    assert_eq!(
+        std::fs::read_to_string(&sibling).expect("read sibling"),
+        "CLEAN\n"
+    );
+    assert_eq!(
+        only_status(&execution, &candidate),
+        Some(FileStatus::AutoFixed)
+    );
+    assert_eq!(
+        only_status(&execution, &sibling),
+        Some(FileStatus::AutoFixed),
+        "a write outside the job's own member must be seen and reported"
+    );
 }

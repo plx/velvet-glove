@@ -26,26 +26,31 @@ Hook stdout, stderr, and exit status are protocol outputs. Do not add
 ## Setup commands
 
 ```sh
-velvet-glove tools [--dir DIR] [--json]         # builtin catalog and executable status
-velvet-glove init [--dir DIR] [--print] [--force]   # write .velvet-glove/post-tool-use.pkl
+velvet-glove tools [--dir DIR] [--json]                  # builtin catalog and where each executable resolves
+velvet-glove init [--dir DIR] [--print] [--force]        # write .velvet-glove/post-tool-use.pkl
 velvet-glove [--config PATH] [--state-dir DIR] doctor [--dir DIR]
+velvet-glove [--config PATH] check [--dir DIR] [--json] [FILES...]
 ```
 
-These print for a person at a terminal and do not take `--harness`. See
+These write for a person (or, with `--json`, a script) and do not take
+`--harness`. `check` runs the Stop-time workflows on the named files, or on
+Git's changed and untracked files, outside any hook, and exits 0 (clean or
+auto-fixed), 1 (manual fixes needed), or 2 (a tool could not run, or the
+policy is broken). See
 [the configuration reference](../../docs/configuration.md#generating-and-checking-a-policy)
-for how `init` selects tools and what `doctor` checks.
+for how `init` selects tools, what `doctor` checks, and what `check` prints.
 
 Pkl 0.31.1 or newer is required. Without `--config`, policies are discovered
 from `.velvet-glove/post-tool-use.pkl` and `post-tool-use.local.pkl` around
-the event workspace (legacy `.agent-hook-kit` files are read first, at lower
-precedence). An example policy lives at
-[`config/velvet-glove.pkl`](config/velvet-glove.pkl).
+the event workspace (or `--dir`), after `~/.velvet-glove/post-tool-use.pkl`;
+legacy `.agent-hook-kit` files are read first, at lower precedence. An
+example policy lives at [`config/velvet-glove.pkl`](config/velvet-glove.pkl).
 
 ## Layout
 
 - `src/scaffold/` — CLI parsing, dispatch, and thin adapters to the runners in
   `hookkit-tool-runner`.
-- `src/commands/` — the `tools`, `doctor`, and `init` setup commands.
+- `src/commands/` — the `tools`, `doctor`, `init`, and `check` commands.
 - `src/hooks/aligned/` — no-op portable handlers kept for the aligned
   protocol conformance tests.
 

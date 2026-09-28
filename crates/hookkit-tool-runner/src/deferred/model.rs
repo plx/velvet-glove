@@ -189,6 +189,11 @@ pub struct ToolReport {
     /// blamed when it named no candidate; such issues never block.
     #[serde(default)]
     pub out_of_scope_files: Vec<PathBuf>,
+    /// Whether no check could confirm the remedy: a user tool with only
+    /// mutating phases, whose changed files are auto-fixed on the remedy's
+    /// word alone.
+    #[serde(default)]
+    pub unverified: bool,
     /// Durable artifacts supporting this report.
     pub artifact_ids: Vec<String>,
 }
@@ -529,6 +534,7 @@ mod tests {
             conservative_attribution: false,
             issue_files: issues.iter().map(PathBuf::from).collect(),
             out_of_scope_files: Vec::new(),
+            unverified: false,
             artifact_ids: vec![format!("{id}-artifact")],
         }
     }

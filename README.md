@@ -1,10 +1,16 @@
 # Velvet Glove
 
-Velvet Glove batches linting and formatting work so coding agents can stay
-responsive while they edit. It can also run the same configured workflows
-immediately after an individual tool call. Native hook adapters are provided
-for Claude Code, Codex, and Antigravity through
-[`agent-hook-kit`](https://github.com/plx/agent-hook-kit).
+Velvet Glove runs the formatters and linters you already have installed on
+the files a coding agent edits, fixes what they can fix quietly, and tells
+the agent only about what is left. It hooks into Claude Code and Codex
+(Antigravity is supported without a plugin) and is configured with a small
+[Pkl](https://pkl-lang.org) policy per project. It never installs, pins, or
+wraps your tools.
+
+By default it works in **deferred** mode: edits are recorded as the agent
+works, and the tools run once when the agent tries to stop. If issues remain
+that the tools cannot fix themselves, the agent is asked to fix them before
+it finishes. An **immediate** mode runs the tools after every edit instead.
 
 HookKit is not yet published as a crate. All upstream HookKit dependencies are
 therefore pinned to Git commit
@@ -12,8 +18,7 @@ therefore pinned to Git commit
 
 ## Quickstart: use Velvet Glove in another project
 
-1. **Install the binary and Pkl** (0.31.1 or newer). Velvet Glove runs the
-   formatters and linters you already have; it does not install them.
+1. **Install the binary and Pkl 0.31.1 or newer.**
 
    ```sh
    brew install pkl   # or see https://pkl-lang.org
@@ -26,12 +31,11 @@ therefore pinned to Git commit
    claude plugin marketplace add plx/velvet-glove
    claude plugin install velvet-glove@velvet-glove
    # Codex: `codex plugin marketplace add plx/velvet-glove`,
-   # `codex plugin add velvet-glove@velvet-glove`, then review /hooks.
+   # `codex plugin add velvet-glove@velvet-glove`, then review the hooks in /hooks.
    ```
 
-   By default the plugin records edits quietly and runs the tools once when
-   the agent stops. Export `VELVET_GLOVE_MODE=immediate` before starting the
-   agent to run them after every edit instead. To register hooks by hand
+   Export `VELVET_GLOVE_MODE=immediate` in the shell you start the agent from
+   to switch the plugin to immediate mode. To register hooks by hand instead
    (Claude Code shown; use `--harness codex` for Codex), add to
    `.claude/settings.json`:
 
@@ -47,183 +51,155 @@ therefore pinned to Git commit
 
    For immediate mode, register only `PostToolUse` with
    `velvet-glove --harness claude post-tool-immediate`. Use one mode, not both.
+   (Known issue: the pinned HookKit makes a hand-registered hook exit 1
+   silently when another plugin leaks a lone `CLAUDE_PLUGIN_ROOT` or
+   `CLAUDE_PLUGIN_DATA`; prefix the commands with
+   `env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_PLUGIN_DATA` if that happens.)
 
-3. **Generate and check the project policy.** Nothing runs until a policy
+3. **Write, check, and try the project policy.** Nothing runs until a policy
    lists tools.
 
    ```sh
    cd your-project
-   velvet-glove init     # detects fitting tools, writes .velvet-glove/post-tool-use.pkl
-   velvet-glove doctor   # config chain, run list, executables, Pkl version
+   velvet-glove init     # detect fitting tools, write .velvet-glove/post-tool-use.pkl
+   velvet-glove doctor   # Pkl version, config chain, run list, where each tool resolves
+   velvet-glove check    # run the Stop-time checks on your changed files now
    ```
 
-   `init` picks a builtin when its files exist in the project, its executable
-   is on `PATH`, and the project's config files point at it (or it is the
-   standard choice, such as Ruff for Python). The file explains each choice
-   and lists alternatives; `velvet-glove tools` shows the whole catalog.
-   Commit the policy, and keep personal tweaks in
-   `.velvet-glove/post-tool-use.local.pkl` (add it to `.gitignore`).
+   `init` enables a builtin when the project has files it handles, its
+   executable resolves (in `node_modules/.bin`, `.venv/bin`, or on `PATH`),
+   and the project's config files point at it, or it is the standard choice
+   (such as Ruff for Python). Commit the policy; keep personal tweaks in
+   `.velvet-glove/post-tool-use.local.pkl` and add that to `.gitignore`.
+   `velvet-glove check [FILES...]` applies fixes, prints a verdict per file,
+   and exits 0 (clean or auto-fixed), 1 (manual fixes needed), or 2 (a tool
+   could not run, or the policy is broken).
 
-4. **What you will see.** Clean edits produce no output. When the tools fix
-   files automatically, the agent is told which files changed so it re-reads
-   them. When issues need a manual fix, the agent is asked to fix them before
-   it finishes, with pointers to the full tool output. Complete logs are kept
-   on disk rather than in the agent's context.
+## What the agent and the user see
 
-## Install
+At Stop, in the default deferred mode:
 
-Install Pkl 0.31.1 or newer, then build locally or install the public Git source:
-
-```sh
-cargo install --locked --git https://github.com/plx/velvet-glove velvet-glove
-```
-
-For development, `cargo build --release -p velvet-glove` writes the executable
-to `target/release/velvet-glove`.
-
-## Agent plugins
-
-This repository is an experimental plugin marketplace for both Claude Code and
-Codex. Both marketplace entries install the shared `velvet-glove` plugin, which
-registers the deferred SessionStart, PostToolUse, and Stop workflow and includes
-the `working-with-velvet-glove` skill. With `VELVET_GLOVE_MODE=immediate` in
-the agent's environment, PostToolUse runs `post-tool-immediate` and the
-SessionStart and Stop hooks do nothing. The launcher chooses Codex when both
-`PLUGIN_ROOT` and `PLUGIN_DATA` are set and Claude Code otherwise;
-`VELVET_GLOVE_HARNESS=claude|codex` overrides that.
-
-The plugin does not bundle prebuilt executables yet. Install `velvet-glove` and
-Pkl 0.31.1 or newer separately; if `velvet-glove` is not on `PATH`, its launcher warns at
-session start and otherwise exits as a protocol-safe no-op.
-
-```sh
-# Claude Code
-claude plugin marketplace add plx/velvet-glove
-claude plugin install velvet-glove@velvet-glove
-
-# Codex
-codex plugin marketplace add plx/velvet-glove
-codex plugin add velvet-glove@velvet-glove
-```
-
-Codex requires newly installed or changed command hooks to be reviewed before
-they run. Open `/hooks` in the Codex CLI after installing the plugin.
-
-## Commands
-
-Every hook invocation explicitly selects its harness and event:
-
-| Command | Native event | Purpose |
+| Result | Agent | User |
 | --- | --- | --- |
-| `post-tool-immediate` | PostToolUse | Run applicable checks and fixes immediately. |
-| `post-tool` | PostToolUse | Quietly record file activity for deferred work. |
-| `turn-completion` | Stop/turn completion | Reconcile activity, run batched workflows, and report or block. |
-| `session-start-state` | SessionStart | Record an exact Claude/Codex session lower bound. |
+| Clean | nothing | nothing |
+| Auto-fixed only | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` | the same line |
+| Manual fixes needed | Stop is blocked; the reason lists each tool's files with a bounded, ANSI-free, project-relative excerpt of its final check output | file count, files, and the run's log directory |
+| Tool missing, crashed, or timed out; broken policy | nothing | one line with the tool, reason, and install hint or log path |
+| Issues only in files not changed this turn | nothing | a one-line "not blocking" note |
 
-Setup commands take no `--harness`: `velvet-glove tools [--json]` lists the
-builtin catalog, `velvet-glove init` writes a starter policy, and
-`velvet-glove doctor` explains what the hooks would do in a directory.
+Stop never blocks twice in a row on the same issues: when the agent's retry
+leaves them unchanged (or after three consecutive blocks), the user gets a
+note instead and the files stay queued for the next turn. Codex has no
+agent channel on an allowed Stop, so there the auto-fix line reaches only
+the user.
 
-```sh
-cargo build --release -p velvet-glove --bin velvet-glove
+In immediate mode the same contract applies per tool call, except that
+nothing blocks: remaining issues reach the agent as context
+(`velvet-glove: Ruff reports issues in src/a.py:` plus the excerpt), and the
+user sees a line pointing at the full diagnostics.
 
-velvet-glove --harness claude post-tool-immediate
-velvet-glove --harness codex post-tool
-velvet-glove --harness codex turn-completion
-velvet-glove --harness claude session-start-state
+Full tool output never goes into the agent's context. It is kept on disk
+under `$TMPDIR/velvet-glove/`: `state/…/runs/<run>/` for each Stop (every
+command log plus `summary.json`; the newest 20 runs per session are kept),
+`state/post-tool-immediate/` for immediate mode, and `check/<run>/` for
+`velvet-glove check`.
+
+## Recipes
+
+Override a builtin by amending it in `.velvet-glove/post-tool-use.pkl`.
+
+Keep Ruff from flagging (and deleting) unused imports while the agent is
+mid-edit, without changing the project's own Ruff configuration. The same
+arguments go to every Ruff lint command so the check and the fix agree:
+
+```pkl
+local hookOnly = new Listing<String> { "--ignore"; "F401" }
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    workflows { ["lint"] { extraArgs = hookOnly } }   // deferred (Stop)
+    phases {                                          // immediate
+      ["fix"] { extraArgs = hookOnly }
+      ["verify"] { extraArgs = hookOnly }
+    }
+  }
+}
 ```
 
-Antigravity does not expose a precise SessionStart hook. Its first observed
-PostToolUse event supplies the best available lower bound instead.
+Allow unused imports in Clippy's hook runs (its commands end in `--`, so the
+extra arguments are lint flags for both the fix and the check):
 
-## Configuration
+```pkl
+tools {
+  ["cargoClippy"] = (Builtins.cargoClippy) { extraArgs { "-A"; "unused_imports" } }
+}
+```
 
-Velvet Glove requires Pkl 0.31.1 or newer. Pass `--config PATH` to use one policy file
-and bypass discovery. Without it, configuration is merged in this order:
+More recipes (excludes, timeouts, environment variables, custom tools) are
+in the [configuration reference](docs/configuration.md#recipes).
 
-1. legacy `~/.agent-hook-kit/post-tool-use.pkl`, then
-   `~/.velvet-glove/post-tool-use.pkl`;
-2. legacy project files from root to leaf, then canonical
-   `<ancestor>/.velvet-glove/post-tool-use.pkl` files from root to leaf;
-3. legacy local files from root to leaf, then canonical
-   `<ancestor>/.velvet-glove/post-tool-use.local.pkl` files from root to leaf.
+## Tool support
 
-Within each layer, canonical `.velvet-glove` files win over their legacy
-peers; local files still override project files. New projects should only
-write `.velvet-glove`; the legacy read path exists to ease migration. The
-generated example policy is
-[`crates/velvet-glove/config/velvet-glove.pkl`](crates/velvet-glove/config/velvet-glove.pkl).
+The embedded catalog covers well over a hundred formatters and linters (Ruff,
+Prettier, ESLint, Biome, cargo fmt, Clippy, gofmt, ShellCheck, and more);
+`velvet-glove tools` lists them. Builtins are validated against real tools
+one at a time: see [tool support status](docs/tool-support.md) for the
+status of each builtin, and the generated
+[built-in workflow audit](docs/builtin-deferred-workflow-audit.md) for the
+exact commands.
 
-The embedded catalog contains immediate phases and deferred workflows for a
-broad set of formatters and linters, but nothing runs until a policy lists
-tools in `run`. Policies can add hook-only arguments, environment variables,
-and timeouts per tool; project-local `node_modules/.bin` and `.venv/bin`
-executables are preferred over `PATH`. See the generated
-[built-in workflow audit](docs/builtin-deferred-workflow-audit.md) and the
-[configuration reference](docs/configuration.md).
+## Reference
 
-## Deferred hook suite
+| Command | Purpose |
+| --- | --- |
+| `velvet-glove --harness H post-tool` | PostToolUse: quietly record file activity (deferred). |
+| `velvet-glove --harness H turn-completion` | Stop: run the deferred workflows, then report or block. |
+| `velvet-glove --harness H session-start-state` | SessionStart: record the session start (Claude Code, Codex). |
+| `velvet-glove --harness H post-tool-immediate` | PostToolUse: run the tools on this call's files now. |
+| `velvet-glove init [--print] [--force]` | Write a starter policy for the project. |
+| `velvet-glove doctor` | Explain the setup and fail on hard problems. |
+| `velvet-glove check [--json] [FILES...]` | Run the deferred workflows now, outside any hook. |
+| `velvet-glove tools [--json]` | List the builtin catalog. |
 
-The three deferred commands must share the same state root. The default is
-`$TMPDIR/velvet-glove/state`; use `--state-dir PATH` on every command to
-override it.
+`H` is `claude`, `codex`, or `antigravity`. Setup commands take `--dir DIR`;
+`--config PATH` selects one policy file instead of discovery for
+`turn-completion`, `post-tool-immediate`, `doctor`, and `check`. The
+deferred commands share a state root,
+`$TMPDIR/velvet-glove/state` by default (`--state-dir` overrides it on every
+one). Antigravity has no SessionStart hook; its first PostToolUse sets the
+session's lower bound.
 
-| Purpose | Claude Code | Codex | Antigravity |
-| --- | --- | --- | --- |
-| Session lower bound | `session-start-state` | `session-start-state` | unavailable |
-| Activity producer | `post-tool` | `post-tool` | `post-tool` |
-| Deferred consumer | `turn-completion` | `turn-completion` | `turn-completion` |
-
-At Stop, clean runs are silent and auto-fixes produce one terse line naming the
-files and tools. Only issues that need manual fixes block, and the agent then
-sees a bounded excerpt of each failing check instead of log paths. Missing or
-crashing tools and configuration errors are reported to the user without
-blocking.
-
-The consumer commits command artifacts and `summary.json` before changing the
-pending window. Clean and auto-fixed work is acknowledged; manual issues,
-operational failures, and unresolved coverage gaps are retained for retry.
-See [the architecture notes](docs/architecture.md) for the transaction and
-native-lowering details. Existing HookKit-example users should also read the
+Without `--config`, policies merge in this order, later winning:
+`~/.velvet-glove/post-tool-use.pkl`, then every
+`.velvet-glove/post-tool-use.pkl` from the filesystem root down to the
+workspace, then the `.local.pkl` files in the same order (legacy
+`.agent-hook-kit` files are still read, at lower precedence). See the
+[configuration reference](docs/configuration.md) for the schema, settings,
+and message templates, and the [architecture notes](docs/architecture.md)
+for how the runners work. Users of the HookKit example should read the
 [migration guide](docs/migrating-from-agent-hook-kit.md).
 
-## Workspace
+## Development
 
-- `crates/velvet-glove` owns the public executable and unified CLI.
-- `crates/hookkit-tool-runner` contains the migrated execution engine behind
-  the public wrapper.
-- `crates/hookkit-pkl-config` embeds the Pkl schema and built-in tool catalog.
+- `crates/velvet-glove`: the executable, CLI, and setup commands.
+- `crates/hookkit-tool-runner`: the immediate and deferred runners.
+- `crates/hookkit-pkl-config`: the Pkl schema, loader, and builtin catalog.
 
-The source tree was bootstrapped from HookKit's Copier template. Generated
-scaffold files remain recorded in `.copier-answers.yml`; the migrated product
-crates and policy are maintained here.
-
-## Validate
+The other HookKit crates are not published yet and are pinned to Git commit
+`83c49d46970602e8fb40a8afaeea521dfb7e9b61`.
 
 ```sh
-# Marketplace, plugin, skill, hook, and launcher checks. Requires the Claude
-# Code and Codex CLIs.
-just validate-plugins
-
-# Complete local pre-PR check, including the plugin checks above.
-just check
-
-cargo fmt --all -- --check
-cargo +1.85.0 check --locked --workspace --all-targets
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+just check    # full pre-PR check: plugins, fmt, clippy, tests, MSRV, docs, licenses
 cargo test --locked --workspace --all-targets
-
-# Optional real-tool compatibility lane; requires controlled tool versions.
-cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
+# Real-tool fixture lane; runs the tools on your PATH:
+VELVET_GLOVE_FIXTURE_TOOLS=ruff,jq cargo test -p velvet-glove --test tool_fixtures \
+  run_all_tool_fixtures -- --ignored --exact --nocapture
 ```
 
-The weekly/manual [real-tool CI lane](.github/workflows/real-tool-fixtures.yml)
-tests the five v2 reference tools on Ubuntu and macOS. It runs each fixture
-case through the deferred plugin flow and the immediate hook, and checks
-semantic outcomes and file post-state rather than output transcripts. See the
-[fixture README](crates/velvet-glove/tests/tool-fixtures/README.md#scheduled-real-tool-ci)
-for its scope, local reproduction, reports, and how to add tools.
-
-Run `scripts/regen-licenses.sh` after dependency changes. The generated
-[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) is checked in alongside
-the dual [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE) licenses.
+The [real-tool CI lane](.github/workflows/real-tool-fixtures.yml) runs the
+fixture cases for the reference tools weekly and on PRs that touch fixtures
+or builtin specs; see the
+[fixture README](crates/velvet-glove/tests/tool-fixtures/README.md). Run
+`scripts/regen-licenses.sh` after dependency changes. Velvet Glove is dual
+licensed under [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE); see
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

@@ -67,13 +67,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
 
-  messages = new Config.Messages {
-    issuesAgent =
-      "cargo clippy reports issues; inspect diagnostics at {{ diagnostics_path }}."
-    issuesChangedAgent =
-      "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
-  }
-
   detect = new Config.Detect {
     indicators = new Listing<String> { "**/Cargo.toml" }
     role = "rust-lint"

@@ -21,7 +21,8 @@ class Settings {
   /// Global file exclusions applied before per-tool selection. Patterns are
   /// matched against project-relative paths and APPEND to the inherited list,
   /// which starts from the defaults (`**/.git/**`, `**/node_modules/**`,
-  /// `**/.venv/**`, `**/__pycache__/**`, `**/target/**`). Set
+  /// `**/.venv/**`, `**/__pycache__/**`, `**/target/**`, and tool caches such
+  /// as `**/.ruff_cache/**`; see docs/configuration.md). Set
   /// `merge.resetExclude = true` to replace the list instead.
   exclude: Listing<String>?
 
@@ -78,9 +79,10 @@ class DeferredReporting {
   masterUser: String?
   masterAgent: String?
   renderEmptyBuckets: Boolean?
-  /// Block Stop on tool crashes and configuration errors (default false:
-  /// notify the user only). Missing executables follow
-  /// settings.missingToolPolicy instead.
+  /// Block Stop on tool crashes, timeouts, and reporting or tool-plan errors
+  /// in a policy that loaded (default false: notify the user only). A policy
+  /// that fails to load never blocks: this setting cannot be read from it.
+  /// Missing executables follow settings.missingToolPolicy instead.
   blockOnOperationalErrors: Boolean?
   /// Allow at most this many consecutive blocks while the harness reports an
   /// active stop hook (default 3); 0 disables the cap.
@@ -111,6 +113,9 @@ class FileActivity {
   /// stop solely for coverage. Strict also asks the harness to continue.
   coverageGapPolicy: "best-effort" | "strict" = "best-effort"
 
+  /// Directory basenames pruned from scans: VCS metadata, dependency trees,
+  /// build output, and tool caches (mirrors the Rust defaults; see
+  /// docs/configuration.md). Setting it replaces the whole list.
   ignoredDirectoryNames: Listing<String> = new Listing<String> {
     ".context"
     ".git"
@@ -118,6 +123,17 @@ class FileActivity {
     ".svn"
     "node_modules"
     "target"
+    ".venv"
+    "__pycache__"
+    ".ruff_cache"
+    ".mypy_cache"
+    ".pytest_cache"
+    ".tox"
+    ".nox"
+    ".gradle"
+    ".build"
+    ".next"
+    ".turbo"
   }
 }
 
@@ -170,13 +186,18 @@ class Diagnostics {
   directory: String?
 }
 
+/// Immediate-mode (post-tool-immediate) agent templates. Besides `tool`,
+/// `changed_files`, `issue_files`, and the `diagnostics_*` paths, the issues
+/// templates receive `excerpt`: a bounded, ANSI-free, project-relative excerpt
+/// of the deciding check's output (capped by
+/// `settings.deferredReporting.excerptMaxLines`/`excerptMaxChars`).
 class Messages {
   cleanChangedAgent: String =
     "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further."
   issuesAgent: String =
-    "{{ tool }} reports issues; inspect diagnostics at {{ diagnostics_path }}."
+    "velvet-glove: {{ tool }} reports issues in {{ issue_files | join(\", \") }}:\n{{ excerpt }}"
   issuesChangedAgent: String =
-    "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
+    "velvet-glove: {{ tool }} changed {{ changed_files | join(\", \") }} (re-read before editing); issues remain in {{ issue_files | join(\", \") }}:\n{{ excerpt }}"
   unavailableUser: String?
   failedUser: String?
 }
