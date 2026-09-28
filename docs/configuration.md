@@ -1,6 +1,6 @@
 # Configuration reference
 
-Velvet Glove evaluates policy with Pkl 0.31.1. A policy imports the embedded
+Velvet Glove evaluates policy with Pkl 0.31.1 or newer. A policy imports the embedded
 schema and built-in catalog by their staged names:
 
 ```pkl

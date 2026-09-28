@@ -35,7 +35,7 @@ Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
 does not edit live Claude Code, Codex, or Antigravity configuration.
 
-The runner requires `pkl` 0.31.1. Pass `--config` to bypass discovery and use
+The runner requires `pkl` 0.31.1 or newer. Pass `--config` to bypass discovery and use
 one explicit policy. When it is omitted, Velvet Glove discovers canonical
 `.velvet-glove/post-tool-use.pkl` and `post-tool-use.local.pkl` files around
 the event workspace; legacy `.agent-hook-kit` files are read first at lower
