@@ -115,11 +115,6 @@ pub fn project_root(chain: &[DiscoveredConfig], cwd: &Path) -> PathBuf {
         .unwrap_or_else(|| cwd.to_path_buf())
 }
 
-/// Returns the conventional home configuration path, if a home directory exists.
-pub fn home_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(CONFIG_DIR).join(PROJECT_CONFIG_NAME))
-}
-
 /// Project root associated with a discovered config (or the cwd as fallback).
 ///
 /// Home configs and `--config PATH` files do not imply a project root; callers
