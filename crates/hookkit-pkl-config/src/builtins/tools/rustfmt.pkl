@@ -1,4 +1,18 @@
 /// rustfmt — standalone Rust code formatter.
+///
+/// Run without `cargo`, rustfmt never reads a project's `Cargo.toml`, so with
+/// no `rustfmt.toml` either it silently defaults to edition 2015: `async fn`
+/// and other post-2015 syntax then fail to *parse*, which surfaces as a false
+/// "issue" (a parse error, not a real formatting diff) on almost any modern
+/// Rust file. `--edition 2021` fixes that common no-config case.
+///
+/// Trade-off: rustfmt lets an explicit CLI `--edition` override a project's
+/// own `rustfmt.toml` `edition` key (confirmed empirically), so a project
+/// that deliberately sets a *different* edition (e.g. 2024) in
+/// `rustfmt.toml` will have this default silently take precedence instead.
+/// There is no declarative way to pass `--edition` only when no config file
+/// sets one, so this favors the overwhelmingly common "no rustfmt.toml"
+/// case over the rarer "opted into a newer edition" case.
 
 module velvet_glove.builtins.tools.Rustfmt
 
@@ -18,6 +32,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     ["format"] = new Config.Phase {
       mode = "format"
       argv = new Listing<String | Config.ArgToken> {
+        "--edition"
+        "2021"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
@@ -30,6 +46,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "--check"
+        "--edition"
+        "2021"
         new Config.ExtraArgs {}
         new Config.Files {}
       }

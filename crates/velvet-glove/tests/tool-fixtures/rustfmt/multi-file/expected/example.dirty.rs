@@ -1,0 +1,3 @@
+fn dirty() {
+    println!("selected");
+}

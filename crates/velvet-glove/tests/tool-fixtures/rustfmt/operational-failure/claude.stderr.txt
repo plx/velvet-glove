@@ -1,0 +1,12 @@
+error: rustfmt: phase `format` failed; diagnostics: <workspace>/.velvet-glove/rustfmt-agent-hook/test-session_rustfmt-tool_rustfmt-tool-failure.txt
+rustfmt failure diagnostics:
+== phase format failed (exit Some(1)) ==
+[format] command: rustfmt --edition 2021 <workspace>/example.rs
+status: Some(1)
+classification: Some(Failure)
+stderr:
+The file `<workspace>/rustfmt.toml` failed to parse.
+Error details: invalid type: string "wide", expected usize
+in `max_width`
+artifact: <workspace>/.velvet-glove/rustfmt-agent-hook/test-session_rustfmt-tool_rustfmt-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
