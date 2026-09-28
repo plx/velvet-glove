@@ -1,8 +1,15 @@
 /// bundler-audit — scans Gemfile.lock for known vulnerable dependencies.
 ///
-/// Operates at the workspace level — the runner invokes it from the project
-/// root whenever Gemfile.lock or related files change. Requires the
-/// ruby-advisory-db to be downloadable (or pre-cloned to the default location).
+/// Operates at the workspace level — the runner invokes it against the
+/// nearest ancestor directory containing `Gemfile.lock`, so a nested Ruby app
+/// in a monorepo is scanned in place. `check [DIR]` looks for `DIR/
+/// Gemfile.lock`; passing the overall project root here instead of that
+/// nested workspace makes it report `Could not find "Gemfile.lock"` at exit
+/// 1 — the same code used for "vulnerabilities found" — silently hiding any
+/// real vulnerabilities in the nested app (verified against bundler-audit
+/// 0.9.3). The first run on a machine with no cached copy of
+/// ruby-advisory-db clones it over the network regardless of `--update`;
+/// `detect` requires an explicit `.bundler-audit.yml` so this stays opt-in.
 
 module velvet_glove.builtins.tools.BundleAudit
 
@@ -28,7 +35,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       argv = new Listing<String | Config.ArgToken> {
         "check"
         new Config.ExtraArgs {}
-        new Config.ProjectRoot {}
+        new Config.Workspace {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
@@ -41,6 +48,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
 
   detect = new Config.Detect {
     indicators = new Listing<String> { ".bundler-audit.yml" }
-    note = "config-only: refreshes its advisory database over the network"
+    note = "config-only: fetches its advisory database over the network on first run"
   }
 }
