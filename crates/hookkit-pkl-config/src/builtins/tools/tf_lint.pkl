@@ -7,6 +7,11 @@
 /// under the project root, which is why the deferred check/remedy declare an
 /// explicit `workflows` entry scoped to the whole workspace instead of the
 /// `target-files` scope the phase-derived default would otherwise assume.
+///
+/// Under `--recursive`, tflint loads `.tflint.hcl` from each module directory
+/// it visits, not from the project root; a root config's rule toggles and
+/// plugins do not reach child modules. To share one config, add
+/// `--config <absolute path to .tflint.hcl>` to this tool's `extraArgs`.
 
 module velvet_glove.builtins.tools.Tflint
 
