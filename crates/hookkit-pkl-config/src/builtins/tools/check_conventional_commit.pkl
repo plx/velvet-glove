@@ -1,12 +1,11 @@
 /// check-conventional-commit — verify a commit message matches Conventional Commits.
 ///
-// DRAFT: this is a `commit-msg` hook in pre-commit / hk terminology — it
-// takes the commit-message *file* (typically `$1` = `.git/COMMIT_EDITMSG`)
-// rather than a list of project files, and runs only at commit time. Our
-// post-tool-use Phase model is built around per-file invocations and has
-// no "commit-message" mode, so the wiring is not in place. Listed here for
-// catalog completeness; left as DRAFT until we add a commit-msg phase kind
-// or ship a dedicated commit-msg runner.
+// NOT APPLICABLE to agent file hooks: this is a `commit-msg` hook in
+// pre-commit / hk terminology (`hk util check-conventional-commit
+// <commit-msg-file>`) — it takes the commit-message *file*, not project
+// files, and only ever runs at commit time. Velvet Glove's post-tool-use
+// hook fires after an edit, not a commit, and has no commit-message context
+// to hand it. Listed here for catalog completeness; kept disabled.
 
 module velvet_glove.builtins.tools.CheckConventionalCommit
 
