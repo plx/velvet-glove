@@ -1,37 +1,90 @@
 //! Version-control helpers shared by the deferred and immediate runners.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Return the subset of `paths` that Git ignores in the work tree containing
+/// Upper bound on paths retried one at a time after a batch query fails.
+const MAX_INDIVIDUAL_QUERIES: usize = 64;
+
+/// Return the subset of `paths` that Git ignores in the work trees under
 /// `root`.
 ///
-/// Only paths under `root` are queried, in one `git check-ignore` process.
-/// Tracked files are never reported as ignored. Outside a Git work tree, or
-/// when Git is unavailable or fails, nothing is considered ignored.
+/// Only paths under `root` are queried. Each path is asked of the repository
+/// that owns it (the nearest directory holding `.git`, so submodules and
+/// nested repositories answer for their own files), one `git check-ignore`
+/// process per repository. When a batch query fails (for example, a path
+/// beyond a symbolic link), its paths are retried individually so one bad
+/// path cannot disable the filter for the others. Tracked files are never
+/// reported as ignored. Outside a Git work tree, or when Git is unavailable
+/// or fails, nothing is considered ignored.
 pub(crate) fn git_ignored_paths(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
+    let mut repositories = BTreeMap::<PathBuf, Vec<PathBuf>>::new();
+    for path in paths {
+        if path
+            .strip_prefix(root)
+            .is_ok_and(|relative| !relative.as_os_str().is_empty())
+        {
+            repositories
+                .entry(owning_repository(path, root))
+                .or_default()
+                .push(path.clone());
+        }
+    }
+    let mut ignored = BTreeSet::new();
+    let mut retries = 0usize;
+    for (repository, paths) in repositories {
+        match check_ignore(&repository, &paths) {
+            Some(found) => ignored.extend(found),
+            None => {
+                for path in paths {
+                    if retries == MAX_INDIVIDUAL_QUERIES {
+                        break;
+                    }
+                    retries += 1;
+                    ignored.extend(
+                        check_ignore(&repository, std::slice::from_ref(&path)).unwrap_or_default(),
+                    );
+                }
+            }
+        }
+    }
+    ignored
+}
+
+/// The nearest directory from `path`'s parent up to `root` holding `.git`
+/// (a directory, or a file for submodules and linked worktrees), else `root`.
+fn owning_repository(path: &Path, root: &Path) -> PathBuf {
+    path.ancestors()
+        .skip(1)
+        .take_while(|dir| dir.starts_with(root))
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(root)
+        .to_path_buf()
+}
+
+/// Ask Git in `repository` which of `paths` it ignores; `None` when the query
+/// itself fails.
+fn check_ignore(repository: &Path, paths: &[PathBuf]) -> Option<BTreeSet<PathBuf>> {
     let relative = paths
         .iter()
         .filter_map(|path| {
-            let relative = path.strip_prefix(root).ok()?;
+            let relative = path.strip_prefix(repository).ok()?;
             (!relative.as_os_str().is_empty()).then(|| (relative.to_path_buf(), path.clone()))
         })
         .collect::<Vec<_>>();
     if relative.is_empty() {
-        return BTreeSet::new();
+        return Some(BTreeSet::new());
     }
-    let Ok(mut child) = Command::new("git")
+    let mut child = Command::new("git")
         .args(["check-ignore", "--stdin", "-z"])
-        .current_dir(root)
+        .current_dir(repository)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    else {
-        return BTreeSet::new();
-    };
+        .ok()?;
     let mut input = Vec::new();
     for (path, _) in &relative {
         input.extend_from_slice(path.to_string_lossy().as_bytes());
@@ -47,13 +100,13 @@ pub(crate) fn git_ignored_paths(root: &Path, paths: &[PathBuf]) -> BTreeSet<Path
     });
     let output = child.wait_with_output();
     let _ = writer.join();
-    let Ok(output) = output else {
-        return BTreeSet::new();
-    };
+    let output = output.ok()?;
     // 0: at least one path ignored; 1: none ignored; anything else is fatal
-    // (for example, not a Git work tree).
-    if output.status.code() != Some(0) {
-        return BTreeSet::new();
+    // (for example, not a Git work tree, or a pathspec in a submodule).
+    match output.status.code() {
+        Some(0) => {}
+        Some(1) => return Some(BTreeSet::new()),
+        _ => return None,
     }
     let ignored = output
         .stdout
@@ -61,11 +114,13 @@ pub(crate) fn git_ignored_paths(root: &Path, paths: &[PathBuf]) -> BTreeSet<Path
         .filter(|entry| !entry.is_empty())
         .map(|entry| PathBuf::from(String::from_utf8_lossy(entry).into_owned()))
         .collect::<BTreeSet<_>>();
-    relative
-        .into_iter()
-        .filter(|(relative, _)| ignored.contains(relative))
-        .map(|(_, absolute)| absolute)
-        .collect()
+    Some(
+        relative
+            .into_iter()
+            .filter(|(relative, _)| ignored.contains(relative))
+            .map(|(_, absolute)| absolute)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -117,6 +172,74 @@ mod tests {
             &root,
             &[built.clone(), source, tracked_log, outside.clone()],
         );
+
+        assert_eq!(ignored, BTreeSet::from([built]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_submodule_path_does_not_disable_filtering_for_the_superproject() {
+        let root = temp_root("submodule");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        if !git(&root, &["init", "-q"]) || !git(&sub, &["init", "-q"]) {
+            eprintln!("skipping test: git unavailable");
+            return;
+        }
+        std::fs::write(root.join(".gitignore"), "dist/\n").unwrap();
+        std::fs::write(sub.join(".gitignore"), "*.tmp\n").unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        let built = root.join("dist/out.py");
+        let nested_source = sub.join("f.py");
+        let nested_scratch = sub.join("scratch.tmp");
+        for path in [&built, &nested_source, &nested_scratch] {
+            std::fs::write(path, "x\n").unwrap();
+        }
+        // Make `sub` a gitlink in the superproject, as a submodule would be.
+        assert!(git(&sub, &["add", "f.py", ".gitignore"]));
+        let committed = Command::new("git")
+            .arg("-C")
+            .arg(&sub)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "init",
+            ])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        assert!(committed);
+        assert!(git(&root, &["add", "sub"]));
+
+        let ignored = git_ignored_paths(
+            &root,
+            &[built.clone(), nested_source, nested_scratch.clone()],
+        );
+
+        assert_eq!(ignored, BTreeSet::from([built, nested_scratch]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_beyond_a_symlink_does_not_disable_filtering_for_the_batch() {
+        let root = temp_root("symlink");
+        if !git(&root, &["init", "-q"]) {
+            eprintln!("skipping test: git unavailable");
+            return;
+        }
+        std::fs::write(root.join(".gitignore"), "dist/\n").unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        let built = root.join("dist/out.py");
+        std::fs::write(&built, "x\n").unwrap();
+        std::fs::write(root.join("real/a.py"), "x\n").unwrap();
+
+        let ignored = git_ignored_paths(&root, &[built.clone(), root.join("link/a.py")]);
 
         assert_eq!(ignored, BTreeSet::from([built]));
         let _ = std::fs::remove_dir_all(root);
