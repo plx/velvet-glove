@@ -297,8 +297,10 @@ pub struct DeferredReporting {
     pub master_agent: String,
     /// Whether categories with no files are included in rendered output.
     pub render_empty_buckets: bool,
-    /// Whether tool crashes and configuration errors block turn completion.
-    /// Missing executables follow [`Settings::missing_tool_policy`] instead.
+    /// Whether tool crashes, timeouts, and reporting or tool-plan errors in
+    /// a policy that loaded block turn completion. A policy that fails to
+    /// load never blocks. Missing executables follow
+    /// [`Settings::missing_tool_policy`] instead.
     pub block_on_operational_errors: bool,
     /// Consecutive blocks allowed while the harness reports an active stop
     /// hook; zero disables the cap.
@@ -309,6 +311,12 @@ pub struct DeferredReporting {
     /// issues.
     pub excerpt_max_chars: u32,
 }
+
+/// Auto-fixed files named in one notice before the rest are counted as
+/// "and N more". The default `autoFixed` templates slice
+/// `auto_fixed_files[:10]`, and immediate mode's auto-fix line uses this
+/// same limit.
+pub const AUTO_FIXED_LISTED_FILES: usize = 10;
 
 const OPERATIONAL_PROBLEMS_TEMPLATE: &str = "velvet-glove could not run {% for problem in problems %}{{ problem.tool }} ({{ problem.reason }}{% if problem.missing_tool and problem.install_hint %}; {{ problem.install_hint }}{% elif problem.log_path %}; log: {{ problem.log_path }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}.";
 

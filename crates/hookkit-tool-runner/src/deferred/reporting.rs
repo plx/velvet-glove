@@ -18,9 +18,6 @@ const OPERATIONAL_USER: &str = "operational.user";
 const OPERATIONAL_AGENT: &str = "operational.agent";
 const MASTER_USER: &str = "master.user";
 const MASTER_AGENT: &str = "master.agent";
-/// Smallest per-issue excerpt share before the global budget applies.
-const MIN_EXCERPT_LINES: usize = 5;
-const MIN_EXCERPT_CHARS: usize = 400;
 /// Longest single-line reason quoted from an operational problem.
 const MAX_REASON_CHARS: usize = 200;
 
@@ -463,31 +460,26 @@ impl DeferredReporter {
                 artifact.map(|artifact| artifact.absolute_path.to_string_lossy().into_owned());
             entries.push((report, files, output, log_path));
         }
-        let max_lines = self.config.excerpt_max_lines as usize;
-        let max_chars = self.config.excerpt_max_chars as usize;
-        let count = entries.len().max(1);
-        let share_lines = (max_lines / count).max(MIN_EXCERPT_LINES);
-        let share_chars = (max_chars / count).max(MIN_EXCERPT_CHARS);
-        let (mut used_lines, mut used_chars) = (0usize, 0usize);
+        let outputs = entries
+            .iter()
+            .map(|(_, _, output, _)| output.clone())
+            .collect::<Vec<_>>();
+        let clipped = excerpt::clip_shared(
+            &outputs,
+            self.config.excerpt_max_lines as usize,
+            self.config.excerpt_max_chars as usize,
+        );
         entries
             .into_iter()
-            .map(|(report, files, output, log_path)| {
-                let clipped = excerpt::clip(
-                    &output,
-                    share_lines.min(max_lines.saturating_sub(used_lines)),
-                    share_chars.min(max_chars.saturating_sub(used_chars)),
-                );
-                used_lines += clipped.text.lines().count();
-                used_chars += clipped.text.chars().count();
-                IssueExcerpt {
-                    tool: report.tool_name.clone(),
-                    tool_id: report.tool_id.clone(),
-                    workflow: report.workflow_id.clone(),
-                    files,
-                    excerpt: excerpt::with_log_note(&clipped, log_path.as_deref()),
-                    truncated: clipped.truncated,
-                    log_path,
-                }
+            .zip(clipped)
+            .map(|((report, files, _, log_path), clipped)| IssueExcerpt {
+                tool: report.tool_name.clone(),
+                tool_id: report.tool_id.clone(),
+                workflow: report.workflow_id.clone(),
+                files,
+                excerpt: excerpt::with_log_note(&clipped, log_path.as_deref()),
+                truncated: clipped.truncated,
+                log_path,
             })
             .collect()
     }

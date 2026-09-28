@@ -31,13 +31,15 @@ run { "ruff"; "cargoFmt" }
   [`crates/hookkit-pkl-config/src/builtins/tools/`](../crates/hookkit-pkl-config/src/builtins/tools/).
 
 Enabled tools named in `run` are validated when the policy loads: unknown
-`run` entries, `phaseOrder`/`workflowOrder` entries that name nothing, an exit
-code in two classes, a verify phase or workflow check that declares writes,
-and a mutating phase or remedy without a write scope are all rejected with an
-itemised error. The hooks report a load error to the user only: no tool runs,
-and neither the tool call nor Stop is blocked (unless
-`deferredReporting.blockOnOperationalErrors` is set). `doctor` and `check`
-print it and exit nonzero.
+`run` entries, `phaseOrder`/`workflowOrder` entries that name nothing, an
+invalid glob in a tool's `files` or in `settings.exclude`, an exit code in two
+classes, a verify phase or workflow check that declares writes, and a mutating
+phase or remedy without a write scope are all rejected with an itemised error.
+A tool whose `workflows` are all disabled is valid and runs only in immediate
+mode. The hooks report a load error to the user only, naming the policy file
+that failed: no tool runs, and neither the tool call nor Stop is ever blocked
+(`deferredReporting.blockOnOperationalErrors` cannot apply, because it is read
+from the policy that failed). `doctor` and `check` print it and exit nonzero.
 
 ## Discovery and merge order
 
@@ -83,11 +85,11 @@ A layer can discard inherited state first with `merge`:
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `settings.jobs` | `0` | Concurrent jobs within a tool (one per workspace or file). `0` is auto: available parallelism, capped at 8. `1` runs serially. Tools themselves run one after another. |
+| `settings.jobs` | `0` | Concurrent jobs (one per workspace or file). `0` is auto: available parallelism, capped at 8. `1` runs serially. In immediate mode, jobs within one tool run concurrently and tools run one after another; at Stop, the checks of every tool share one pool, while remedies run one at a time in `run` order. |
 | `settings.commandTimeoutSeconds` | `120` | Wall-clock limit per external command. A command that exceeds it is killed (on Unix, with its whole process group) and reported as an operational failure. `0` disables the limit. |
 | `settings.localBinDirs` | `node_modules/.bin`, `.venv/bin` | Project-local executable directories searched before `PATH`; see [Executable resolution](#executable-resolution). A layer that sets it replaces the list. |
 | `settings.exclude` | `**/<dir>/**` for `.git`, `node_modules`, `.venv`, `__pycache__`, `target`, and the tool caches below | Global exclusions, matched against project-relative paths before tool filters. Additions append; see `merge.resetExclude`. |
-| `settings.failFast` | `true` | Stop scheduling later tools after an operational failure. |
+| `settings.failFast` | `true` | In immediate mode, stop scheduling later tools after an operational failure. At Stop, skip only the failing tool's later remedies; other tools still run. |
 | `settings.continueAfterIssues` | `true` | Continue with later tools after source issues (immediate mode). |
 | `settings.missingToolPolicy` | `user-notice` | Missing executable: `user-notice`, `hard-failure` (the hook fails), or `harness-block`. Applies to both hooks. |
 | `settings.diagnosticsDirectory` | unset | Immediate-mode full diagnostics. Unset keeps them outside the project, in `$TMPDIR/velvet-glove/state/post-tool-immediate`; a relative path resolves from the project root. |
@@ -166,11 +168,15 @@ Without a `workspaceIndicator`, commands run in the project root.
 ### Executable resolution
 
 A bare program name (no `/`) is looked up in each `settings.localBinDirs`
-entry, in order, from the job's workspace up to the project root, nearest
-first; the first executable file wins. So with the defaults, a package's own
-`node_modules/.bin/eslint` beats the repository root's, and either beats
-`.venv/bin/eslint` or `PATH`. Paths with a `/` and names found in none of
-those directories are run as given, through `PATH`.
+entry, in order, from each checked file's directory (and the job's workspace)
+up to the project root, nearest first; the first executable file wins. So
+with the defaults, a package's own `node_modules/.bin/eslint` beats the
+repository root's even for a tool without a `workspaceIndicator`, and either
+beats `.venv/bin/eslint` or `PATH`. Names found in none of those directories
+are run through `PATH`; a path with a `/` is run as given, relative to the
+command's working directory (the project root without a
+`workspaceIndicator`). `doctor`, `tools`, and `init` resolve programs the same
+way from the project root.
 
 ## Recipes
 
@@ -276,26 +282,36 @@ operational problem. (Built-in specs must have a check.)
 ## Immediate hook output
 
 `post-tool-immediate` runs the tools whose globs match the files a tool call
-changed. Calls that change no files, such as reads and searches, and calls
-that touch only Git-ignored files return at once without evaluating any
-policy.
+changed inside the project; files outside the project root (plans, memory
+files, scratch files, sibling repositories) are never touched. Calls that
+change no files, such as reads and searches, and calls that touch only
+Git-ignored files return at once without evaluating any policy.
 
 | Outcome | Agent (`additionalContext`) | User (`systemMessage`) |
 | --- | --- | --- |
 | Clean | nothing | nothing |
-| Auto-fixed | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` | the same line |
-| Issues remain | `velvet-glove: Ruff reports issues in src/a.py:` plus a bounded excerpt of the deciding check's output | `Ruff: issues remain in src/a.py; diagnostics: <path>` |
-| Tool missing, crashed, timed out | nothing | one line with the install hint or diagnostics path |
-| Policy error | nothing | the itemised load error |
+| Auto-fixed | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` (at most 10 files, then `and N more`) | the same line |
+| Issues remain | `velvet-glove: Ruff reports issues in src/a.py:` plus a bounded excerpt of the deciding check's output | `velvet-glove: Ruff: issues remain in src/a.py; diagnostics: <path>` |
+| Issues only in files the call did not change | nothing | `velvet-glove: not reporting issues outside the files this call changed: cargo clippy (src/lib.rs).` |
+| Tool missing, crashed, timed out | nothing | `velvet-glove could not run Ruff (ruff not found; <install hint>).` or `(<phase> failed with exit code N; log: <path>)`, as at Stop |
+| Policy error | nothing | `velvet-glove: configuration error; no tools ran (<policy file>: <first error line>). Details: <log>` |
 
-The excerpt is the output of the verify phase that found the issues (or, for
-a tool without one, of the phases that did), with ANSI escapes removed and
-project paths made relative. All tools in one call share the
-`deferredReporting.excerptMaxLines`/`excerptMaxChars` budget; a cut excerpt
-ends with `…truncated; full log: <path>`. The texts come from the tool's
-`messages.issuesAgent` / `issuesChangedAgent` templates, which receive
+Issues are blamed on the files the deciding output names, as at Stop: a
+workspace-wide check that reports a pre-existing issue in another file is not
+pinned on the file the call changed. The excerpt is the output of the verify
+phase that found the issues (or, for a tool without one, of the phases that
+did), with ANSI escapes removed and project paths made relative. The
+`deferredReporting.excerptMaxLines`/`excerptMaxChars` budget is divided among
+the tools that report issues in one call exactly as at Stop (an equal share
+each, at least 5 lines and 400 characters while budget remains); a cut
+excerpt ends with `…truncated; full log: <path>`. The texts come from the
+tool's `messages.issuesAgent` / `issuesChangedAgent` templates, which receive
 `excerpt` alongside `tool`, `changed_files`, `issue_files`, and the
-`diagnostics_*` paths.
+`diagnostics_*` paths. A template that fails to render falls back to the
+built-in wording with a user notice, and an unwritable `diagnosticsDirectory`
+falls back to the default location, so the agent always hears about changed
+files. Under `missingToolPolicy = "harness-block"`, the blocking message also
+carries the auto-fix line and feedback from tools that ran before it.
 
 Clean output is `{}` with empty stderr. Full command output goes only to the
 diagnostics file. Immediate mode never fails the hook or feeds an error back
@@ -432,7 +448,7 @@ committed as operational artifacts.
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `deferredReporting.blockOnOperationalErrors` | `false` | Also block Stop on tool crashes and configuration errors. |
+| `deferredReporting.blockOnOperationalErrors` | `false` | Also block Stop on tool crashes, timeouts, and reporting or tool-plan errors in a policy that loaded. A policy that fails to load never blocks. |
 | `deferredReporting.maxConsecutiveBlocks` | `3` | Blocks allowed in one chain of stop-hook continuations; `0` disables the cap. |
 | `deferredReporting.excerptMaxLines` | `60` | Total check-output lines quoted to the agent across all issues (at Stop, and per call in immediate mode). |
 | `deferredReporting.excerptMaxChars` | `6000` | Total check-output characters quoted to the agent across all issues (likewise). |

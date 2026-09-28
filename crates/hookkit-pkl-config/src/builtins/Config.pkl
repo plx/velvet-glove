@@ -79,9 +79,10 @@ class DeferredReporting {
   masterUser: String?
   masterAgent: String?
   renderEmptyBuckets: Boolean?
-  /// Block Stop on tool crashes and configuration errors (default false:
-  /// notify the user only). Missing executables follow
-  /// settings.missingToolPolicy instead.
+  /// Block Stop on tool crashes, timeouts, and reporting or tool-plan errors
+  /// in a policy that loaded (default false: notify the user only). A policy
+  /// that fails to load never blocks: this setting cannot be read from it.
+  /// Missing executables follow settings.missingToolPolicy instead.
   blockOnOperationalErrors: Boolean?
   /// Allow at most this many consecutive blocks while the harness reports an
   /// active stop hook (default 3); 0 disables the cap.

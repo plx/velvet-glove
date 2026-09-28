@@ -1661,6 +1661,10 @@ fn broken_pkl_config_is_a_user_notice_without_blocking() {
         user.starts_with("velvet-glove configuration failed to load; checks were skipped ("),
         "{user}"
     );
+    assert!(
+        user.contains(".velvet-glove/post-tool-use.pkl: ") && !user.contains("pkl-stage"),
+        "the notice names the user's policy file, not a staged copy: {user}"
+    );
     assert!(!user.contains("Deferred reporting"), "{user}");
     assert_eq!(response.as_object().unwrap().len(), 1, "{response}");
     assert_eq!(only_summary(&state_dir)["status"], "operational-failure");
@@ -3159,8 +3163,11 @@ fn post_tool_use_reports_missing_tool_to_user_without_failing_hook() {
         json.get("hookSpecificOutput").is_none(),
         "agent hears nothing"
     );
-    assert!(user.contains("unavailable"));
-    assert!(user.contains("definitely-missing-ruff"));
+    assert!(
+        user.starts_with("velvet-glove could not run Ruff (")
+            && user.contains("definitely-missing-ruff not found"),
+        "{user}"
+    );
 }
 
 #[test]
@@ -3185,7 +3192,10 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
         json.get("hookSpecificOutput").is_none(),
         "agent hears nothing"
     );
-    assert!(user.contains("phase `format` failed"));
+    assert!(
+        user.contains("velvet-glove could not run Ruff (format failed with exit code"),
+        "{user}"
+    );
     let diagnostics = std::fs::read_to_string(project.join(
         ".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt",
     ))
@@ -3280,7 +3290,10 @@ run = new Listing<String> {{ "combo" }}
             .unwrap()
             .contains("velvet-glove auto-fixed src/a.py (Combo)")
     );
-    assert!(user.contains("Combo: phase `verify` failed"));
+    assert!(
+        user.contains("velvet-glove could not run Combo (verify failed with exit code"),
+        "{user}"
+    );
     assert!(
         read_diagnostics(
             &project,
@@ -3377,7 +3390,10 @@ run = new Listing<String> {{ "failer"; "changer" }}
         "original\n"
     );
     let (_, user) = immediate_response(&output);
-    assert!(user.contains("Failer: phase `verify` failed"));
+    assert!(
+        user.contains("velvet-glove could not run Failer (verify failed with exit code"),
+        "{user}"
+    );
     assert!(!user.contains("Changer"));
 }
 
@@ -3435,10 +3451,14 @@ run { "hang" }
         "agent hears nothing"
     );
     assert!(
-        user.contains("Hang: phase `verify` failed (timed out after 1s"),
+        user.contains("velvet-glove could not run Hang (verify: timed out after 1s"),
         "{user}"
     );
-    let diagnostics_path = user.rsplit("diagnostics: ").next().unwrap();
+    let diagnostics_path = user
+        .rsplit("; log: ")
+        .next()
+        .unwrap()
+        .trim_end_matches(").");
     assert!(
         diagnostics_path.contains("velvet-glove/state/post-tool-immediate"),
         "{diagnostics_path}"
@@ -3571,7 +3591,11 @@ run = new Listing<String> { "rff" }
         json.get("hookSpecificOutput").is_none(),
         "agent hears nothing"
     );
-    assert!(user.starts_with("error: velvet-glove: configuration error; no tools ran:"));
+    assert!(
+        user.starts_with("velvet-glove: configuration error; no tools ran ("),
+        "{user}"
+    );
+    assert!(user.contains(". Details: "), "{user}");
     assert!(user.contains("run names unknown tool `rff`"), "{user}");
 
     // A call that touches no files returns before the (broken) policy is
@@ -3702,5 +3726,207 @@ run = new Listing { "ruff" }
         "harness-block should exit 2 (blocking) instead of 0 or 1"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unavailable"));
+    assert!(
+        stderr.contains("velvet-glove could not run Ruff (") && stderr.contains("not found"),
+        "{stderr}"
+    );
+}
+
+/// A policy with one tool `probe` over `**/*.txt`: `format` runs `fixer` on
+/// the files (writes target files); `verify` runs `checker`, with 1 for
+/// issues. `extra` is spliced into the tool and `settings` into settings.
+fn write_probe_policy(project: &Path, fixer: &Path, checker: &Path, extra: &str, settings: &str) {
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let fixer = fixer.to_string_lossy().replace('\\', "\\\\");
+    let checker = checker.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{
+{settings}
+}}
+
+tools {{
+  ["probe"] = new ToolSpec {{
+    id = "probe"
+    displayName = "Probe"
+    executable = "{fixer}"
+    files {{ include = new Listing<String> {{ "**/*.txt" }} }}
+    phases {{
+      ["format"] = new Phase {{
+        mode = "format"
+        program = "{fixer}"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        writes = "target-files"
+      }}
+      ["verify"] = new Phase {{
+        mode = "verify"
+        program = "{checker}"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        exitCodes {{ clean = new Listing<Int> {{ 0 }}; issues = new Listing<Int> {{ 1 }}; failure = new Listing<Int> {{ 2 }} }}
+      }}
+    }}
+    phaseOrder = new Listing<String> {{ "format"; "verify" }}
+{extra}
+  }}
+}}
+run = new Listing<String> {{ "probe" }}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_probe_tools(project: &Path, checker_body: &str) -> (PathBuf, PathBuf) {
+    let fixer = write_executable(
+        project,
+        "fixer",
+        "#!/bin/sh\nfor file in \"$@\"; do printf 'fixed\\n' > \"$file\"; done\n",
+    );
+    let checker = write_executable(project, "checker", checker_body);
+    (fixer, checker)
+}
+
+#[test]
+fn post_tool_use_leaves_files_outside_the_project_alone() {
+    require_pkl!();
+    let project = temp_project("outside-project");
+    let (fixer, checker) = write_probe_tools(&project, "#!/bin/sh\nexit 0\n");
+    write_probe_policy(&project, &fixer, &checker, "", "");
+    let outside_dir = temp_project("outside-project-scratch");
+    let outside = outside_dir.join("plan.txt");
+    std::fs::write(&outside, "hello   \n").unwrap();
+    let outside_text = outside.to_string_lossy().into_owned();
+    let event = PostToolUseBuilder::new(ProtocolSurface::Claude, &project, "plan.txt")
+        .identity("claude-ruff-test", "claude-ruff-turn", "claude-ruff-tool")
+        .tool(
+            "Write",
+            serde_json::json!({"file_path": outside_text, "content": "hello   \n"}),
+            serde_json::json!({"filePath": outside_text}),
+        )
+        .build()
+        .unwrap()
+        .into_bytes();
+
+    let output = run_example("post-tool-immediate", &event, &["--claude"]);
+
+    let (json, user) = immediate_response(&output);
+    assert_eq!(json, serde_json::json!({}), "{user}");
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "hello   \n");
+}
+
+#[test]
+fn post_tool_use_keeps_auto_fix_feedback_when_a_template_or_diagnostics_directory_fails() {
+    require_pkl!();
+    let project = temp_project("template-failure");
+    let (fixer, checker) = write_probe_tools(
+        &project,
+        "#!/bin/sh\nfor file in \"$@\"; do echo \"$file:1: still wrong\"; done\nexit 1\n",
+    );
+    write_probe_policy(
+        &project,
+        &fixer,
+        &checker,
+        r#"    messages { issuesChangedAgent = "{{ tool | nosuchfilter }}" }"#,
+        r#"  diagnosticsDirectory = "/dev/null/diagnostics""#,
+    );
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "original\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/a.txt"),
+        &["--claude"],
+    );
+
+    let (json, user) = immediate_response(&output);
+    assert_eq!(
+        std::fs::read_to_string(src.join("a.txt")).unwrap(),
+        "fixed\n"
+    );
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        context.starts_with(
+            "velvet-glove: Probe changed src/a.txt (re-read before editing); issues remain in src/a.txt:"
+        ),
+        "{context}"
+    );
+    assert!(context.contains("src/a.txt:1: still wrong"), "{context}");
+    assert!(
+        user.contains("velvet-glove: Probe: messages.issuesChangedAgent could not be rendered"),
+        "{user}"
+    );
+    assert!(
+        user.contains("velvet-glove: cannot write diagnostics to /dev/null/diagnostics"),
+        "{user}"
+    );
+}
+
+#[test]
+fn post_tool_use_does_not_pin_a_workspace_checks_other_issues_on_the_edited_file() {
+    require_pkl!();
+    let project = temp_project("workspace-attribution");
+    let (fixer, checker) = write_probe_tools(
+        &project,
+        "#!/bin/sh\necho 'src/old.txt:3:1: E1 pre-existing'\nexit 1\n",
+    );
+    write_probe_policy(&project, &fixer, &checker, "", "");
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("old.txt"), "old\n").unwrap();
+    std::fs::write(src.join("new.txt"), "fixed\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/new.txt"),
+        &["--claude"],
+    );
+
+    let (json, user) = immediate_response(&output);
+    assert!(json.get("hookSpecificOutput").is_none(), "{json}");
+    assert_eq!(
+        user,
+        "velvet-glove: not reporting issues outside the files this call changed: Probe (src/old.txt)."
+    );
+}
+
+#[test]
+fn post_tool_use_reports_a_bad_glob_as_a_configuration_notice() {
+    require_pkl!();
+    let project = temp_project("bad-glob");
+    let (fixer, checker) = write_probe_tools(&project, "#!/bin/sh\nexit 0\n");
+    write_probe_policy(
+        &project,
+        &fixer,
+        &checker,
+        "",
+        r#"  exclude { "src/{gen,build" }"#,
+    );
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "original\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/a.txt"),
+        &["--claude"],
+    );
+
+    let (json, user) = immediate_response(&output);
+    assert!(json.get("hookSpecificOutput").is_none(), "{json}");
+    assert!(
+        user.starts_with("velvet-glove: configuration error; no tools ran (")
+            && user.contains("src/{gen,build"),
+        "{user}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(src.join("a.txt")).unwrap(),
+        "original\n"
+    );
 }

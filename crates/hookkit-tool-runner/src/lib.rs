@@ -20,16 +20,16 @@ pub use deferred::{
     RunArtifact, ToolReport, ToolReportRef,
 };
 use deferred::{
-    BlockReasons, DEFAULT_BLOCK_REASON, DeferredLog, DeferredReporter, LoopGuardState,
+    Attribution, BlockReasons, DEFAULT_BLOCK_REASON, DeferredLog, DeferredReporter, LoopGuardState,
     RenderedBuckets, RenderedMessages, ScheduledWorkflow, StopLoweringMetadata, TemplateRun,
-    combined_output, decide_loop_guard, execute_deferred_workflows, issue_fingerprint,
-    plan_stop_lowering,
+    attribute, combined_output, decide_loop_guard, execute_deferred_workflows, issue_fingerprint,
+    plan_stop_lowering, resolution_bases,
 };
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
 use hookkit_common::{
-    NoticeLevel, PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
+    PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
     TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput, UserNotice,
 };
 use hookkit_core::{HarnessId, HookkitError, RuntimeContext, Utf8PathBuf};
@@ -52,11 +52,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-const DEFAULT_CLEAN_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.";
-const DEFAULT_ISSUES_AGENT: &str =
-    "velvet-glove: {{ tool }} reports issues in {{ issue_files | join(\", \") }}:\n{{ excerpt }}";
-const DEFAULT_ISSUES_CHANGED_AGENT: &str = "velvet-glove: {{ tool }} changed {{ changed_files | join(\", \") }} (re-read before editing); issues remain in {{ issue_files | join(\", \") }}:\n{{ excerpt }}";
 
 const BATCHED_TOOLS_FAMILY: &str = "velvet-glove.batched-tools";
 
@@ -434,9 +429,9 @@ pub struct ToolMessages {
 impl Default for ToolMessages {
     fn default() -> Self {
         Self {
-            clean_changed_agent: DEFAULT_CLEAN_CHANGED_AGENT.to_string(),
-            issues_agent: DEFAULT_ISSUES_AGENT.to_string(),
-            issues_changed_agent: DEFAULT_ISSUES_CHANGED_AGENT.to_string(),
+            clean_changed_agent: pkl::default_clean_changed_agent(),
+            issues_agent: pkl::default_issues_agent(),
+            issues_changed_agent: pkl::default_issues_changed_agent(),
             unavailable_user: None,
             failed_user: None,
         }
@@ -1953,15 +1948,9 @@ fn record_configuration_problem(
 /// Terse user notice for a configuration or reporting failure. The agent
 /// hears about it only when operational errors are configured to block.
 fn failure_messages(headline: &str, detail: &str, log: &Path, blocking: bool) -> RenderedMessages {
-    let first_line = detail
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default()
-        .trim_end_matches(':');
-    let first_line = excerpt::clip(first_line, 1, 200).text;
     let message = format!(
-        "velvet-glove {headline} ({first_line}). Details: {}",
+        "velvet-glove {headline} ({}). Details: {}",
+        error_summary(detail),
         log.display()
     );
     RenderedMessages {
@@ -1995,6 +1984,13 @@ fn run_post_tool_input(
 ) -> hookkit_core::Result<PostToolUseOutput> {
     let harness = ctx.harness();
     let lowering_warning_artifact = lowering_warning_artifact(&post_tool, ctx);
+    let clean = || {
+        lower_domain_outcome(
+            harness,
+            RunnerDomainOutcome::Clean,
+            lowering_warning_artifact.as_ref(),
+        )
+    };
 
     // Most tool calls (Read, Grep, ...) touch no files: skip every other cost,
     // including Pkl evaluation, for them.
@@ -2003,11 +1999,7 @@ fn run_post_tool_input(
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return lower_domain_outcome(
-            harness,
-            RunnerDomainOutcome::Clean,
-            lowering_warning_artifact.as_ref(),
-        );
+        return clean();
     }
 
     let cwd = ctx
@@ -2020,22 +2012,25 @@ fn run_post_tool_input(
     let ignored = vcs::git_ignored_paths(&normalize_path(&cwd), &candidates);
     candidates.retain(|path| !ignored.contains(path));
     if candidates.is_empty() {
-        return lower_domain_outcome(
-            harness,
-            RunnerDomainOutcome::Clean,
-            lowering_warning_artifact.as_ref(),
-        );
+        return clean();
     }
     let loaded = match hookkit_pkl_config::discover_and_load(&cwd, config_path) {
         Ok(loaded) => loaded,
         // A broken policy is an operational problem: tell the user, never the
         // agent, and never fail or block the tool call.
         Err(error) => {
+            let detail = error.to_string();
+            let mut message = format!(
+                "velvet-glove: configuration error; no tools ran ({})",
+                error_summary(&detail)
+            );
+            if let Ok(log) =
+                write_immediate_artifact(&immediate_log_directory(), "config-error", &detail, ctx)
+            {
+                message.push_str(&format!(". Details: {}", log.display()));
+            }
             let output = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::default())
-                .with_user_notice(UserNotice::error(format!(
-                    "velvet-glove: configuration error; no tools ran: {}",
-                    truncate_chars(error.to_string().trim(), CONFIG_ERROR_NOTICE_CHARS)
-                )));
+                .with_user_notice(UserNotice::error(message));
             return lower_domain_outcome(
                 harness,
                 RunnerDomainOutcome::Report(output),
@@ -2045,77 +2040,66 @@ fn run_post_tool_input(
     };
 
     let project_root = normalize_path(&loaded.project_root);
-    let lowering = loaded.config.settings.lowering_policy;
-    let missing_tool_policy = loaded.config.settings.missing_tool_policy;
-    let fail_fast = loaded.config.settings.fail_fast;
-    let continue_after_issues = loaded.config.settings.continue_after_issues;
-
-    let mut output =
-        RunnerPostToolUseOutput::new(lowering).with_excerpt_budget(ExcerptBudget::new(
-            &loaded.config.settings.deferred_reporting,
+    // A project's policy applies only to files inside the project: plans,
+    // memory files, scratch files, and sibling repositories are left alone.
+    candidates.retain(|path| path.starts_with(&project_root));
+    if candidates.is_empty() {
+        return clean();
+    }
+    let settings = &loaded.config.settings;
+    let mut output = RunnerPostToolUseOutput::new(settings.lowering_policy).with_excerpt_limits(
+        ExcerptLimits::new(
+            &settings.deferred_reporting,
             display_roots(&project_root, &loaded.project_root),
-        ));
+        ),
+    );
     let mut had_hard_failure = false;
     let mut had_harness_block_message: Option<String> = None;
 
     let tools = resolve_run_order(&loaded.config)?;
     if tools.is_empty() {
-        return lower_domain_outcome(
-            harness,
-            RunnerDomainOutcome::Clean,
-            lowering_warning_artifact.as_ref(),
-        );
+        return clean();
     }
 
-    let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.clone();
+    let global_diagnostics_dir = settings.diagnostics_directory.clone();
 
     let _project = lock_project(&project_root);
     for schema_spec in tools {
         if !schema_spec.enabled {
             continue;
         }
-        let spec = convert_tool_spec(schema_spec, &loaded.config.settings);
+        let spec = convert_tool_spec(schema_spec, settings);
         let context = ToolContext {
             spec: &spec,
             project_root: &project_root,
             global_diagnostics_dir: global_diagnostics_dir.as_deref(),
         };
-
-        let matcher = FileMatcher::new(&spec.file_selection)?;
-        let runnable_paths = candidates
-            .iter()
-            .filter(|p| matcher.matches(p, &project_root))
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        if runnable_paths.is_empty() {
-            continue;
-        }
-
-        let base_jobs = build_jobs(&runnable_paths, &project_root, &spec);
-        let jobs = invocation_jobs(&base_jobs, spec.phase_invocation);
-        if jobs.is_empty() {
-            continue;
-        }
-
-        let outcomes = run_jobs(&jobs, &context, loaded.config.settings.jobs);
-
-        let batch_status = accumulate_outcomes(
-            outcomes,
+        // An error in one tool's configuration (a glob, a message template,
+        // an unwritable diagnostics directory) is that tool's operational
+        // problem: tell the user and keep everything already collected.
+        let batch_status = run_immediate_tool(
             &context,
+            &candidates,
             ctx,
-            missing_tool_policy,
+            settings,
             &mut output,
-            &mut had_hard_failure,
-            &mut had_harness_block_message,
-        )?;
+            (&mut had_hard_failure, &mut had_harness_block_message),
+        )
+        .unwrap_or_else(|error| {
+            output.notices.push(UserNotice::error(format!(
+                "velvet-glove could not run {} ({error})",
+                spec.display_name
+            )));
+            ToolBatchStatus {
+                operational_failure: true,
+                issues: false,
+            }
+        });
 
         if had_harness_block_message.is_some()
             || had_hard_failure
-            || (fail_fast && batch_status.operational_failure)
-            || (!continue_after_issues && batch_status.issues)
+            || (settings.fail_fast && batch_status.operational_failure)
+            || (!settings.continue_after_issues && batch_status.issues)
         {
             break;
         }
@@ -2135,6 +2119,45 @@ fn run_post_tool_input(
     lower_domain_outcome(harness, outcome, lowering_warning_artifact.as_ref())
 }
 
+/// Run one tool on the candidates its globs select and fold its outcomes
+/// into `output`. `flags` are the run's hard-failure and harness-block flags.
+fn run_immediate_tool(
+    context: &ToolContext<'_>,
+    candidates: &[PathBuf],
+    ctx: &RuntimeContext<'_>,
+    settings: &pkl::Settings,
+    output: &mut RunnerPostToolUseOutput,
+    flags: (&mut bool, &mut Option<String>),
+) -> hookkit_core::Result<ToolBatchStatus> {
+    let matcher = FileMatcher::new(&context.spec.file_selection)?;
+    let runnable_paths = candidates
+        .iter()
+        .filter(|path| matcher.matches(path, context.project_root))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if runnable_paths.is_empty() {
+        return Ok(ToolBatchStatus::default());
+    }
+    let base_jobs = build_jobs(&runnable_paths, context.project_root, context.spec);
+    let jobs = invocation_jobs(&base_jobs, context.spec.phase_invocation);
+    if jobs.is_empty() {
+        return Ok(ToolBatchStatus::default());
+    }
+    let outcomes = run_jobs(&jobs, context, settings.jobs);
+    let (had_hard_failure, had_harness_block_message) = flags;
+    accumulate_outcomes(
+        outcomes,
+        context,
+        ctx,
+        settings.missing_tool_policy,
+        output,
+        had_hard_failure,
+        had_harness_block_message,
+    )
+}
+
 /// Accumulated common output produced by the post-tool runner.
 ///
 /// Fields are runner-owned so callers receive this value through
@@ -2142,25 +2165,78 @@ fn run_post_tool_input(
 #[derive(Debug, Default)]
 pub struct RunnerPostToolUseOutput {
     notices: Vec<UserNotice>,
-    agent_feedback: Vec<String>,
+    agent_feedback: Vec<AgentFeedback>,
     diagnostics: Vec<DiagnosticReport>,
     auto_fixed: Vec<AutoFixed>,
     harness_block: Option<String>,
     lowering: pkl::LoweringPolicy,
-    excerpt_budget: ExcerptBudget,
+    excerpt_limits: ExcerptLimits,
 }
 
-/// Agent excerpt budget shared by every tool in one immediate run, plus the
+/// One agent-facing line: rendered, or a tool's remaining issues whose
+/// excerpt is cut only once every tool has run, so all of them share the
+/// excerpt budget fairly.
+#[derive(Debug)]
+enum AgentFeedback {
+    Rendered(String),
+    Issues(Box<PendingIssues>),
+}
+
+/// A tool's remaining issues, rendered through its `issuesAgent` or
+/// `issuesChangedAgent` template once the excerpt is known.
+#[derive(Debug)]
+struct PendingIssues {
+    template: String,
+    /// Built-in template used when `template` fails to render.
+    fallback: String,
+    /// Which `messages` field `template` came from, for error notices.
+    field: &'static str,
+    tool: String,
+    tool_id: String,
+    project_root: PathBuf,
+    changed_files: Vec<String>,
+    issue_files: Vec<String>,
+    diagnostics: PathBuf,
+    output: String,
+}
+
+impl PendingIssues {
+    fn render(&self, excerpt: &str, notices: &mut Vec<UserNotice>) -> String {
+        let tool = TemplateTool {
+            name: &self.tool,
+            id: &self.tool_id,
+            project_root: &self.project_root,
+        };
+        let args = MessageArgs {
+            changed_files: &self.changed_files,
+            issue_files: &self.issue_files,
+            diagnostics_path: Some(&self.diagnostics),
+            excerpt,
+            ..MessageArgs::default()
+        };
+        render_with_fallback(
+            &self.template,
+            &self.fallback,
+            self.field,
+            &tool,
+            &args,
+            notices,
+        )
+    }
+}
+
+/// Agent excerpt limits shared by every tool in one immediate run, plus the
 /// absolute prefixes that excerpts rewrite to project-relative paths. The
-/// limits are the deferred reporter's (`deferredReporting.excerptMax*`).
+/// limits are the deferred reporter's (`deferredReporting.excerptMax*`) and
+/// are divided among the tools that report issues exactly as at Stop.
 #[derive(Debug, Default)]
-struct ExcerptBudget {
+struct ExcerptLimits {
     lines: usize,
     chars: usize,
     roots: Vec<PathBuf>,
 }
 
-impl ExcerptBudget {
+impl ExcerptLimits {
     fn new(reporting: &pkl::DeferredReporting, roots: Vec<PathBuf>) -> Self {
         Self {
             lines: reporting.excerpt_max_lines as usize,
@@ -2169,14 +2245,21 @@ impl ExcerptBudget {
         }
     }
 
-    /// A bounded, ANSI-free, project-relative excerpt of `output`, charged
-    /// against the remaining budget. A cut excerpt points at `log`.
-    fn take(&mut self, output: &str, log: &Path) -> String {
+    /// Bounded, ANSI-free, project-relative excerpts of `outputs`, one per
+    /// output, sharing the limits; a cut excerpt points at its log.
+    fn excerpts(&self, outputs: &[(&str, &Path)]) -> Vec<String> {
         let roots = self.roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-        let clipped = excerpt::clip(&excerpt::normalize(output, &roots), self.lines, self.chars);
-        self.lines = self.lines.saturating_sub(clipped.text.lines().count());
-        self.chars = self.chars.saturating_sub(clipped.text.chars().count());
-        excerpt::with_log_note(&clipped, Some(&log.to_string_lossy()))
+        let normalized = outputs
+            .iter()
+            .map(|(output, _)| excerpt::normalize(output, &roots))
+            .collect::<Vec<_>>();
+        excerpt::clip_shared(&normalized, self.lines, self.chars)
+            .iter()
+            .zip(outputs)
+            .map(|(clipped, (_, log))| {
+                excerpt::with_log_note(clipped, Some(&log.to_string_lossy()))
+            })
+            .collect()
     }
 }
 
@@ -2190,18 +2273,33 @@ struct AutoFixed {
     in_agent_line: bool,
 }
 
-/// Longest configuration error echoed in a user notice.
-const CONFIG_ERROR_NOTICE_CHARS: usize = 1_500;
+/// Longest configuration or tool error summary echoed in a user notice.
+const ERROR_SUMMARY_CHARS: usize = 300;
 
-fn truncate_chars(text: &str, limit: usize) -> String {
-    match text.char_indices().nth(limit) {
-        Some((end, _)) => format!("{}…", &text[..end]),
-        None => text.to_owned(),
-    }
+/// One-line summary of an error: its first line, plus the first informative
+/// line after it when the first only introduces the detail (`pkl eval failed
+/// for <file>:` followed by Pkl's `–– Pkl Error ––` banner and message).
+fn error_summary(detail: &str) -> String {
+    let mut lines = detail
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let first = lines.next().unwrap_or_default();
+    let summary = match first.strip_suffix(':') {
+        Some(head) => match lines.find(|line| !line.starts_with("––") && !line.starts_with("--"))
+        {
+            Some(next) => format!("{head}: {}", next.trim_start_matches("- ")),
+            None => head.to_owned(),
+        },
+        None => first.to_owned(),
+    };
+    excerpt::clip(&summary, 1, ERROR_SUMMARY_CHARS).text
 }
 
-/// One terse line naming every auto-fixed file and the tools that changed it:
-/// `velvet-glove auto-fixed a.py (Ruff), b.ts (Prettier); re-read before editing.`
+/// One terse line naming the auto-fixed files (at most
+/// [`pkl::AUTO_FIXED_LISTED_FILES`], as at Stop) and the tools that changed
+/// each: `velvet-glove auto-fixed a.py (Ruff), b.ts (Prettier); re-read
+/// before editing.`
 fn auto_fixed_line<'a>(entries: impl IntoIterator<Item = &'a AutoFixed>) -> Option<String> {
     let mut files = Vec::<(&str, Vec<&str>)>::new();
     for entry in entries {
@@ -2218,10 +2316,15 @@ fn auto_fixed_line<'a>(entries: impl IntoIterator<Item = &'a AutoFixed>) -> Opti
     (!files.is_empty()).then(|| {
         let listed = files
             .iter()
+            .take(pkl::AUTO_FIXED_LISTED_FILES)
             .map(|(file, tools)| format!("{file} ({})", tools.join(", ")))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("velvet-glove auto-fixed {listed}; re-read before editing.")
+        let more = match files.len().saturating_sub(pkl::AUTO_FIXED_LISTED_FILES) {
+            0 => String::new(),
+            more => format!(" and {more} more"),
+        };
+        format!("velvet-glove auto-fixed {listed}{more}; re-read before editing.")
     })
 }
 
@@ -2238,11 +2341,14 @@ impl RunnerPostToolUseOutput {
         self
     }
 
+    #[cfg(test)]
     fn with_agent_feedback(mut self, feedback: impl Into<String>) -> Self {
-        self.agent_feedback.push(feedback.into());
+        self.agent_feedback
+            .push(AgentFeedback::Rendered(feedback.into()));
         self
     }
 
+    #[cfg(test)]
     fn with_diagnostic_report(mut self, report: DiagnosticReport) -> Self {
         self.diagnostics.push(report);
         self
@@ -2253,14 +2359,41 @@ impl RunnerPostToolUseOutput {
         self
     }
 
+    #[cfg(test)]
     fn with_auto_fixed(mut self, auto_fixed: AutoFixed) -> Self {
         self.auto_fixed.push(auto_fixed);
         self
     }
 
-    fn with_excerpt_budget(mut self, budget: ExcerptBudget) -> Self {
-        self.excerpt_budget = budget;
+    fn with_excerpt_limits(mut self, limits: ExcerptLimits) -> Self {
+        self.excerpt_limits = limits;
         self
+    }
+
+    /// Render every pending issue message, dividing the excerpt budget
+    /// among them. Returns the agent-facing lines in order.
+    fn rendered_agent_feedback(&mut self) -> Vec<String> {
+        let feedback = std::mem::take(&mut self.agent_feedback);
+        let pending = feedback
+            .iter()
+            .filter_map(|entry| match entry {
+                AgentFeedback::Issues(issues) => {
+                    Some((issues.output.as_str(), issues.diagnostics.as_path()))
+                }
+                AgentFeedback::Rendered(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut excerpts = self.excerpt_limits.excerpts(&pending).into_iter();
+        feedback
+            .iter()
+            .map(|entry| match entry {
+                AgentFeedback::Rendered(text) => text.clone(),
+                AgentFeedback::Issues(issues) => {
+                    let excerpt = excerpts.next().unwrap_or_default();
+                    issues.render(&excerpt, &mut self.notices)
+                }
+            })
+            .collect()
     }
 }
 
@@ -2360,6 +2493,7 @@ struct LoweringWarningDiagnosticArtifact {
 fn record_antigravity_lowering_warning(
     target: Option<&LoweringWarningArtifact>,
     output: &RunnerPostToolUseOutput,
+    agent_feedback: &[String],
     rendered_user: &[String],
     rendered_agent: &str,
 ) -> hookkit_core::Result<PathBuf> {
@@ -2397,7 +2531,7 @@ fn record_antigravity_lowering_warning(
         unavailable: LoweringWarningMessages {
             user_notices: &output.notices,
             diagnostics,
-            agent_feedback: &output.agent_feedback,
+            agent_feedback,
             rendered_user,
             rendered_agent,
         },
@@ -2447,10 +2581,27 @@ fn lower_domain_outcome(
 
 fn lower_report(
     harness: &HarnessId,
-    output: RunnerPostToolUseOutput,
+    mut output: RunnerPostToolUseOutput,
     lowering_warning_artifact: Option<&LoweringWarningArtifact>,
 ) -> hookkit_core::Result<PostToolUseOutput> {
-    if let Some(message) = output.harness_block {
+    // Agent: the shared auto-fix line (tools on the default template) plus
+    // each tool's own feedback. Rendering may add notices, so it comes first.
+    let agent_feedback = output.rendered_agent_feedback();
+    let context = auto_fixed_line(output.auto_fixed.iter().filter(|entry| entry.in_agent_line))
+        .into_iter()
+        .chain(agent_feedback.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if let Some(message) = output.harness_block.take() {
+        // A block replaces the normal channels, so it carries what the agent
+        // would otherwise have been told: files earlier tools rewrote must be
+        // re-read before the next edit.
+        let message = [context.as_str(), message.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
         return match harness.as_str() {
             "claude-code" => Ok(PostToolUseOutput::Claude(
                 hookkit_claude::protocol::PostToolUseOutput::feedback_error(message),
@@ -2473,11 +2624,6 @@ fn lower_report(
         .chain(output.notices.iter().map(format_notice))
         .collect::<Vec<_>>();
     let user_message = user_lines.join("\n");
-    let context = auto_fixed_line(output.auto_fixed.iter().filter(|entry| entry.in_agent_line))
-        .into_iter()
-        .chain(output.agent_feedback.iter().cloned())
-        .collect::<Vec<_>>()
-        .join("\n");
 
     match harness.as_str() {
         "claude-code" => {
@@ -2521,6 +2667,7 @@ fn lower_report(
                 let path = record_antigravity_lowering_warning(
                     lowering_warning_artifact,
                     &output,
+                    &agent_feedback,
                     &rendered_user,
                     &context,
                 )?;
@@ -2537,11 +2684,13 @@ fn lower_report(
     }
 }
 
+/// A user notice as one line attributed to velvet-glove, worded like the
+/// Stop notices rather than tagged with a severity.
 fn format_notice(notice: &UserNotice) -> String {
-    match notice.level {
-        NoticeLevel::Info => notice.text.clone(),
-        NoticeLevel::Warning => format!("warning: {}", notice.text),
-        NoticeLevel::Error => format!("error: {}", notice.text),
+    if notice.text.starts_with("velvet-glove") {
+        notice.text.clone()
+    } else {
+        format!("velvet-glove: {}", notice.text)
     }
 }
 
@@ -2876,14 +3025,18 @@ fn convert_messages(messages: &pkl::Messages) -> ToolMessages {
 // File matching
 // ----------------------------------------------------------------------------
 
-struct FileMatcher {
+/// File selection shared by the hooks and the CLI: globs match
+/// project-relative, `/`-separated paths; an empty include list selects every
+/// file; excludes always win.
+pub struct FileMatcher {
     include: GlobSet,
     exclude: GlobSet,
     include_all: bool,
 }
 
 impl FileMatcher {
-    fn new(config: &FileSelection) -> hookkit_core::Result<Self> {
+    /// Compile a selection; an invalid glob is an error.
+    pub fn new(config: &FileSelection) -> hookkit_core::Result<Self> {
         Ok(Self {
             include: build_globset(&config.include)?,
             exclude: build_globset(&config.exclude)?,
@@ -2891,16 +3044,20 @@ impl FileMatcher {
         })
     }
 
-    /// Globs match the project-relative path. Only a path outside the project
-    /// root is matched as an absolute path, so unanchored excludes such as
-    /// `**/target/**` never fire on the directories *containing* the project.
-    fn matches(&self, absolute_path: &Path, project_root: &Path) -> bool {
-        let path = slash_path(
-            absolute_path
-                .strip_prefix(project_root)
-                .unwrap_or(absolute_path),
-        );
-        (self.include_all || self.include.is_match(&path)) && !self.exclude.is_match(&path)
+    /// Whether `absolute_path` is selected. Globs match its path relative to
+    /// `project_root`, so unanchored excludes such as `**/target/**` never
+    /// fire on the directories *containing* the project. A path outside the
+    /// project root is never selected: a project's policy applies only to
+    /// its own files.
+    pub fn matches(&self, absolute_path: &Path, project_root: &Path) -> bool {
+        absolute_path
+            .strip_prefix(project_root)
+            .is_ok_and(|relative| self.matches_relative(&slash_path(relative)))
+    }
+
+    /// Whether a project-relative, `/`-separated path is selected.
+    pub fn matches_relative(&self, relative: &str) -> bool {
+        (self.include_all || self.include.is_match(relative)) && !self.exclude.is_match(relative)
     }
 }
 
@@ -2970,6 +3127,10 @@ fn nearest_workspace_indicator(
     project_root: &Path,
     indicator: &str,
 ) -> Option<PathBuf> {
+    // Never look above the project root, or outside it for an outside file.
+    if !path.starts_with(project_root) {
+        return None;
+    }
     let mut current = path.parent();
     while let Some(dir) = current {
         let candidate = dir.join(indicator);
@@ -3012,7 +3173,12 @@ struct CompletedToolOutcome {
     /// reported issues or, for a tool without a verifier, every phase that
     /// did. Empty when the outcome is clean.
     issue_output: String,
+    /// Files the issues are attributed to: those the deciding output names,
+    /// or every job file when it names none. Empty when the output names
+    /// only other files.
     files: Vec<PathBuf>,
+    /// Existing files outside the job that the output names instead.
+    out_of_scope: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3188,6 +3354,27 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
         (IssueState::Issues, Some(_)) => verifier_issue_output,
         (IssueState::Issues, None) => phase_issue_output,
     };
+    let issue_output = issue_output.join("\n");
+    // As at Stop, blame the files the deciding output names: a workspace-wide
+    // check reporting a pre-existing issue elsewhere must not be pinned on the
+    // file this call changed.
+    let (files, out_of_scope) = match issues {
+        IssueState::Clean => (job.files.clone(), Vec::new()),
+        IssueState::Issues => {
+            let scope = job
+                .files
+                .iter()
+                .chain(&changed_files)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let bases = resolution_bases(&job.workspace_dir, context.project_root);
+            match attribute(&issue_output, &scope, &bases) {
+                Attribution::Named(files) => (files, Vec::new()),
+                Attribution::OutOfScope(others) => (Vec::new(), others),
+                Attribution::Unnamed => (job.files.clone(), Vec::new()),
+            }
+        }
+    };
     let changes = if changed_files.is_empty() {
         ChangeState::Unchanged
     } else {
@@ -3200,8 +3387,9 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
         issues,
         changes,
         diagnostics: format_logs(&logs),
-        issue_output: issue_output.join("\n"),
-        files: job.files.clone(),
+        issue_output,
+        files,
+        out_of_scope,
     })
 }
 
@@ -3263,28 +3451,56 @@ fn render_command(phase: &ToolPhase, job: &ToolJob, context: &ToolContext<'_>) -
 }
 
 /// Resolve a bare program name against the configured project-local bin
-/// directories: each directory (in order) is tried from the job's workspace up
-/// to the project root, nearest first. Anything else is left to `PATH`.
+/// directories, searched from each job file's directory and the job's
+/// workspace up to the project root (see [`local_program`]). Anything else is
+/// left to `PATH`, or run as a path relative to the command's directory.
 fn resolve_program(program: &str, job: &ToolJob, context: &ToolContext<'_>) -> String {
-    if Path::new(program).components().count() != 1 {
-        return program.to_owned();
-    }
-    for bin_dir in &context.spec.local_bin_dirs {
-        for dir in job
-            .workspace_dir
-            .ancestors()
-            .take_while(|dir| dir.starts_with(context.project_root))
-        {
-            let candidate = dir.join(bin_dir).join(program);
-            if is_executable_file(&candidate) {
-                return path_arg(&candidate);
-            }
-        }
-    }
-    program.to_owned()
+    let mut starts = job
+        .files
+        .iter()
+        .filter_map(|file| file.parent())
+        .collect::<Vec<_>>();
+    starts.push(&job.workspace_dir);
+    let mut seen = BTreeSet::new();
+    starts.retain(|start| seen.insert(*start));
+    local_program(
+        program,
+        &starts,
+        context.project_root,
+        &context.spec.local_bin_dirs,
+    )
+    .map_or_else(|| program.to_owned(), |path| path_arg(&path))
 }
 
-fn is_executable_file(path: &Path) -> bool {
+/// Find a bare program name (one with no path separator) in project-local
+/// bin directories the way the hooks do: for each `local_bin_dirs` entry in
+/// order, every directory from each of `search_from` up to `project_root`,
+/// nearest first; the first executable file wins. So a package's own
+/// `node_modules/.bin/eslint` beats the repository root's. `None` means the
+/// program runs as given: through `PATH`, or as a path.
+pub fn local_program(
+    program: &str,
+    search_from: &[&Path],
+    project_root: &Path,
+    local_bin_dirs: &[String],
+) -> Option<PathBuf> {
+    if Path::new(program).components().count() != 1 {
+        return None;
+    }
+    local_bin_dirs.iter().find_map(|bin_dir| {
+        search_from.iter().find_map(|start| {
+            start
+                .ancestors()
+                .take_while(|dir| dir.starts_with(project_root))
+                .map(|dir| dir.join(bin_dir).join(program))
+                .find(|candidate| is_executable_file(candidate))
+        })
+    })
+}
+
+/// Whether `path` is a file the hooks can execute (on Unix, one with an
+/// execute bit).
+pub fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
@@ -3660,6 +3876,7 @@ fn accumulate_outcomes(
 ) -> hookkit_core::Result<ToolBatchStatus> {
     let mut changed_files = BTreeSet::new();
     let mut issue_files = BTreeSet::new();
+    let mut out_of_scope_files = BTreeSet::new();
     let mut issue_diagnostics = Vec::new();
     let mut issue_outputs = Vec::new();
     let mut failure_diagnostics = Vec::new();
@@ -3672,10 +3889,16 @@ fn accumulate_outcomes(
                     changed_files.extend(files);
                 }
                 if completed.issues == IssueState::Issues {
-                    issue_files.extend(completed.files);
-                    issue_diagnostics.push(completed.diagnostics);
-                    if !issue_outputs.contains(&completed.issue_output) {
-                        issue_outputs.push(completed.issue_output);
+                    if completed.files.is_empty() {
+                        // The output names only files this call did not
+                        // change: not the agent's problem right now.
+                        out_of_scope_files.extend(completed.out_of_scope);
+                    } else {
+                        issue_files.extend(completed.files);
+                        issue_diagnostics.push(completed.diagnostics);
+                        if !issue_outputs.contains(&completed.issue_output) {
+                            issue_outputs.push(completed.issue_output);
+                        }
                     }
                 }
             }
@@ -3705,6 +3928,7 @@ fn accumulate_outcomes(
         operational_failure: !unavailable.is_empty() || !failure_diagnostics.is_empty(),
         issues: !issue_diagnostics.is_empty(),
     };
+    let tool = context.template_tool();
 
     if !unavailable.is_empty() {
         match missing_tool_policy {
@@ -3715,8 +3939,9 @@ fn accumulate_outcomes(
                         phase,
                         executable,
                         install_hint.as_deref(),
-                    )?;
-                    *output = std::mem::take(output).with_user_notice(UserNotice::warning(message));
+                        &mut output.notices,
+                    );
+                    output.notices.push(UserNotice::warning(message));
                 }
             }
             pkl::MissingToolPolicy::HardFailure => {
@@ -3730,7 +3955,8 @@ fn accumulate_outcomes(
                         phase,
                         executable,
                         install_hint.as_deref(),
-                    )?;
+                        &mut output.notices,
+                    );
                     *had_harness_block_message = Some(message);
                 }
                 return Ok(status);
@@ -3749,17 +3975,27 @@ fn accumulate_outcomes(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let artifact = write_diagnostics("tool-failure", &diagnostics, context, ctx)?;
-        let (phase, _, error, _) = &failure_diagnostics[0];
-        let message = render_failed_message(context, &artifact, phase, error.as_deref())?;
-        *output = std::mem::take(output)
-            .with_user_notice(UserNotice::error(message))
-            .with_diagnostic_report(report_with_artifact(
-                format!("{} failure diagnostics", context.spec.display_name),
-                diagnostics,
-                artifact,
-                context.project_root,
-            ));
+        let artifact = write_diagnostics(
+            "tool-failure",
+            &diagnostics,
+            context,
+            ctx,
+            &mut output.notices,
+        )?;
+        let (phase, exit_code, error, _) = &failure_diagnostics[0];
+        let message = render_failed_message(
+            context,
+            &artifact,
+            (phase, *exit_code, error.as_deref()),
+            &mut output.notices,
+        );
+        output.notices.push(UserNotice::error(message));
+        output.diagnostics.push(report_with_artifact(
+            format!("{} failure diagnostics", context.spec.display_name),
+            diagnostics,
+            artifact,
+            context.project_root,
+        ));
     }
 
     let changed_paths = changed_files
@@ -3778,152 +4014,220 @@ fn accumulate_outcomes(
             .filter(|diagnostics| !diagnostics.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        let artifact = write_diagnostics("tool-issues", &diagnostics, context, ctx)?;
-        let excerpt = output
-            .excerpt_budget
-            .take(&issue_outputs.join("\n"), &artifact);
-        *output = std::mem::take(output)
-            .with_user_notice(UserNotice::warning(format!(
-                "{}: issues remain in {}; diagnostics: {}",
-                context.spec.display_name,
-                issue_paths.join(", "),
-                artifact.display()
-            )))
-            .with_diagnostic_report(report_with_artifact(
-                format!("{} diagnostics", context.spec.display_name),
-                diagnostics,
-                artifact.clone(),
-                context.project_root,
-            ));
-
-        let template = if changed_paths.is_empty() {
-            context.spec.messages.issues_agent.clone()
-        } else {
-            context.spec.messages.issues_changed_agent.clone()
-        };
-        let rendered = render_template(
-            &template,
+        let artifact = write_diagnostics(
+            "tool-issues",
+            &diagnostics,
             context,
-            &changed_paths,
-            &issue_paths,
-            Some(&artifact),
-            None,
-            &excerpt,
+            ctx,
+            &mut output.notices,
         )?;
-        *output = std::mem::take(output).with_agent_feedback(rendered);
+        output.notices.push(UserNotice::warning(format!(
+            "{}: issues remain in {}; diagnostics: {}",
+            context.spec.display_name,
+            issue_paths.join(", "),
+            artifact.display()
+        )));
+        output.diagnostics.push(report_with_artifact(
+            format!("{} diagnostics", context.spec.display_name),
+            diagnostics,
+            artifact.clone(),
+            context.project_root,
+        ));
+
+        let (template, fallback, field) = if changed_paths.is_empty() {
+            (
+                &context.spec.messages.issues_agent,
+                pkl::default_issues_agent(),
+                "issuesAgent",
+            )
+        } else {
+            (
+                &context.spec.messages.issues_changed_agent,
+                pkl::default_issues_changed_agent(),
+                "issuesChangedAgent",
+            )
+        };
+        output
+            .agent_feedback
+            .push(AgentFeedback::Issues(Box::new(PendingIssues {
+                template: template.clone(),
+                fallback,
+                field,
+                tool: tool.name.to_owned(),
+                tool_id: tool.id.to_owned(),
+                project_root: context.project_root.to_path_buf(),
+                changed_files: changed_paths,
+                issue_files: issue_paths,
+                diagnostics: artifact,
+                output: issue_outputs.join("\n"),
+            })));
     } else if !changed_paths.is_empty() {
         // Tools on the default template share one consolidated agent line;
-        // a customised `cleanChangedAgent` is rendered as configured.
+        // a customised `cleanChangedAgent` is rendered as configured (or, if
+        // it cannot be, the tool joins the shared line).
         let template = &context.spec.messages.clean_changed_agent;
-        let in_agent_line = template == DEFAULT_CLEAN_CHANGED_AGENT;
+        let mut in_agent_line = *template == pkl::default_clean_changed_agent();
         if !in_agent_line {
-            let rendered = render_template(
-                template,
-                context,
-                &changed_paths,
-                &issue_paths,
-                None,
-                None,
-                "",
-            )?;
-            *output = std::mem::take(output).with_agent_feedback(rendered);
+            let args = MessageArgs {
+                changed_files: &changed_paths,
+                ..MessageArgs::default()
+            };
+            match render_template(template, &tool, &args) {
+                Ok(rendered) => output
+                    .agent_feedback
+                    .push(AgentFeedback::Rendered(rendered)),
+                Err(error) => {
+                    output.notices.push(template_failure_notice(
+                        &tool,
+                        "cleanChangedAgent",
+                        &error,
+                    ));
+                    in_agent_line = true;
+                }
+            }
         }
-        *output = std::mem::take(output).with_auto_fixed(AutoFixed {
+        output.auto_fixed.push(AutoFixed {
             tool: context.spec.display_name.clone(),
             files: changed_paths,
             in_agent_line,
         });
     }
 
+    if !out_of_scope_files.is_empty() {
+        let files = out_of_scope_files
+            .iter()
+            .map(|path| rel_display(path, context.project_root))
+            .collect::<Vec<_>>();
+        let more = if files.len() > 5 { ", …" } else { "" };
+        output.notices.push(UserNotice::info(format!(
+            "velvet-glove: not reporting issues outside the files this call changed: {} ({}{more}).",
+            context.spec.display_name,
+            files[..files.len().min(5)].join(", ")
+        )));
+    }
+
     status.operational_failure = status.operational_failure || *had_hard_failure;
     Ok(status)
 }
 
+/// The notice for a missing executable, from `messages.unavailableUser` when
+/// set, else worded as at Stop.
 fn render_unavailable_message(
     context: &ToolContext<'_>,
     phase: &str,
     executable: &str,
     install_hint: Option<&str>,
-) -> hookkit_core::Result<String> {
+    notices: &mut Vec<UserNotice>,
+) -> String {
     if let Some(template) = context.spec.messages.unavailable_user.as_ref() {
-        return render_template(
-            template,
-            context,
-            &[],
-            &[],
-            None,
-            Some((phase, executable, install_hint)),
-            "",
-        );
+        let tool = context.template_tool();
+        let args = MessageArgs {
+            phase_error: Some((phase, executable, install_hint)),
+            ..MessageArgs::default()
+        };
+        match render_template(template, &tool, &args) {
+            Ok(message) => return message,
+            Err(error) => notices.push(template_failure_notice(&tool, "unavailableUser", &error)),
+        }
     }
-
-    let mut message = format!(
-        "{}: `{}` is unavailable while running phase `{phase}`",
-        context.spec.display_name, executable
-    );
-    if let Some(hint) = install_hint {
-        message.push_str(&format!("; {hint}"));
-    }
-    Ok(message)
+    let hint = install_hint
+        .map(|hint| format!("; {hint}"))
+        .unwrap_or_default();
+    format!(
+        "velvet-glove could not run {} ({executable} not found{hint}).",
+        context.spec.display_name
+    )
 }
 
+/// The notice for a phase that failed operationally, from
+/// `messages.failedUser` when set, else worded as at Stop.
 fn render_failed_message(
     context: &ToolContext<'_>,
     diagnostics_path: &Path,
-    phase: &str,
-    error: Option<&str>,
-) -> hookkit_core::Result<String> {
+    (phase, exit_code, error): (&str, Option<i32>, Option<&str>),
+    notices: &mut Vec<UserNotice>,
+) -> String {
     if let Some(template) = context.spec.messages.failed_user.as_ref() {
-        return render_template(
-            template,
-            context,
-            &[],
-            &[],
-            Some(diagnostics_path),
-            Some((phase, "", None)),
-            "",
-        );
+        let tool = context.template_tool();
+        let args = MessageArgs {
+            diagnostics_path: Some(diagnostics_path),
+            phase_error: Some((phase, "", None)),
+            ..MessageArgs::default()
+        };
+        match render_template(template, &tool, &args) {
+            Ok(message) => return message,
+            Err(error) => notices.push(template_failure_notice(&tool, "failedUser", &error)),
+        }
     }
-
-    let reason = error.map(|error| format!(" ({error})")).unwrap_or_default();
-    Ok(format!(
-        "{}: phase `{phase}` failed{reason}; diagnostics: {}",
+    let reason = match (error, exit_code) {
+        (Some(error), _) => format!("{phase}: {error}"),
+        (None, Some(code)) => format!("{phase} failed with exit code {code}"),
+        (None, None) => format!("{phase} was terminated by a signal"),
+    };
+    format!(
+        "velvet-glove could not run {} ({reason}; log: {}).",
         context.spec.display_name,
         diagnostics_path.display()
-    ))
+    )
+}
+
+/// The tool identity a message template sees.
+struct TemplateTool<'a> {
+    name: &'a str,
+    id: &'a str,
+    project_root: &'a Path,
+}
+
+impl ToolContext<'_> {
+    fn template_tool(&self) -> TemplateTool<'_> {
+        TemplateTool {
+            name: &self.spec.display_name,
+            id: &self.spec.id,
+            project_root: self.project_root,
+        }
+    }
+}
+
+/// Values a message template may reference besides the tool.
+#[derive(Default)]
+struct MessageArgs<'a> {
+    changed_files: &'a [String],
+    issue_files: &'a [String],
+    diagnostics_path: Option<&'a Path>,
+    /// Phase, executable, and install hint of a failed or missing command.
+    phase_error: Option<(&'a str, &'a str, Option<&'a str>)>,
+    excerpt: &'a str,
 }
 
 fn render_template(
     template: &str,
-    context: &ToolContext<'_>,
-    changed_files: &[String],
-    issue_files: &[String],
-    diagnostics_path: Option<&Path>,
-    phase_error: Option<(&str, &str, Option<&str>)>,
-    excerpt: &str,
+    tool: &TemplateTool<'_>,
+    args: &MessageArgs<'_>,
 ) -> hookkit_core::Result<String> {
-    let diagnostics_path_text = diagnostics_path
+    let diagnostics_path_text = args
+        .diagnostics_path
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
-    let diagnostics_rel_path = diagnostics_path
-        .and_then(|path| path.strip_prefix(context.project_root).ok())
+    let diagnostics_rel_path = args
+        .diagnostics_path
+        .and_then(|path| path.strip_prefix(tool.project_root).ok())
         .map(slash_path)
         .unwrap_or_default();
-    let (phase, executable, install_hint) = phase_error.unwrap_or(("", "", None));
+    let (phase, executable, install_hint) = args.phase_error.unwrap_or(("", "", None));
     let json_context = serde_json::json!({
-        "tool": context.spec.display_name,
-        "tool_id": context.spec.id,
-        "changed_files": changed_files,
-        "issue_files": issue_files,
+        "tool": tool.name,
+        "tool_id": tool.id,
+        "changed_files": args.changed_files,
+        "issue_files": args.issue_files,
         "diagnostics_path": diagnostics_path_text,
         "diagnostics_absolute_path": diagnostics_path_text,
         "diagnostics_rel_path": diagnostics_rel_path,
         "diagnostics_project_path": diagnostics_rel_path,
-        "project_root": context.project_root.to_string_lossy(),
+        "project_root": tool.project_root.to_string_lossy(),
         "phase": phase,
         "executable": executable,
         "install_hint": install_hint.unwrap_or(""),
-        "excerpt": excerpt,
+        "excerpt": args.excerpt,
     });
 
     Environment::new()
@@ -3931,29 +4235,80 @@ fn render_template(
         .map_err(|e| invalid_data(format!("failed to render message template: {e}")))
 }
 
+/// Render `template`, or the built-in `fallback` with a user notice when the
+/// configured template cannot be rendered: the agent must still hear about
+/// changed files and remaining issues.
+fn render_with_fallback(
+    template: &str,
+    fallback: &str,
+    field: &str,
+    tool: &TemplateTool<'_>,
+    args: &MessageArgs<'_>,
+    notices: &mut Vec<UserNotice>,
+) -> String {
+    render_template(template, tool, args).unwrap_or_else(|error| {
+        notices.push(template_failure_notice(tool, field, &error));
+        render_template(fallback, tool, args).unwrap_or_default()
+    })
+}
+
+fn template_failure_notice(
+    tool: &TemplateTool<'_>,
+    field: &str,
+    error: &HookkitError,
+) -> UserNotice {
+    UserNotice::warning(format!(
+        "velvet-glove: {}: messages.{field} could not be rendered ({}); used the default",
+        tool.name,
+        error_summary(&error.to_string())
+    ))
+}
+
+/// Default home of immediate-mode diagnostics, outside the project.
+fn immediate_log_directory() -> PathBuf {
+    std::env::temp_dir()
+        .join("velvet-glove")
+        .join("state")
+        .join("post-tool-immediate")
+}
+
+/// Write full diagnostics to the configured `diagnosticsDirectory`, or to the
+/// default location (with a user notice) when that cannot be written.
 fn write_diagnostics(
     label: &str,
     diagnostics: &str,
     context: &ToolContext<'_>,
     ctx: &RuntimeContext<'_>,
+    notices: &mut Vec<UserNotice>,
 ) -> hookkit_core::Result<PathBuf> {
-    let base_dir = match (
-        context.spec.diagnostics_directory.as_deref(),
-        context.global_diagnostics_dir,
-    ) {
-        (Some(dir), _) => absolute_from(Path::new(dir), context.project_root),
-        (None, Some(dir)) => absolute_from(Path::new(dir), context.project_root),
-        (None, None) => std::env::temp_dir()
-            .join("velvet-glove")
-            .join("state")
-            .join("post-tool-immediate"),
-    };
-    let manager = ArtifactManager::new(base_dir)?;
+    let label = format!("{}-{label}", context.spec.id);
+    let configured = context
+        .spec
+        .diagnostics_directory
+        .as_deref()
+        .or(context.global_diagnostics_dir)
+        .map(|dir| absolute_from(Path::new(dir), context.project_root));
+    if let Some(directory) = configured {
+        match write_immediate_artifact(&directory, &label, diagnostics, ctx) {
+            Ok(path) => return Ok(path),
+            Err(error) => notices.push(UserNotice::warning(format!(
+                "velvet-glove: cannot write diagnostics to {} ({error}); using the default location",
+                directory.display()
+            ))),
+        }
+    }
+    write_immediate_artifact(&immediate_log_directory(), &label, diagnostics, ctx)
+}
+
+fn write_immediate_artifact(
+    directory: &Path,
+    label: &str,
+    text: &str,
+    ctx: &RuntimeContext<'_>,
+) -> hookkit_core::Result<PathBuf> {
+    let manager = ArtifactManager::new(directory)?;
     manager
-        .write_text(
-            &runner_artifact_key(ctx, format!("{}-{label}", context.spec.id)),
-            diagnostics,
-        )
+        .write_text(&runner_artifact_key(ctx, label.to_owned()), text)
         .map_err(Into::into)
 }
 
@@ -4091,6 +4446,10 @@ mod tests {
         .unwrap();
         let root = Path::new("/home/user/target/project");
         assert!(matcher.matches(&root.join("src/a.py"), root));
+        assert!(
+            !matcher.matches(Path::new("/home/user/scratch/plan.py"), root),
+            "a file outside the project is never selected"
+        );
         for excluded in [
             "node_modules/x.py",
             "web/node_modules/pkg/x.py",
@@ -4109,30 +4468,132 @@ mod tests {
     #[test]
     fn immediate_excerpts_are_plain_project_relative_and_share_one_budget() {
         let reporting = pkl::DeferredReporting {
-            excerpt_max_lines: 3,
+            excerpt_max_lines: 12,
             ..Default::default()
         };
-        let mut budget = ExcerptBudget::new(
+        let limits = ExcerptLimits::new(
             &reporting,
             display_roots(Path::new("/private/repo"), Path::new("/repo")),
         );
         let log = Path::new("/tmp/vg/issues.txt");
-        assert_eq!(
-            budget.take(
+        let long = (1..=20)
+            .map(|line| format!("b.py:{line}: E{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let excerpts = limits.excerpts(&[
+            (
                 "\u{1b}[31m/private/repo/src/a.py:1:1\u{1b}[0m: E1\n/repo/src/a.py:2:1: E2\n",
-                log
+                log,
             ),
-            "src/a.py:1:1: E1\nsrc/a.py:2:1: E2"
+            (&long, log),
+            ("c.py:1: E5", log),
+        ]);
+        assert_eq!(excerpts[0], "src/a.py:1:1: E1\nsrc/a.py:2:1: E2");
+        // A verbose tool gets its share, not the whole budget ...
+        assert!(
+            excerpts[1].ends_with("…truncated; full log: /tmp/vg/issues.txt"),
+            "{}",
+            excerpts[1]
         );
-        // One line of the shared budget is left for the next tool.
         assert_eq!(
-            budget.take("b.py:1: E3\nb.py:2: E4", log),
-            "b.py:1: E3\n…truncated; full log: /tmp/vg/issues.txt"
+            excerpts[1].lines().count(),
+            5 + 1,
+            "its share plus the log note"
+        );
+        // ... so a later tool is still quoted.
+        assert_eq!(excerpts[2], "c.py:1: E5");
+    }
+
+    #[test]
+    fn pending_issue_messages_fall_back_to_the_default_template() {
+        let mut output = RunnerPostToolUseOutput::default()
+            .with_excerpt_limits(ExcerptLimits::new(&Default::default(), Vec::new()));
+        output
+            .agent_feedback
+            .push(AgentFeedback::Issues(Box::new(PendingIssues {
+                template: "{{ tool | nosuchfilter }}".into(),
+                fallback: pkl::default_issues_changed_agent(),
+                field: "issuesChangedAgent",
+                tool: "Fmt".into(),
+                tool_id: "fmt".into(),
+                project_root: PathBuf::from("/repo"),
+                changed_files: vec!["src/a.txt".into()],
+                issue_files: vec!["src/a.txt".into()],
+                diagnostics: PathBuf::from("/tmp/fmt.txt"),
+                output: "src/a.txt:1: bad".into(),
+            })));
+        let rendered = output.rendered_agent_feedback();
+        assert_eq!(
+            rendered,
+            vec![
+                "velvet-glove: Fmt changed src/a.txt (re-read before editing); issues remain in src/a.txt:\nsrc/a.txt:1: bad"
+            ]
+        );
+        assert!(
+            format_notice(&output.notices[0]).starts_with(
+                "velvet-glove: Fmt: messages.issuesChangedAgent could not be rendered"
+            ),
+            "{:?}",
+            output.notices
+        );
+    }
+
+    #[test]
+    fn auto_fix_line_names_at_most_ten_files() {
+        let files = (0..14)
+            .map(|n| format!("src/f{n:02}.rs"))
+            .collect::<Vec<_>>();
+        let line = auto_fixed_line(&[AutoFixed {
+            tool: "cargo fmt".into(),
+            files,
+            in_agent_line: true,
+        }])
+        .unwrap();
+        assert!(line.contains("src/f09.rs (cargo fmt)"), "{line}");
+        assert!(!line.contains("src/f10.rs"), "{line}");
+        assert!(
+            line.ends_with(" and 4 more; re-read before editing."),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_harness_block_still_tells_the_agent_what_changed() {
+        let output = RunnerPostToolUseOutput::default()
+            .with_auto_fixed(AutoFixed {
+                tool: "Ruff".into(),
+                files: vec!["src/a.py".into()],
+                in_agent_line: true,
+            })
+            .with_agent_feedback("Custom rewrote web/c.ts")
+            .with_harness_block("velvet-glove could not run ESLint (eslint not found).");
+        let PostToolUseOutput::Claude(native) =
+            lower_report(&HarnessId::CLAUDE_CODE, output, None).unwrap()
+        else {
+            panic!("expected Claude output");
+        };
+        let emission = hookkit_claude::protocol::PostToolUse::emit(native).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(emission.stderr()).trim_end(),
+            "velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.\nCustom rewrote web/c.ts\nvelvet-glove could not run ESLint (eslint not found)."
+        );
+    }
+
+    #[test]
+    fn error_summaries_keep_the_informative_line() {
+        assert_eq!(
+            error_summary(
+                "pkl eval failed for /p/.velvet-glove/post-tool-use.pkl:\n–– Pkl Error ––\nExpected value of type `Int`, but got type `String`.\n\n2 | jobs = \"x\"\n"
+            ),
+            "pkl eval failed for /p/.velvet-glove/post-tool-use.pkl: Expected value of type `Int`, but got type `String`."
         );
         assert_eq!(
-            budget.take("c.py:1: E5", log),
-            "(output omitted; full log: /tmp/vg/issues.txt)"
+            error_summary(
+                "invalid Velvet Glove configuration:\n- ruff (ruff): invalid file glob `src/{a`"
+            ),
+            "invalid Velvet Glove configuration: ruff (ruff): invalid file glob `src/{a`"
         );
+        assert_eq!(error_summary("plain failure"), "plain failure");
     }
 
     fn emitted_json(output: PostToolUseOutput) -> (serde_json::Value, Vec<u8>) {
@@ -4175,7 +4636,7 @@ mod tests {
             );
             assert_eq!(
                 json["systemMessage"],
-                "velvet-glove auto-fixed src/a.py (Ruff, Black), src/b.py (Ruff), web/c.ts (Custom); re-read before editing.\nwarning: Lint: `lint` is unavailable",
+                "velvet-glove auto-fixed src/a.py (Ruff, Black), src/b.py (Ruff), web/c.ts (Custom); re-read before editing.\nvelvet-glove: Lint: `lint` is unavailable",
                 "{harness}"
             );
             assert_eq!(
@@ -4903,6 +5364,23 @@ mod tests {
         assert_eq!(resolve("absent", &job), "absent");
         assert_eq!(resolve("/usr/bin/env", &job), "/usr/bin/env");
         assert_ne!(resolve("eslint", &job), path_arg(&venv_eslint));
+
+        // Without a workspace indicator the job runs from the project root,
+        // but a package's own install still wins for its files.
+        let package_job = ToolJob {
+            workspace_dir: root.clone(),
+            workspace_indicator: None,
+            files: vec![workspace.join("src/a.ts")],
+        };
+        assert_eq!(resolve("eslint", &package_job), path_arg(&nested_eslint));
+        // A policy above the repository still finds the repository's tools.
+        let outer = local_program(
+            "eslint",
+            &[workspace.join("src").as_path()],
+            root.parent().unwrap(),
+            &pkl::default_local_bin_dirs(),
+        );
+        assert_eq!(outer, Some(nested_eslint.clone()));
 
         std::fs::remove_dir_all(&root).ok();
     }
