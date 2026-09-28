@@ -16,7 +16,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "contextlint"
   displayName = "contextlint"
   executable = "contextlint"
-  installHint = "install contextlint with `npm install -g @contextlint/cli` (not the nonexistent `contextlint` package)"
+  installHint = "install contextlint with `npm install -g @contextlint/cli`"
   workspaceIndicator = "contextlint.config.json"
 
   files = new Config.FileSelection {

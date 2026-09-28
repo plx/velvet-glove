@@ -51,7 +51,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phaseOrder = new Listing<String> { "verify" }
 
   detect = new Config.Detect {
-    role = "prose-lint"
     note = "opt-in only: harper is zero-config and has no project indicator, so init never auto-suggests it"
   }
 }

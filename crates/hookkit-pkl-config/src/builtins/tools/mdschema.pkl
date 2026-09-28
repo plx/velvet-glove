@@ -24,7 +24,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "mdschema"
   displayName = "mdschema"
   executable = "mdschema"
-  installHint = "install mdschema with `go install github.com/jackchuka/mdschema/cmd/mdschema@latest` — not the unrelated npm `mdschema` package"
+  installHint = "install mdschema with `go install github.com/jackchuka/mdschema/cmd/mdschema@latest`"
   workspaceIndicator = ".mdschema.yml"
 
   files = new Config.FileSelection {
