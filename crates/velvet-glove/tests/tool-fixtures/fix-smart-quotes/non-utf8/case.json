@@ -1,0 +1,1 @@
+{"outcome": "clean", "note": "hk util fix-smart-quotes (fix mode) truncates a non-UTF-8 file to zero bytes and exits 0; --check reports it clean. The file must survive unchanged."}

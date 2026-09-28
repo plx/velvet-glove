@@ -1,12 +1,19 @@
 /// check-case-conflict — detect filenames that only differ in case.
 ///
-// DRAFT: hk implements this inside its own binary by enumerating the git
-// index (or the candidate path list) and lowercasing every entry to find
-// duplicates. There is no single-`executable` + argv invocation that does
-// the same job portably: the natural shell pipeline is
-// `git ls-files | awk '{print tolower($0)}' | sort | uniq -d`, which needs
-// to be wrapped in `bash -c`, and it is fundamentally a repo-scope rather
-// than per-file check. Left as DRAFT until we ship a hookkit-native helper.
+/// Backed by hk's (jdx/hk) `hk util check-case-conflict`, which compares
+/// only the paths given in one invocation (it does not walk the git index
+/// or the wider tree itself). This only catches a collision among files
+/// edited together in the same turn, not against unrelated pre-existing
+/// files, so `phaseInvocation` must stay batch: a per-file split would never
+/// see more than one path at a time and could never detect a conflict. A
+/// missing path is silently treated as clean (exit 0); a malformed
+/// invocation (bad flag) exits 2. Fixtures cannot exercise the issue case
+/// directly: two files whose names differ only by case collide into one
+/// entry on a case-insensitive filesystem (default on macOS, so hosted
+/// macOS runners would silently lose one of the two committed files), so
+/// this is verified by manual probing (see the validation report) rather
+/// than a committed fixture; clean and operational-failure are still
+/// covered.
 
 module velvet_glove.builtins.tools.CheckCaseConflict
 
@@ -15,14 +22,33 @@ import "../Config.pkl" as Config
 spec: Config.ToolSpec = new Config.ToolSpec {
   id = "check-case-conflict"
   displayName = "check-case-conflict"
-  executable = "git"
-  installHint = "install git from your platform's package manager"
-  enabled = false
+  executable = "hk"
+  installHint = "install hk, e.g. `brew install hk` or `mise use -g hk`"
 
   files = new Config.FileSelection {
     include = new Listing<String> { "**/*" }
   }
+  phaseInvocation = "batch"
 
-  phases = new Mapping<String, Config.Phase> {}
-  phaseOrder = new Listing<String> {}
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "util"
+        "check-case-conflict"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    note = "opt-in only: compares only files edited together in one turn"
+  }
 }
