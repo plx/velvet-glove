@@ -252,8 +252,10 @@ runList = new Listing<String> { "ruff" }
         "post-tool-use.pkl",
         r#"
 amends "Config.pkl"
+import "Builtins.pkl"
 import "shared.pkl" as Shared
 
+tools { ["ruff"] = Builtins.ruff }
 run = Shared.runList
 "#,
     );
@@ -378,6 +380,92 @@ run = new Listing<String> { "ruff" }
         loaded.project_root, root,
         "local-only discovery should anchor project_root on the directory containing .velvet-glove/"
     );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn invalid_user_tool_specs_are_rejected_at_load_with_readable_errors() {
+    require_pkl!();
+    let root = temp_dir("invalid-user-spec");
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+  ["fmt"] = new ToolSpec {
+    id = "fmt"
+    displayName = "fmt"
+    executable = "fmt"
+    phases {
+      ["format"] = new Phase { mode = "format" }
+      ["verify"] = new Phase { mode = "verify"; writes = "target-files" }
+    }
+    phaseOrder { "format"; "verify"; "lint" }
+  }
+  ["unused"] = new ToolSpec { id = "unused"; displayName = "unused"; executable = "" }
+}
+run = new Listing<String> { "ruff"; "fmt"; "rff" }
+"#,
+    );
+
+    let error = discover_and_load(&root, None)
+        .expect_err("invalid config must fail")
+        .to_string();
+    assert!(
+        error.starts_with("invalid Velvet Glove configuration:"),
+        "{error}"
+    );
+    assert!(error.contains("run names unknown tool `rff`"), "{error}");
+    assert!(
+        error.contains("fmt (fmt): phaseOrder names unknown entry lint"),
+        "{error}"
+    );
+    assert!(
+        error.contains("mutating phase format has writes=none"),
+        "{error}"
+    );
+    assert!(
+        error.contains("verifier phase verify declares writes"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("unused"),
+        "tools outside `run` are not validated: {error}"
+    );
+    assert!(!error.contains("ruff"), "{error}");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn formatter_only_user_tools_are_accepted() {
+    require_pkl!();
+    let root = temp_dir("formatter-only");
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+
+tools {
+  ["fmt"] = new ToolSpec {
+    id = "fmt"
+    displayName = "fmt"
+    executable = "fmt"
+    phases { ["format"] = new Phase { mode = "format"; writes = "target-files" } }
+  }
+}
+run = new Listing<String> { "fmt" }
+"#,
+    );
+
+    let loaded = discover_and_load(&root, None).expect("formatter-only tool is valid");
+    assert_eq!(loaded.config.run, vec!["fmt"]);
 
     std::fs::remove_dir_all(&root).ok();
 }

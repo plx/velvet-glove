@@ -2,7 +2,7 @@
 
 use crate::schema::{
     ArgToken, ArgvElement, CheckScope, ExitCodes, InvocationGranularity, Phase, PhaseMode,
-    ToolSpec, WorkflowCommand, WriteBehavior,
+    RunnerConfig, ToolSpec, WorkflowCommand, WriteBehavior,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -38,6 +38,51 @@ pub fn validate_builtin_catalog(
     specs: &BTreeMap<String, ToolSpec>,
 ) -> Result<(), CatalogValidationError> {
     let mut errors = Vec::new();
+    validate_specs(specs, Strictness::Builtin, &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CatalogValidationError { errors })
+    }
+}
+
+/// Validate the tools a resolved configuration will run: every `run` entry
+/// must name a defined tool, and each enabled tool must pass the builtin
+/// catalog's structural rules. The one exception is a tool whose phases only
+/// mutate (an hk-style formatter): immediate mode runs it as written, so it
+/// is accepted without an `unverifiedRemedyFallback`.
+pub fn validate_run_config(config: &RunnerConfig) -> Result<(), CatalogValidationError> {
+    let mut errors = Vec::new();
+    let mut selected = BTreeMap::new();
+    for key in &config.run {
+        match config.tools.get(key) {
+            Some(spec) => {
+                selected.insert(key.clone(), spec.clone());
+            }
+            None => errors.push(format!(
+                "run names unknown tool `{key}`; define it under `tools` (for a builtin: `[\"{key}\"] = Builtins.{key}`) or remove it from `run`"
+            )),
+        }
+    }
+    validate_specs(&selected, Strictness::User, &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CatalogValidationError { errors })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Strictness {
+    Builtin,
+    User,
+}
+
+fn validate_specs(
+    specs: &BTreeMap<String, ToolSpec>,
+    strictness: Strictness,
+    errors: &mut Vec<String>,
+) {
     let mut tool_ids = BTreeSet::new();
     for (key, spec) in specs {
         if !spec.enabled {
@@ -47,7 +92,9 @@ pub fn validate_builtin_catalog(
         if spec.id.trim().is_empty() {
             errors.push(format!("{key}: tool id is empty"));
         } else if !tool_ids.insert(spec.id.as_str()) {
-            errors.push(format!("{prefix}: duplicate tool id"));
+            errors.push(format!(
+                "{prefix}: duplicate tool id; give each tool a distinct `id`"
+            ));
         }
         if spec.executable.trim().is_empty() {
             errors.push(format!("{prefix}: executable is empty"));
@@ -57,26 +104,21 @@ pub fn validate_builtin_catalog(
             "workflowOrder",
             &spec.workflow_order,
             spec.workflows.keys(),
-            &mut errors,
+            errors,
         );
         validate_order(
             &prefix,
             "phaseOrder",
             &spec.phase_order,
             spec.phases.keys(),
-            &mut errors,
+            errors,
         );
 
         if spec.workflows.is_empty() {
-            validate_compatibility_tool(&prefix, spec, &mut errors);
+            validate_compatibility_tool(&prefix, spec, strictness, errors);
         } else {
-            validate_explicit_tool(&prefix, spec, &mut errors);
+            validate_explicit_tool(&prefix, spec, errors);
         }
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(CatalogValidationError { errors })
     }
 }
 
@@ -126,7 +168,12 @@ fn validate_explicit_tool(prefix: &str, spec: &ToolSpec, errors: &mut Vec<String
     }
 }
 
-fn validate_compatibility_tool(prefix: &str, spec: &ToolSpec, errors: &mut Vec<String>) {
+fn validate_compatibility_tool(
+    prefix: &str,
+    spec: &ToolSpec,
+    strictness: Strictness,
+    errors: &mut Vec<String>,
+) {
     let phases = ordered_phases(spec);
     let enabled = phases
         .into_iter()
@@ -144,10 +191,14 @@ fn validate_compatibility_tool(prefix: &str, spec: &ToolSpec, errors: &mut Vec<S
     for (id, phase) in &enabled {
         validate_exit_codes(&format!("{prefix}: phase {id}"), &phase.exit_codes, errors);
         if is_verifier(phase.mode) && phase.writes != WriteBehavior::None {
-            errors.push(format!("{prefix}: verifier phase {id} declares writes"));
+            errors.push(format!(
+                "{prefix}: verifier phase {id} declares writes; verify/check-only phases must use writes = \"none\""
+            ));
         }
         if !is_verifier(phase.mode) && phase.writes == WriteBehavior::None {
-            errors.push(format!("{prefix}: mutating phase {id} has writes=none"));
+            errors.push(format!(
+                "{prefix}: mutating phase {id} has writes=none; declare writes = \"target-files\" (or \"matching-globs\"/\"workspace\") so changes are detected"
+            ));
         }
     }
 
@@ -157,6 +208,7 @@ fn validate_compatibility_tool(prefix: &str, spec: &ToolSpec, errors: &mut Vec<S
     if !mutators.is_empty() && verifiers.is_empty() {
         match spec.unverified_remedy_fallback.as_deref().map(str::trim) {
             Some(reason) if !reason.is_empty() => {}
+            _ if strictness == Strictness::User => {}
             _ => errors.push(format!(
                 "{prefix}: auto-fix compatibility translation has no authoritative final check"
             )),

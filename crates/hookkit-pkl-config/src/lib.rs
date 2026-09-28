@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 
 pub use catalog::{
     CatalogValidationError, render_builtin_catalog_markdown, validate_builtin_catalog,
+    validate_run_config,
 };
 pub use error::PklConfigError;
 pub use eval::{
@@ -53,11 +54,19 @@ pub struct Loaded {
 /// Discover and load Pkl configs around `cwd`.
 ///
 /// When `override_path` is provided, the discovery chain is bypassed and only
-/// that file is loaded.
+/// that file is loaded. The merged configuration is validated with
+/// [`validate_run_config`] before it is returned.
 pub fn discover_and_load(
     cwd: &Path,
     override_path: Option<&Path>,
 ) -> Result<Loaded, PklConfigError> {
+    let loaded = load_unvalidated(cwd, override_path)?;
+    validate_run_config(&loaded.config)
+        .map_err(|error| PklConfigError::ConfigValidation(error.to_string()))?;
+    Ok(loaded)
+}
+
+fn load_unvalidated(cwd: &Path, override_path: Option<&Path>) -> Result<Loaded, PklConfigError> {
     if let Some(path) = override_path {
         let config = merge::merge_patch_chain(std::iter::once(evaluate_pkl_file_patch(path)?));
         // `--config PATH` accepts arbitrary locations (e.g. `/tmp/custom.pkl`),
