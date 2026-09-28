@@ -2053,7 +2053,7 @@ fn run_post_tool_input(
             display_roots(&project_root, &loaded.project_root),
         ),
     );
-    let mut had_hard_failure = false;
+    let mut had_hard_failure: Option<String> = None;
     let mut had_harness_block_message: Option<String> = None;
 
     let tools = resolve_run_order(&loaded.config)?;
@@ -2097,7 +2097,7 @@ fn run_post_tool_input(
         });
 
         if had_harness_block_message.is_some()
-            || had_hard_failure
+            || had_hard_failure.is_some()
             || (settings.fail_fast && batch_status.operational_failure)
             || (!settings.continue_after_issues && batch_status.issues)
         {
@@ -2107,9 +2107,9 @@ fn run_post_tool_input(
 
     let outcome = if let Some(message) = had_harness_block_message {
         RunnerDomainOutcome::HarnessBlock { message, output }
-    } else if had_hard_failure {
+    } else if let Some(message) = had_hard_failure {
         RunnerDomainOutcome::OperationalFailure {
-            message: "tool unavailable with missingToolPolicy=hard-failure".into(),
+            message: format!("{message} (missingToolPolicy is hard-failure)"),
         }
     } else if is_empty_output(&output) {
         RunnerDomainOutcome::Clean
@@ -2120,14 +2120,15 @@ fn run_post_tool_input(
 }
 
 /// Run one tool on the candidates its globs select and fold its outcomes
-/// into `output`. `flags` are the run's hard-failure and harness-block flags.
+/// into `output`. `flags` receive the run's hard-failure and harness-block
+/// messages.
 fn run_immediate_tool(
     context: &ToolContext<'_>,
     candidates: &[PathBuf],
     ctx: &RuntimeContext<'_>,
     settings: &pkl::Settings,
     output: &mut RunnerPostToolUseOutput,
-    flags: (&mut bool, &mut Option<String>),
+    flags: (&mut Option<String>, &mut Option<String>),
 ) -> hookkit_core::Result<ToolBatchStatus> {
     let matcher = FileMatcher::new(&context.spec.file_selection)?;
     let runnable_paths = candidates
@@ -3873,7 +3874,7 @@ fn accumulate_outcomes(
     ctx: &RuntimeContext<'_>,
     missing_tool_policy: pkl::MissingToolPolicy,
     output: &mut RunnerPostToolUseOutput,
-    had_hard_failure: &mut bool,
+    had_hard_failure: &mut Option<String>,
     had_harness_block_message: &mut Option<String>,
 ) -> hookkit_core::Result<ToolBatchStatus> {
     let mut changed_files = BTreeSet::new();
@@ -3947,7 +3948,15 @@ fn accumulate_outcomes(
                 }
             }
             pkl::MissingToolPolicy::HardFailure => {
-                *had_hard_failure = true;
+                if let Some((phase, executable, install_hint)) = unavailable.first() {
+                    *had_hard_failure = Some(render_unavailable_message(
+                        context,
+                        phase,
+                        executable,
+                        install_hint.as_deref(),
+                        &mut output.notices,
+                    ));
+                }
                 return Ok(status);
             }
             pkl::MissingToolPolicy::HarnessBlock => {
@@ -4108,7 +4117,7 @@ fn accumulate_outcomes(
         )));
     }
 
-    status.operational_failure = status.operational_failure || *had_hard_failure;
+    status.operational_failure = status.operational_failure || had_hard_failure.is_some();
     Ok(status)
 }
 
