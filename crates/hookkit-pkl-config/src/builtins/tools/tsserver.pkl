@@ -37,4 +37,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    contains = new Mapping<String, String> { ["package.json"] = "\"tsc-files\"" }
+    role = "ts-typecheck"
+  }
 }

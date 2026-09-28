@@ -33,4 +33,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".hadolint.yaml"; ".hadolint.yml" }
+    role = "docker-lint"
+    default = true
+  }
 }

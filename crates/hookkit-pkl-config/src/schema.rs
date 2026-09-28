@@ -502,6 +502,24 @@ pub struct ToolSpec {
     pub diagnostics: Diagnostics,
     /// Whether the tool participates when referenced by the run list.
     pub enabled: bool,
+    /// Project-detection hints used by `velvet-glove init`; never read by hooks.
+    pub detect: Option<Detect>,
+}
+
+/// Project-detection hints for one tool, used only when generating a policy.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Detect {
+    /// Project-relative globs whose presence suggests the project uses the tool.
+    pub indicators: Vec<String>,
+    /// Project-relative file paths mapped to text that suggests the tool.
+    pub contains: BTreeMap<String, String>,
+    /// Mutually exclusive slot such as `python-format`.
+    pub role: Option<String>,
+    /// Whether to pick this tool for its role when no indicator decides.
+    pub default: bool,
+    /// Short reason shown by `init`, e.g. why the tool is opt-in only.
+    pub note: Option<String>,
 }
 
 impl Default for ToolSpec {
@@ -522,6 +540,7 @@ impl Default for ToolSpec {
             messages: Messages::default(),
             diagnostics: Diagnostics::default(),
             enabled: true,
+            detect: None,
         }
     }
 }

@@ -44,4 +44,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".markdownlint.json"; ".markdownlint.jsonc"; ".markdownlint.yaml"; ".markdownlint.yml"; ".markdownlintrc" }
+    role = "markdown-lint"
+  }
 }

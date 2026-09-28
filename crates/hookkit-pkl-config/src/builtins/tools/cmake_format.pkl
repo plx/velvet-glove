@@ -44,4 +44,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".cmake-format.yaml"; ".cmake-format.json"; ".cmake-format.py"; "cmake-format.yaml" }
+    role = "cmake-format"
+  }
 }

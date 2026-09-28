@@ -133,4 +133,11 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "ruff.toml"; ".ruff.toml" }
+    contains = new Mapping<String, String> { ["pyproject.toml"] = "[tool.ruff" }
+    role = "python-lint"
+    default = true
+  }
 }

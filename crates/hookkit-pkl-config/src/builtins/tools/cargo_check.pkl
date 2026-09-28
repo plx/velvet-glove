@@ -38,4 +38,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     issuesAgent =
       "cargo check reports type errors; inspect diagnostics at {{ diagnostics_path }}."
   }
+
+  detect = new Config.Detect {
+    role = "rust-lint"
+    note = "cargo-clippy covers cargo check"
+  }
 }
