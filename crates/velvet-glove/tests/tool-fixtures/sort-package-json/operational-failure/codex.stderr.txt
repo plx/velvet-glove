@@ -1,0 +1,15 @@
+error: sort-package-json: phase `format` failed; diagnostics: <workspace>/.velvet-glove/sort-package-json-agent-hook/test-session_test-turn_sort-package-json-tool_sort-package-json-tool-failure.txt
+sort-package-json failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: sort-package-json <workspace>/package.json
+status: Some(2)
+classification: Some(Failure)
+stdout:
+
+Found 1 file.
+1 file could not be sorted.
+stderr:
+Error on: package.json
+Expected double-quoted property name in JSON at position 15 (line 1 column 16)
+artifact: <workspace>/.velvet-glove/sort-package-json-agent-hook/test-session_test-turn_sort-package-json-tool_sort-package-json-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
