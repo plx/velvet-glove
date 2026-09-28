@@ -1,0 +1,44 @@
+/// Bandit — security-issue scanner for Python source.
+///
+/// No autofix: bandit only reports findings (SQL injection, shell=True,
+/// hardcoded secrets, etc.), so this is a plain checker like flake8. Exit
+/// codes (probed empirically, matching bandit's documented CLI): 0 clean,
+/// 1 issues found, 2 usage or config error (bad `-c` config, unrecognized
+/// flag) — 2 falls through to the default `unexpected = "failure"`
+/// classification. A missing target file is silently skipped rather than
+/// reported as an error, so that case is not a distinguishable operational
+/// failure; a broken `-c` config file is. Bandit's default screen report
+/// embeds a wall-clock "Run started:" banner and the running interpreter's
+/// version; the fixture harness masks both (see `mask_volatile_lines` in
+/// tool_fixtures.rs) so goldens don't hardcode a value that changes on every
+/// run or across installed Python versions.
+
+module velvet_glove.builtins.tools.Bandit
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "bandit"
+  displayName = "Bandit"
+  executable = "bandit"
+  installHint = "install bandit with `pipx install bandit`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

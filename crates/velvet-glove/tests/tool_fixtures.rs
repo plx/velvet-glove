@@ -1802,7 +1802,29 @@ fn normalize(text: &str, project_aliases: &[String]) -> String {
     for alias in aliases {
         output = output.replace(alias, "<workspace>");
     }
-    output
+    mask_volatile_lines(&output)
+}
+
+/// Masks a wall-clock timestamp or interpreter version a tool embeds in
+/// otherwise-deterministic output (e.g. bandit's `Run started: <ISO-8601>`
+/// banner and `running on Python <version>` line), so fixture goldens can
+/// assert a fixed placeholder instead of a value that changes on every run
+/// or across installed versions. Applied to both golden and actual text, so
+/// goldens simply spell out the placeholder. Only a recognized "<label>"
+/// prefix is touched.
+fn mask_volatile_lines(text: &str) -> String {
+    const MARKERS: &[&str] = &["Run started:", "running on Python "];
+    text.lines()
+        .map(|line| {
+            for marker in MARKERS {
+                if let Some((prefix, _rest)) = line.split_once(marker) {
+                    return format!("{prefix}{marker}<value>");
+                }
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn workspace_path_aliases(project: &Path) -> Vec<String> {
