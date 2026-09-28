@@ -1,1 +1,1 @@
-{"outcome": "auto-fixed"}
+{"outcome": "manual", "note": "current vite-plus (oxlint-based) reports double-comparisons but --fix does not rewrite it; verified empirically against vp 0.3.3"}
