@@ -1,0 +1,1 @@
+{"outcome": "auto-fixed", "cite": ["example.proto"], "files": {"example.proto": "clean", "nested/other.proto": "auto-fixed"}, "note": "buf format runs over the whole buf.yaml workspace, so it also formats nested/other.proto even though only example.proto was cited as edited."}
