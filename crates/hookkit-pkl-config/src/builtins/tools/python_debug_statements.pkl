@@ -1,11 +1,17 @@
 /// python-debug-statements — flag leftover `breakpoint()` / `pdb.set_trace()`.
 ///
-// DRAFT: hk ships this behind its `hk util python-debug-statements` namespace
-// with a multi-line implementation we cannot replicate as a single argv
-// invocation. A naive `grep -nH -E ...` would miss commented-out lines and
-// docstring/string-literal contexts. Recommended alternatives: configure ruff
-// rule T100 (`flake8-debugger`) on your project. Left as a DRAFT until we
-// either ship our own helper binary or settle on a robust grep regex.
+/// hk ships this behind its `hk util python-debug-statements` namespace, a
+/// multi-line implementation we can't replicate as a single argv invocation
+/// (see anti-goals: no embedded wrapper programs). This spec uses a plain
+/// `grep -nH -E` instead. Validated empirically: it correctly flags a real
+/// `breakpoint()`/`pdb.set_trace()` call, correctly ignores one that is
+/// commented out (`^[^#]*` requires no `#` before the match), and correctly
+/// classifies a missing file as an operational failure (exit 2), matching
+/// grep's own semantics. Known limitation, left in place rather than
+/// papered over: grep has no syntax awareness, so a string literal or
+/// docstring that merely *mentions* `breakpoint()` is a false positive. For
+/// projects that hit this often, ruff's `T100` (`flake8-debugger`) rule is a
+/// syntax-aware alternative worth configuring instead.
 
 module velvet_glove.builtins.tools.PythonDebugStatements
 

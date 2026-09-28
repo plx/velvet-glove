@@ -1,0 +1,10 @@
+error: python debug-statements: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/python-debug-statements-agent-hook/test-session_python-debug-statements-tool_python-debug-statements-tool-failure.txt
+python debug-statements failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: grep -nH -E ^[^#]*(\bbreakpoint\(\)|pdb\.set_trace\(\)) missing-operational.py <workspace>/example.py
+status: Some(2)
+classification: Some(Failure)
+stderr:
+grep: missing-operational.py: No such file or directory
+artifact: <workspace>/.velvet-glove/python-debug-statements-agent-hook/test-session_python-debug-statements-tool_python-debug-statements-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

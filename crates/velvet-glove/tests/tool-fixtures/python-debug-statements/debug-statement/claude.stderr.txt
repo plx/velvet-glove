@@ -1,0 +1,9 @@
+warning: python debug-statements: issues remain; diagnostics: <workspace>/.velvet-glove/python-debug-statements-agent-hook/test-session_python-debug-statements-tool_python-debug-statements-tool-issues.txt
+python debug-statements diagnostics:
+[verify] command: grep -nH -E ^[^#]*(\bbreakpoint\(\)|pdb\.set_trace\(\)) <workspace>/example.py
+status: Some(0)
+classification: Some(Issues)
+stdout:
+<workspace>/example.py:2:    breakpoint()
+artifact: <workspace>/.velvet-glove/python-debug-statements-agent-hook/test-session_python-debug-statements-tool_python-debug-statements-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
