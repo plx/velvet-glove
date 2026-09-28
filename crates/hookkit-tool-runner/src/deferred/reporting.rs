@@ -735,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_fixed_notice_names_files_and_fixing_tools_for_both_audiences() {
+    fn auto_fixed_notice_reaches_the_agent_only_when_the_stop_blocks() {
         let mut result = DeferredRunResult::default();
         result.record_file(FileAssessment::new("/repo/one.rs", FileStatus::Clean));
         let mut fixed = FileAssessment::new("/repo/src/a.py", FileStatus::AutoFixed);
@@ -744,10 +744,45 @@ mod tests {
         let mut formatted = FileAssessment::new("/repo/web/b.ts", FileStatus::AutoFixed);
         formatted.fixed_by = Some("Prettier".into());
         result.record_file(formatted);
-        let rendered = render(&mut result, &pkl::DeferredReporting::default());
         let expected =
             "velvet-glove auto-fixed src/a.py (Ruff), web/b.ts (Prettier); re-read before editing.";
+
+        // Allowed: the user hears about it; agent context would cost a turn.
+        let rendered = render(&mut result, &pkl::DeferredReporting::default());
         assert_eq!(rendered.user.as_deref(), Some(expected));
+        assert_eq!(rendered.agent, None);
+
+        // Blocking: the agent must re-read before fixing the rest.
+        let reporter = DeferredReporter::new(&pkl::DeferredReporting::default()).unwrap();
+        for blocks in [
+            BlockReasons {
+                manual: true,
+                ..BlockReasons::default()
+            },
+            BlockReasons {
+                operational: true,
+                ..BlockReasons::default()
+            },
+            BlockReasons {
+                coverage: true,
+                ..BlockReasons::default()
+            },
+        ] {
+            let mut run = run();
+            run.blocks = blocks;
+            let rendered = reporter.render(&result, run).unwrap();
+            assert_eq!(rendered.buckets.auto_fixed.agent, expected, "{blocks:?}");
+        }
+
+        // The old behavior stays one template away.
+        let config = pkl::DeferredReporting {
+            auto_fixed: pkl::TemplatePair {
+                agent: pkl::DeferredReporting::default().auto_fixed.user,
+                ..pkl::DeferredReporting::default().auto_fixed
+            },
+            ..Default::default()
+        };
+        let rendered = render(&mut result, &config);
         assert_eq!(rendered.agent.as_deref(), Some(expected));
     }
 

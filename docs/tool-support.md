@@ -112,7 +112,7 @@ this validation group.
 | `stylelint` | lint CSS | ✅ validated | 17.15.0 | if `.stylelintrc*` or `"stylelint"` in package.json | Missing/unresolvable config also exits 78 (operational). |
 | `tsc` | type check | ✅ validated | 7.0.2 | if `tsconfig.json` | Malformed/missing tsconfig reports as a diagnostic, not operational. |
 | `tsserver` | type check (via tsc-files) | ✅ validated | tsc-files 1.1.4 + ts 7.0.2 | if `"tsc-files"` in package.json | Silently reports clean under pnpm/isolated node_modules; needs a hoisted npm install. |
-| `vp-check` (`vpCheck`) | check (vite-plus) | 🔧 fixed & validated | vite-plus 0.3.3 | if `"vite-plus"` in package.json | Syntax error in an edited file is misclassified as operational. |
+| `vp-check` (`vpCheck`) | check (vite-plus) | 🔧 fixed & validated | vite-plus 0.3.3 | if `"vite-plus"` in package.json | |
 | `vp-fmt` (`vpFmt`) | format (vite-plus) | 🔧 fixed & validated | vite-plus 0.3.3 | opt-in only (vp-check already formats) | |
 | `vp-lint` (`vpLint`) | lint (vite-plus) | 🔧 fixed & validated | vite-plus 0.3.3 | opt-in only (vp-check already lints) | |
 | `xo` | lint (opinionated) | ✅ validated | 5.0.1 | if `"xo"` in package.json | |

@@ -3,7 +3,9 @@
 /// `gofmt -l` is non-mutating and lists unformatted files on stdout while
 /// retaining exit status zero; the deferred workflow classifies that output.
 /// Immediate execution also uses `-l` as a read-only batch preflight because
-/// `-w` can rewrite an earlier file before reporting a later parse failure.
+/// `-w` can rewrite an earlier file before a later file fails. A parse error
+/// names its file at a location, so it is that file's issue rather than a
+/// failure, and the rest of the batch is still formatted.
 
 module velvet_glove.builtins.tools.GoFmt
 

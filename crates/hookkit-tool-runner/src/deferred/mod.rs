@@ -7,7 +7,7 @@ mod lowering;
 mod model;
 mod reporting;
 
-pub(crate) use attribution::{Attribution, attribute, resolution_bases};
+pub(crate) use attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 pub(crate) use execution::{
     DeferredLog, ScheduledWorkflow, combined_output, execute_deferred_workflows,
 };

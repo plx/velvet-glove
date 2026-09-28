@@ -326,9 +326,15 @@ impl Default for DeferredReporting {
         Self {
             groups: default_file_groups(),
             clean: TemplatePair::default(),
+            // The agent hears about auto-fixes only when the Stop blocks and
+            // it must edit again. On an allowed Stop, extra agent context
+            // costs a model turn that only acknowledges it, and Claude Code
+            // already tells the agent when a file it read changed on disk.
             auto_fixed: TemplatePair {
                 user: auto_fixed.into(),
-                agent: auto_fixed.into(),
+                agent: format!(
+                    "{{% if blocks.manual or blocks.operational or blocks.coverage %}}{auto_fixed}{{% endif %}}"
+                ),
             },
             manual_fixes_needed: TemplatePair {
                 user: "velvet-glove: {{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes ({% for file in manual_fix_files[:10] %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}{% if counts.manual_fixes_needed > 10 %}, …{% endif %}). Details: {{ run.directory }}".into(),
@@ -622,6 +628,8 @@ pub struct ToolSpec {
     pub files: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Where files with no workspace indicator above them run.
+    pub workspace_fallback: WorkspaceFallback,
     /// Granularity used by the immediate pipeline and phase-derived workflows.
     pub phase_invocation: InvocationGranularity,
     /// Named deferred workflows.
@@ -675,6 +683,7 @@ impl Default for ToolSpec {
             install_hint: None,
             files: FileSelection::default(),
             workspace_indicator: None,
+            workspace_fallback: WorkspaceFallback::default(),
             phase_invocation: InvocationGranularity::default(),
             workflows: BTreeMap::new(),
             workflow_order: Vec::new(),
@@ -764,6 +773,18 @@ pub enum CheckScope {
     TargetFiles,
     /// Any change in the workspace invalidates the workflow's check.
     Workspace,
+}
+
+/// Where a tool runs a file with no workspace indicator between it and the
+/// project root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceFallback {
+    /// Leave the file out: the tool needs its workspace.
+    #[default]
+    Skip,
+    /// Run the file from the project root, as without an indicator.
+    ProjectRoot,
 }
 
 /// How candidates are divided into workflow invocations.

@@ -236,6 +236,14 @@ if [[ "$mode" == "format" ]]; then
     echo "format crashed" >&2
     exit 2
   fi
+  if grep -q "syntax_error" "$file"; then
+    echo "error: Failed to parse ${file}:1:19: Expected ')', found newline" >&2
+    exit 2
+  fi
+  if grep -q "silent_syntax" "$file"; then
+    # `ruff format --quiet` before Ruff 0.16 fails without a word.
+    exit 2
+  fi
   if grep -q "needs_format" "$file"; then
     if [[ "$check" == "1" ]]; then
       echo "Would reformat: $file"
@@ -276,6 +284,11 @@ if [[ "$mode" == "check" ]]; then
   if grep -q "check_crash" "$file"; then
     echo "check crashed" >&2
     exit 2
+  fi
+
+  if grep -qE "syntax_error|silent_syntax" "$file"; then
+    echo "${file}:1:19: SyntaxError: Expected ')', found newline"
+    exit 1
   fi
 
   if grep -q "manual_issue" "$file"; then
@@ -1133,23 +1146,12 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
                     serde_json::json!({}),
                     "{harness}/{case}: clean runs are silent"
                 ),
-                ("claude", _) => {
-                    assert_eq!(
-                        response,
-                        serde_json::json!({
-                            "systemMessage": notice,
-                            "hookSpecificOutput": {
-                                "hookEventName": "Stop",
-                                "additionalContext": notice,
-                            },
-                        }),
-                        "{case}"
-                    );
-                }
+                // An allowed Stop tells only the user: agent context would
+                // cost Claude a turn spent acknowledging it.
                 _ => assert_eq!(
                     response,
                     serde_json::json!({"systemMessage": notice}),
-                    "{harness}/{case}: an omitted agent copy of the user notice needs no warning"
+                    "{harness}/{case}"
                 ),
             }
             let summary = only_summary(&state_dir);
@@ -1368,12 +1370,15 @@ run {{ "upcase" }}
 fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
     require_pkl!();
 
+    let agent_auto_fix =
+        r#"    autoFixed = new TemplatePair { agent = "auto-fixed {{ counts.auto_fixed }}" }"#;
     let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
         "codex",
         "turn-completion-strict-unrepresentable",
         &[("src/dirty.py", "import os  # unused_import\n")],
     );
     add_runner_setting(&project, r#"loweringPolicy = "strict""#);
+    add_deferred_reporting_config(&project, agent_auto_fix);
     let strict = run_deferred_case("codex", &project, &state_arg);
     assert!(!strict.status.success());
     assert!(
@@ -1394,6 +1399,7 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
         &[("src/dirty.py", "import os  # unused_import\n")],
     );
     add_runner_setting(&project, r#"loweringPolicy = "best-effort""#);
+    add_deferred_reporting_config(&project, agent_auto_fix);
     let best_effort = run_deferred_case("codex", &project, &state_arg);
     assert!(best_effort.status.success());
     let response: serde_json::Value = serde_json::from_slice(&best_effort.stdout).unwrap();
@@ -1483,8 +1489,11 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     let notice = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
-    assert_eq!(response["systemMessage"], notice);
-    assert_eq!(response["hookSpecificOutput"]["additionalContext"], notice);
+    assert_eq!(
+        response,
+        serde_json::json!({"systemMessage": notice}),
+        "an allowed Stop reports auto-fixes to the user only"
+    );
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
@@ -2373,6 +2382,216 @@ fn turn_completion_reruns_format_after_a_lint_fix_dirties_it() {
 }
 
 #[test]
+fn turn_completion_format_failure_does_not_hide_the_lint_diagnostic() {
+    require_pkl!();
+    let project = temp_project("turn-completion-sibling-workflow-fail-fast");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/broken.py");
+    std::fs::write(&file, "print(manual_issue)  # format_crash\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block", "{response}");
+    assert!(
+        response["reason"].as_str().unwrap().contains("F821"),
+        "the lint workflow still reports under failFast: {response}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    let problems = summary["result"]["operationalProblems"]
+        .as_object()
+        .unwrap();
+    assert!(!problems.is_empty());
+    for problem in problems.values() {
+        assert!(
+            problem["id"].as_str().unwrap().contains("-ruff-001-"),
+            "only the format workflow is operational: {problem}"
+        );
+    }
+}
+
+#[test]
+fn turn_completion_syntax_error_is_a_manual_fix_not_a_tool_failure() {
+    require_pkl!();
+    let project = temp_project("turn-completion-syntax-error");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/broken.py");
+    std::fs::write(&file, "print(syntax_error\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block", "{response}");
+    let reason = response["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("src/broken.py:1:19: SyntaxError"),
+        "{reason}"
+    );
+    assert!(!reason.contains("could not run"), "{reason}");
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    assert_eq!(
+        summary["result"]["operationalProblems"],
+        serde_json::json!({}),
+        "ruff format's exit 2 on the syntax error is the file's problem"
+    );
+}
+
+/// A mypy-like checker: exit 2 with `<file>:3: error: invalid syntax` for a
+/// syntax error, exit 2 naming only its config file for a broken config.
+fn write_located_failure_config(project: &Path) {
+    let checker = write_executable(
+        project,
+        "typecheck",
+        r#"#!/bin/sh
+for file in "$@"; do
+  if grep -q bad_config "$file"; then
+    echo "error: bad config pyproject.toml" >&2
+    exit 2
+  fi
+  if grep -q syntax_error "$file"; then
+    echo "${file#"$PWD"/}:3: error: invalid syntax  [syntax]"
+    echo "Found 1 error in 1 file (errors prevented further checking)"
+    exit 2
+  fi
+done
+exit 0
+"#,
+    );
+    std::fs::write(project.join("pyproject.toml"), "[tool.typecheck]\n").unwrap();
+    let checker = checker.to_string_lossy().replace('\\', "\\\\");
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{ fileActivity {{ filesystemMtime = false }} }}
+
+tools {{
+  ["typecheck"] = new ToolSpec {{
+    id = "typecheck"
+    displayName = "Typecheck"
+    executable = "{checker}"
+    files {{ include = new Listing {{ "**/*.py" }} }}
+    phaseInvocation = "per-file"
+    phases {{
+      ["verify"] = new Phase {{
+        mode = "verify"
+        argv = new Listing {{ new Files {{}} }}
+        exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+      }}
+    }}
+    workflows {{
+      ["check"] = new Workflow {{
+        check = new WorkflowCommand {{
+          argv = new Listing {{ new Files {{}} }}
+          exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+        }}
+        invocation = "per-file"
+      }}
+    }}
+    workflowOrder = new Listing {{ "check" }}
+  }}
+}}
+run = new Listing {{ "typecheck" }}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_check_failure_at_a_candidate_location_is_manual_and_a_config_error_is_not() {
+    require_pkl!();
+    let project = temp_project("located-check-failure");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    write_located_failure_config(&project);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let broken = project.join("src/broken.py");
+    let configured = project.join("src/configured.py");
+    std::fs::write(&broken, "def f(:  # syntax_error\n").unwrap();
+    std::fs::write(&configured, "x = 1  # bad_config\n").unwrap();
+
+    // Immediate: the syntax error reaches the agent; the config error only
+    // the user.
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/broken.py"),
+        &["--claude"],
+    );
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        context.contains("src/broken.py:3: error: invalid syntax"),
+        "{json}"
+    );
+    assert!(!user.contains("failed"), "{user}");
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/configured.py"),
+        &["--claude"],
+    );
+    let (json, user) = immediate_response(&output);
+    assert!(json.get("hookSpecificOutput").is_none(), "{json}");
+    assert!(user.contains("Typecheck"), "{user}");
+
+    // Stop: the syntax error blocks as a manual fix; the config error is an
+    // operational problem for its file only.
+    for path in [&broken, &configured] {
+        seed_pending_file(&state_dir, "codex", path);
+    }
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block", "{response}");
+    assert!(
+        response["reason"]
+            .as_str()
+            .unwrap()
+            .contains("src/broken.py:3: error: invalid syntax"),
+        "{response}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    assert!(
+        summary["manualFixFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("src/broken.py")
+    );
+    let problems = summary["result"]["operationalProblems"]
+        .as_object()
+        .unwrap();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    let problem = problems.values().next().unwrap();
+    assert_eq!(problem["affectedFiles"].as_array().unwrap().len(), 1);
+    assert!(
+        problem["affectedFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("src/configured.py")
+    );
+}
+
+#[test]
 fn turn_completion_batch_blames_only_the_files_the_output_names() {
     require_pkl!();
     let project = temp_project("turn-completion-batch-attribution");
@@ -3041,6 +3260,148 @@ fn post_tool_use_manual_issues_quote_a_bounded_project_relative_excerpt() {
             && context.contains("velvet-glove/state/post-tool-immediate"),
         "{context}"
     );
+}
+
+#[test]
+fn post_tool_use_syntax_error_reports_the_diagnostic_not_a_formatter_failure() {
+    require_pkl!();
+    let project = temp_project("ruff-syntax-error");
+    let fake_ruff = write_fake_ruff(&project);
+    write_default_ruff_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/broken.py"), "print(syntax_error\n").unwrap();
+
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/broken.py"),
+        &["--claude"],
+    );
+
+    // `ruff format` fails at the syntax error, with or without saying where;
+    // the verify phase still runs and its diagnostic explains the failure.
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        context.contains("src/broken.py:1:19: SyntaxError"),
+        "{json}"
+    );
+    assert!(!user.contains("failed"), "{user}");
+
+    std::fs::write(project.join("src/silent.py"), "print(silent_syntax\n").unwrap();
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("codex", &project, "src/silent.py"),
+        &["--codex"],
+    );
+    let (json, user) = immediate_response(&output);
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        context.contains("src/silent.py:1:19: SyntaxError"),
+        "{json}"
+    );
+    assert!(!user.contains("failed"), "{user}");
+}
+
+/// A backend+frontend project on the ESLint builtin, backed by a fake with
+/// ESLint 9's config lookup: it reads `eslint.config.mjs` from its working
+/// directory only and reports that config's rule for every file.
+fn write_nested_eslint_project(project: &Path) {
+    let eslint = write_executable(
+        project,
+        "eslint",
+        r#"#!/bin/sh
+if [ ! -f eslint.config.mjs ]; then
+  echo "ESLint couldn't find an eslint.config.(js|mjs|cjs) file." >&2
+  exit 2
+fi
+rule=$(cat eslint.config.mjs)
+for file in "$@"; do
+  case "$file" in -*) continue ;; esac
+  echo "$file:1:1: error $rule"
+done
+exit 1
+"#,
+    );
+    let eslint = eslint.to_string_lossy().replace('\\', "\\\\");
+    for (path, contents) in [
+        ("eslint.config.mjs", "root-rule\n"),
+        ("frontend/package.json", "{}\n"),
+        ("frontend/eslint.config.mjs", "frontend-rule\n"),
+        ("frontend/src/app.js", "app()\n"),
+        ("scripts/build.js", "build()\n"),
+    ] {
+        let path = project.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {{ fileActivity {{ filesystemMtime = false }} }}
+tools {{ ["eslint"] = (Builtins.eslint) {{ executable = "{eslint}" }} }}
+run {{ "eslint" }}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn eslint_runs_from_the_nearest_package_and_other_files_from_the_project_root() {
+    require_pkl!();
+    let project = temp_project("eslint-nested-package");
+    write_nested_eslint_project(&project);
+
+    // Immediate: each file is checked from its own directory's config.
+    for (file, rule) in [
+        ("frontend/src/app.js", "frontend-rule"),
+        ("scripts/build.js", "root-rule"),
+    ] {
+        let output = run_example(
+            "post-tool-immediate",
+            &post_tool_use_fixture("claude", &project, file),
+            &["--claude"],
+        );
+        let (json, _) = immediate_response(&output);
+        let context = json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            context.contains(&format!("{file}:1:1: error {rule}")),
+            "{json}"
+        );
+    }
+
+    // Stop: one job per workspace, the package's and the project root's.
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    for file in ["frontend/src/app.js", "scripts/build.js"] {
+        seed_pending_file(&state_dir, "codex", &project.join(file));
+    }
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    let reason = response["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("frontend/src/app.js:1:1: error frontend-rule"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("scripts/build.js:1:1: error root-rule"),
+        "{reason}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 2);
+    assert_eq!(summary["counts"]["operationalErrors"], 0);
 }
 
 #[test]

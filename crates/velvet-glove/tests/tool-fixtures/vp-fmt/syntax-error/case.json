@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.ts does not parse: vp fmt exits 2 in check and write mode with the parse error at `example.ts:2:1`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

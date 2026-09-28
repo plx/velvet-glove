@@ -6,6 +6,7 @@
 //! log. The helpers here are pure so both the deferred and the immediate
 //! runner can share them.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// A bounded excerpt and whether anything was cut to fit its limits.
@@ -105,12 +106,57 @@ pub(crate) fn normalize(input: &str, roots: &[&Path]) -> String {
 /// Longest single line kept in an excerpt; longer lines end in `…`.
 const MAX_LINE_CHARS: usize = 400;
 
+/// Collapse repeated lines so that noise repeated many times (a warning
+/// printed once per target) cannot crowd a real diagnostic out of an
+/// excerpt: each later exact copy of a line is dropped, and the first copy
+/// keeps its place with `(repeated N times)` appended, N counting every
+/// copy. Lines without a letter or digit (blank lines, code-frame gutters
+/// and carets) are structure rather than noise: they are kept, except right
+/// after a dropped copy, whose code frame they belong to.
+pub(crate) fn collapse_repeats(text: &str) -> String {
+    let substantive = |line: &str| line.chars().any(char::is_alphanumeric);
+    let mut counts = HashMap::<&str, usize>::new();
+    for line in text.lines().filter(|line| substantive(line)) {
+        *counts.entry(line).or_default() += 1;
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    let mut after_dropped = false;
+    for line in text.lines() {
+        match counts.get(line) {
+            Some(&count) if count > 1 => {
+                after_dropped = !seen.insert(line);
+                if !after_dropped {
+                    out.push(format!("{line} (repeated {count} times)"));
+                }
+            }
+            None if after_dropped => {}
+            _ => {
+                after_dropped = false;
+                out.push(line.to_owned());
+            }
+        }
+    }
+    out.join("\n")
+}
+
 /// Keep at most `max_lines` lines and `max_chars` characters of `text`,
-/// shortening any single line longer than [`MAX_LINE_CHARS`].
+/// shortening any single line longer than [`MAX_LINE_CHARS`]. Text that does
+/// not fit has its repeated lines collapsed first (see [`collapse_repeats`]);
+/// text that fits is kept verbatim, so a code frame that repeats a source
+/// line for two nearby diagnostics stays intact.
 pub(crate) fn clip(text: &str, max_lines: usize, max_chars: usize) -> Excerpt {
+    let collapsed;
+    let mut truncated = false;
+    let text = if text.lines().count() > max_lines || text.chars().count() > max_chars {
+        collapsed = collapse_repeats(text);
+        truncated = collapsed.lines().count() < text.lines().count();
+        collapsed.as_str()
+    } else {
+        text
+    };
     let mut out = String::new();
     let mut chars = 0usize;
-    let mut truncated = false;
     for (index, line) in text.lines().enumerate() {
         if index >= max_lines {
             truncated = true;
@@ -263,6 +309,48 @@ mod tests {
         assert_eq!(
             clipped.text,
             format!("{}…\nnext", "x".repeat(MAX_LINE_CHARS))
+        );
+    }
+
+    #[test]
+    fn repeated_noise_is_collapsed_so_the_real_error_fits() {
+        // rustfmt on stable prints both warnings once per target it formats.
+        let mut output = String::new();
+        for _ in 0..40 {
+            output.push_str("Warning: can't set `imports_granularity = Crate`, unstable features are only available in nightly channel.\n");
+            output.push_str("Warning: can't set `group_imports = StdExternalCrate`, unstable features are only available in nightly channel.\n");
+        }
+        output.push_str("error: this file contains an unclosed delimiter\n --> src/utils.rs:9:3\n  |\n9 | fn f() {\n  |        - unclosed delimiter");
+        let clipped = clip(&output, 10, 6_000);
+        assert_eq!(
+            clipped.text,
+            "Warning: can't set `imports_granularity = Crate`, unstable features are only available in nightly channel. (repeated 40 times)\n\
+             Warning: can't set `group_imports = StdExternalCrate`, unstable features are only available in nightly channel. (repeated 40 times)\n\
+             error: this file contains an unclosed delimiter\n --> src/utils.rs:9:3\n  |\n9 | fn f() {\n  |        - unclosed delimiter"
+        );
+        assert!(clipped.truncated, "collapsed copies point at the full log");
+    }
+
+    #[test]
+    fn collapsing_keeps_structure_lines_and_output_that_fits() {
+        let frames = "E1 a.py:1:8\n  |\n1 | import os\n  |\nE2 a.py:2:8\n  |\n1 | import os\n  |";
+        assert_eq!(
+            collapse_repeats(frames),
+            "E1 a.py:1:8\n  |\n1 | import os (repeated 2 times)\n  |\nE2 a.py:2:8\n  |"
+        );
+        // A whole diagnostic printed twice keeps only its first frame.
+        let twice = "error: unclosed\n --> a.rs:2:5\n  |\n2 | f(\n  |  ^\n\nerror: unclosed\n --> a.rs:2:5\n  |\n2 | f(\n  |  ^\n";
+        assert_eq!(
+            collapse_repeats(twice),
+            "error: unclosed (repeated 2 times)\n --> a.rs:2:5 (repeated 2 times)\n  |\n2 | f( (repeated 2 times)\n  |  ^\n"
+        );
+        // Within the budget nothing is collapsed, so both frames stay whole.
+        assert_eq!(
+            clip(frames, 60, 6_000),
+            Excerpt {
+                text: frames.into(),
+                truncated: false
+            }
         );
     }
 

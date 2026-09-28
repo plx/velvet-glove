@@ -1,4 +1,11 @@
 /// ESLint — JavaScript/TypeScript linter with auto-fix.
+///
+/// ESLint 9 finds its flat config from the working directory upward (ESLint
+/// 10 from each file's directory), so files run from their nearest
+/// `package.json` directory: a backend+frontend repository's
+/// `frontend/eslint.config.mjs` is found, and a monorepo package without its
+/// own config still reaches the root one. Files outside every package run
+/// from the project root.
 
 module velvet_glove.builtins.tools.Eslint
 
@@ -9,6 +16,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "ESLint"
   executable = "eslint"
   installHint = "install eslint with `brew install eslint` or add it to the project"
+  workspaceIndicator = "package.json"
+  workspaceFallback = "project-root"
 
   files = new Config.FileSelection {
     include = new Listing<String> {

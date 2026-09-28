@@ -1,0 +1,4 @@
+{
+  "outcome": "manual",
+  "note": "example.go has a syntax error, so the package cannot be loaded: errcheck exits 2, distinct from its clean (0) and issues (1) exit codes, and reports `example.go:5:1: expected operand`. Its failure names the edited file at a source location, so it is a syntax error for the agent to fix, not an operational failure."
+}

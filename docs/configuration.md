@@ -89,7 +89,7 @@ A layer can discard inherited state first with `merge`:
 | `settings.commandTimeoutSeconds` | `120` | Wall-clock limit per external command. A command that exceeds it is killed (on Unix, with its whole process group) and reported as an operational failure. `0` disables the limit. |
 | `settings.localBinDirs` | `node_modules/.bin`, `.venv/bin` | Project-local executable directories searched before `PATH`; see [Executable resolution](#executable-resolution). A layer that sets it replaces the list. |
 | `settings.exclude` | `**/<dir>/**` for `.git`, `node_modules`, `.venv`, `__pycache__`, `target`, and the tool caches below | Global exclusions, matched against project-relative paths before tool filters. Additions append; see `merge.resetExclude`. |
-| `settings.failFast` | `true` | In immediate mode, stop scheduling later tools after an operational failure. At Stop, skip only the failing tool's later remedies; other tools still run. |
+| `settings.failFast` | `true` | In immediate mode, stop scheduling later tools after an operational failure. At Stop, skip only the failing workflow's later remedies; the tool's other workflows and other tools still run. |
 | `settings.continueAfterIssues` | `true` | Continue with later tools after source issues (immediate mode). |
 | `settings.missingToolPolicy` | `user-notice` | Missing executable: `user-notice`, `hard-failure` (the hook fails), or `harness-block`. Applies to both hooks. |
 | `settings.diagnosticsDirectory` | unset | Immediate-mode full diagnostics. Unset keeps them outside the project, in `$TMPDIR/velvet-glove/state/post-tool-immediate`; a relative path resolves from the project root. |
@@ -128,7 +128,8 @@ one from scratch with `new ToolSpec { ... }`.
 | `id`, `displayName` | Identifier used in artifacts; name used in messages. |
 | `executable`, `installHint` | Program to run and the hint shown when it is missing. |
 | `files.include`, `files.exclude` | Globs over project-relative paths; empty `include` selects every file. |
-| `workspaceIndicator` | Marker file (e.g. `Cargo.toml`); files are grouped by their nearest marker, up to the project root. Files without one are skipped. |
+| `workspaceIndicator` | Marker file (e.g. `Cargo.toml`); files are grouped by their nearest marker, up to the project root, and each group runs from the marker's directory. Files without one are skipped. |
+| `workspaceFallback` | `skip` (default) or `project-root`: run files with no marker above them from the project root instead of skipping them. ESLint, Biome, and dprint use `package.json` with this fallback, so a nested package's config is found and files outside every package still run. Prettier, stylelint, oxlint, and oxfmt find config per file, and standard and xo read it only from their working directory (so a package would lose a monorepo's root config); they run from the project root. |
 | `phases`, `phaseOrder`, `phaseInvocation` | Commands for the immediate PostToolUse hook, in order. Unlisted phases run after listed ones, by mode (`format`, `fix`, `verify`, `check-only`), then name. |
 | `workflows`, `workflowOrder` | Check/remedy pairs for the deferred Stop hook. Without `workflows`, the deferred hook translates `phases`: each mutating phase becomes a remedy checked by the last verify phase. |
 | `extraArgs` | Arguments added to **every** command's `ExtraArgs` token. |
@@ -144,7 +145,16 @@ A `Phase` has `mode`, `argv`, optional `program`, `exitCodes`, `writes`,
 
 `exitCodes` classifies each exit status as `clean` (default `0`), `issues`,
 or `failure`; anything else follows `unexpected` (default `failure`). Source
-issues are for the agent; failures are operational and go to the user.
+issues are for the agent; failures are operational and go to the user. One
+exception: a failure whose output names a checked file at a source location
+(`src/a.py:3: error: invalid syntax`, or `src/a.py:3:1`, as mypy and
+`ruff format` print for a syntax error) is a source problem in that file, so
+it counts as issues in the files it names. A failure naming no checked file
+at a location (a usage error, a crash, a broken config file) stays
+operational. In immediate mode, as for a failed remedy at Stop, a mutating
+phase that exits with a failure code does not stop the tool: later phases
+still run, and the failure stands only if none of them reports issues in the
+call's files.
 `writes` (`none`, `target-files`, `matching-globs`, `workspace`) tells the
 runner which files to snapshot so it can report what a command changed; every
 mutating phase and remedy needs one, and every check must be `none`.
@@ -163,7 +173,10 @@ mutating phase and remedy needs one, and every check must be `none`.
 | `new ToolExecutable {}` | The resolved tool executable. |
 | `new ExtraArgs {}` | The tool's `extraArgs`, then the workflow's, then the phase's or command's own. |
 
-Without a `workspaceIndicator`, commands run in the project root.
+Without a `workspaceIndicator` (or, with `workspaceFallback =
+"project-root"`, for files outside every marked workspace), commands run in
+the project root and `new WorkspaceIndicator {}` expands to nothing, so a
+tool with that fallback may not use it.
 
 ### Executable resolution
 
@@ -303,8 +316,11 @@ phase that found the issues (or, for a tool without one, of the phases that
 did), with ANSI escapes removed and project paths made relative. The
 `deferredReporting.excerptMaxLines`/`excerptMaxChars` budget is divided among
 the tools that report issues in one call exactly as at Stop (an equal share
-each, at least 5 lines and 400 characters while budget remains); a cut
-excerpt ends with `…truncated; full log: <path>`. The texts come from the
+each, at least 5 lines and 400 characters while budget remains). Output
+that does not fit its share first has repeated lines collapsed (the first
+copy ends in `(repeated N times)`), so noise such as a warning printed once
+per target cannot crowd out the real error; a cut excerpt ends with
+`…truncated; full log: <path>`. The texts come from the
 tool's `messages.issuesAgent` / `issuesChangedAgent` templates, which receive
 `excerpt` alongside `tool`, `changed_files`, `issue_files`, and the
 `diagnostics_*` paths. A template that fails to render falls back to the
@@ -411,10 +427,18 @@ The default Stop-time messages follow one contract:
 | Result | Agent | User |
 | --- | --- | --- |
 | Clean | nothing | nothing |
-| Auto-fixed only | `velvet-glove auto-fixed src/a.py (Ruff), web/b.ts (Prettier); re-read before editing.` | the same line |
-| Manual fixes needed (blocks) | a short header plus, per tool, a bounded, ANSI-free, project-relative excerpt of the final check's output (`…truncated; full log: <path>` when cut) | file count, files, and the run directory |
+| Auto-fixed only | nothing | `velvet-glove auto-fixed src/a.py (Ruff), web/b.ts (Prettier); re-read before editing.` |
+| Manual fixes needed (blocks) | the auto-fix line (if any), then a short header plus, per tool, a bounded, ANSI-free, project-relative excerpt of the final check's output (`…truncated; full log: <path>` when cut) | the auto-fix line (if any), file count, files, and the run directory |
 | Tool missing, crashed, or misconfigured | nothing | one line naming the tool, the reason, and an install hint or log path |
 | Issues only in files not changed this turn | nothing | a one-line "not blocking" note |
+
+The default `autoFixed.agent` template renders only when the Stop blocks
+(`{% if blocks.manual or blocks.operational or blocks.coverage %}`), so the
+agent re-reads fixed files before fixing the rest. On an allowed Stop, agent
+context would cost a model turn spent acknowledging it (and Claude Code
+already tells the agent when a file it read changed on disk); set
+`autoFixed = new TemplatePair { agent = "…" }` to send it anyway. Immediate
+mode keeps its agent line, which rides on the tool result.
 
 A file counts as auto-fixed only when a remedy changed its bytes and its final
 check passed. When a batch or workspace check fails, its output decides the
@@ -456,8 +480,9 @@ committed as operational artifacts.
 Missing executables follow `settings.missingToolPolicy` at Stop too:
 `user-notice` notifies without blocking or keeping the files pending,
 `harness-block` blocks, and `hard-failure` fails the hook. Under
-`settings.failFast`, an operational failure skips only the same tool's later
-remedies; other tools still fix their files.
+`settings.failFast`, an operational failure skips only the same workflow's
+later remedies; the tool's other workflows (Ruff's lint when its format check
+cannot run) and other tools still fix their files.
 
 A Stop that follows a block (Claude and Codex `stop_hook_active`; for
 Antigravity, the Stop right after a block) is not blocked again for an

@@ -128,6 +128,18 @@ case "$action" in
   crash)
     exit 2
     ;;
+  syntax-check)
+    for file in "$@"; do
+      if grep -q 'SYNTAX' "$file"; then
+        printf '%s:3: error: invalid syntax  [syntax]\n' "${file##*/}"
+        exit 2
+      fi
+    done
+    ;;
+  bad-config)
+    printf 'error: bad config pyproject.toml\n' >&2
+    exit 2
+    ;;
   fix-members)
     for file in "$1"/../*/*.rs; do
       sed 's/DIRTY/CLEAN/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
@@ -435,7 +447,7 @@ fn operational_initial_check_never_runs_remedy() {
 }
 
 #[test]
-fn fail_fast_stops_only_the_failing_tools_later_remedies() {
+fn fail_fast_stops_only_the_failing_workflows_later_remedies() {
     let fixture = Fixture::new("initial-failure-stops-remedies");
     let earlier = fixture.file("earlier.rs", "DIRTY\n");
     let failed = fixture.file("failed.rs", "DIRTY\n");
@@ -475,6 +487,82 @@ fn fail_fast_stops_only_the_failing_tools_later_remedies() {
             "check", "crash", "check", "check", "fix", "fix", "check", "check"
         ]
     );
+}
+
+#[test]
+fn fail_fast_does_not_stop_a_sibling_workflow_of_the_same_tool() {
+    // Ruff's shape: its format check cannot run (exit 2) on a file whose
+    // lint check reports issues; the lint remedy and final check still run.
+    let fixture = Fixture::new("sibling-workflow-survives-fail-fast");
+    let file = fixture.file("file.py", "DIRTY\n");
+    let lint = scheduled(&fixture, 0, file.clone(), "check-report", Some("fix"));
+    let mut format = scheduled(&fixture, 0, file.clone(), "crash", Some("format-fix"));
+    format.workflow_index = 1;
+    format.workflow_id = "format".into();
+
+    let execution = execute_deferred_workflows(&[lint, format], 1, true);
+
+    // The lint fix invalidates the format check, so it is rerun at the end.
+    assert_eq!(
+        fixture.trace_lines(),
+        vec!["check-report", "crash", "fix", "check-report", "crash"]
+    );
+    assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
+    let problems = &execution.result.operational_problems;
+    assert!(!problems.is_empty());
+    assert!(
+        problems.keys().all(|id| id.starts_with("000-tool-0-001-")),
+        "only the format workflow is operational: {problems:?}"
+    );
+}
+
+#[test]
+fn a_failing_check_that_locates_a_candidate_reports_issues_in_it() {
+    // mypy's shape: exit 2 on a syntax error, naming the file at a line. The
+    // failing formatter remedy is explained by the same source problem.
+    let fixture = Fixture::new("located-failure");
+    let broken = fixture.file("x.py", "SYNTAX\n");
+    let plan = vec![scheduled(
+        &fixture,
+        0,
+        broken.clone(),
+        "syntax-check",
+        Some("crash"),
+    )];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(
+        only_status(&execution, &broken),
+        Some(FileStatus::ManualFixesNeeded)
+    );
+    assert!(!execution.result.has_operational_problems());
+    let report = execution.result.reports.values().next().expect("report");
+    assert_eq!(report.issue_files, vec![broken]);
+    assert_eq!(
+        fixture.trace_lines(),
+        vec!["syntax-check", "crash", "syntax-check"]
+    );
+}
+
+#[test]
+fn a_failing_check_that_names_no_candidate_location_stays_operational() {
+    let fixture = Fixture::new("config-failure");
+    fixture.file("pyproject.toml", "[tool]\n");
+    let file = fixture.file("x.py", "DIRTY\n");
+    let plan = vec![scheduled(
+        &fixture,
+        0,
+        file.clone(),
+        "bad-config",
+        Some("fix"),
+    )];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(only_status(&execution, &file), None);
+    assert!(execution.result.has_operational_problems());
+    assert_eq!(fixture.trace_lines(), vec!["bad-config"]);
 }
 
 #[test]

@@ -6,7 +6,9 @@
 ///
 /// Probed with Elixir/mix 1.20.4: failing tests exit 2 (issues); a project
 /// that does not compile exits 1, which the default `unexpected` policy
-/// reports as an operational failure. ExUnit reports a failing assertion at
+/// reports as an operational failure unless the compiler names an edited
+/// file at a location (then it is that file's issue; see the `syntax-error`
+/// fixture). ExUnit reports a failing assertion at
 /// its location in the test file, so the runners blame the test
 /// file, not the library change that broke it.
 

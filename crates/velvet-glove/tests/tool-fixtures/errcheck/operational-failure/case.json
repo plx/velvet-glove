@@ -1,4 +1,0 @@
-{
-  "outcome": "operational",
-  "note": "example.go has a syntax error, so the package cannot be loaded. errcheck exits 2 for a package-load failure, distinct from its clean (0) and issues (1) exit codes."
-}

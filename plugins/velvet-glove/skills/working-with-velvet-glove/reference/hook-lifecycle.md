@@ -16,12 +16,12 @@ runs, then its automatic fix where needed, then a final check. Every command's
 log and a `summary.json` go into a run directory under the state root.
 
 Outputs follow one contract: clean is silent; auto-fixes produce one line for
-the user and the agent; manual issues block Stop, with a bounded excerpt of
-the final check for the agent and a count, file list, and run directory for
-the user; tool and configuration problems only notify the user. On Codex an
-allowed Stop has no agent channel, so the auto-fix line reaches only the user.
-Immediate mode never blocks: remaining issues reach the agent as context with
-the same kind of excerpt.
+the user, which the agent sees only when Stop blocks (so it re-reads before
+fixing the rest); manual issues block Stop, with a bounded excerpt of the
+final check for the agent and a count, file list, and run directory for the
+user; tool and configuration problems only notify the user. Immediate mode
+never blocks: auto-fixes and remaining issues reach the agent as context, the
+issues with the same kind of excerpt.
 
 Hook stdout is protocol JSON; `velvet-glove check` runs the same Stop-time
 engine by hand, outside any hook and its state.

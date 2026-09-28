@@ -49,7 +49,10 @@ for both audiences. Remaining issues are attributed with Stop's
 `deferred/attribution.rs` and reach the agent as the named files plus a
 bounded excerpt (`excerpt.rs`) of the output of the phases that decided them,
 dividing the same `deferredReporting.excerptMax*` budget as Stop the same
-way; issues naming only unchanged files become a user note. Full command
+way; issues naming only unchanged files become a user note. A mutating
+phase that exits with a failure code is judged like a failed remedy at
+Stop: later phases still run, and the failure is operational only if none
+of them blames the call's files. Full command
 output goes only to diagnostics files, which default to
 `$TMPDIR/velvet-glove/state/post-tool-immediate`. Policy load errors, message
 templates that fail to render, and unwritable diagnostics directories become
@@ -104,8 +107,8 @@ broken tool config the check merely names) it is an operational problem.
 Identical check
 commands within one stage (the compatibility translation pairs several
 mutators with one verifier) run once.
-With `failFast`, an operational failure skips only the same tool's later
-remedies. Check stages retain bounded job parallelism and deterministic result
+With `failFast`, an operational failure skips only the same tool workflow's
+later remedies, so a sibling workflow of that tool still runs. Check stages retain bounded job parallelism and deterministic result
 ordering. The complex deferred policy is split across `deferred/model.rs`,
 `deferred/execution.rs`, `deferred/attribution.rs`, `deferred/reporting.rs`,
 `deferred/guard.rs`, and `deferred/lowering.rs`; `excerpt.rs` and `vcs.rs` hold
@@ -138,7 +141,12 @@ candidate's absolute and relative spellings (so paths with spaces work), with
 other paths resolved against every directory from the command's workspace up
 to the project root; output naming only other existing files is out of scope
 and does not block; output naming no file is conservatively attributed to
-every candidate.
+every candidate. A check that exits with a failure code but names candidates
+at a source location (`path:line[:column]` in any spelling attribution
+understands, as mypy and `ruff format` report a syntax error) found a source
+problem: it counts as issues in exactly those candidates
+(`deferred/attribution.rs` holds the matcher, which the immediate runner
+reuses). Other failures stay operational.
 
 The runner commits `summary.json` only after every command artifact is durable
 and before changing pending state. The summary contains run identity, counts,
