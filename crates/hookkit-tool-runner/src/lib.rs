@@ -3244,23 +3244,66 @@ struct CommandOutput {
     timed_out: Option<Duration>,
 }
 
+/// Longest wait for output after the command itself exits. Only a
+/// descendant still holding the pipes (a backgrounded helper or a daemon
+/// that did not detach) keeps them open that long; its later output is not
+/// the command's.
+const LINGERING_OUTPUT_GRACE: Duration = Duration::from_secs(2);
+
+/// Shortest wait for output already written when the command exits.
+const MIN_OUTPUT_GRACE: Duration = Duration::from_millis(100);
+
 /// Run a command with captured output, killing it (and, on Unix, its process
-/// group) if it outlives `command.timeout`.
+/// group) if it outlives `command.timeout`. Output collection is bounded
+/// too: once the command exits, output is gathered until its pipes close,
+/// the timeout's deadline, or [`LINGERING_OUTPUT_GRACE`], whichever is first.
 fn execute_command(command: &RenderedCommand, cwd: &Path) -> std::io::Result<CommandOutput> {
     use std::io::Read;
     use std::process::Stdio;
     use std::sync::mpsc;
+    use std::time::Instant;
 
-    fn drain(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
-        let (sender, receiver) = mpsc::channel();
+    /// Output read so far from one pipe, and a signal once the pipe closes.
+    struct Drain {
+        buffer: Arc<Mutex<Vec<u8>>>,
+        closed: mpsc::Receiver<()>,
+    }
+
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> Drain {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let (sender, closed) = mpsc::channel();
         if let Some(mut pipe) = pipe {
+            let shared = Arc::clone(&buffer);
             std::thread::spawn(move || {
-                let mut buffer = Vec::new();
-                let _ = pipe.read_to_end(&mut buffer);
-                let _ = sender.send(buffer);
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(read) => shared
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .extend_from_slice(&chunk[..read]),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => break,
+                    }
+                }
+                let _ = sender.send(());
             });
         }
-        receiver
+        Drain { buffer, closed }
+    }
+
+    /// Everything read by `until`, even if the pipe is still open.
+    fn collect(drain: Drain, until: Instant) -> Vec<u8> {
+        let _ = drain
+            .closed
+            .recv_timeout(until.saturating_duration_since(Instant::now()));
+        std::mem::take(
+            &mut *drain
+                .buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     let mut process = Command::new(&command.program);
@@ -3280,17 +3323,16 @@ fn execute_command(command: &RenderedCommand, cwd: &Path) -> std::io::Result<Com
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
 
+    let deadline = command.timeout.map(|timeout| Instant::now() + timeout);
     let mut timed_out = None;
-    let status = match command.timeout {
-        None => child.wait()?,
-        Some(timeout) => {
-            let deadline = std::time::Instant::now() + timeout;
+    let status = match (command.timeout, deadline) {
+        (Some(timeout), Some(deadline)) => {
             let mut delay = Duration::from_millis(1);
             loop {
                 if let Some(status) = child.try_wait()? {
                     break status;
                 }
-                let now = std::time::Instant::now();
+                let now = Instant::now();
                 if now >= deadline {
                     kill_process_tree(&mut child);
                     timed_out = Some(timeout);
@@ -3300,19 +3342,24 @@ fn execute_command(command: &RenderedCommand, cwd: &Path) -> std::io::Result<Com
                 delay = (delay * 2).min(Duration::from_millis(20));
             }
         }
+        _ => child.wait()?,
     };
-    // A timed-out tool may leave descendants holding the pipes open; take
-    // whatever output arrives promptly rather than waiting for them.
-    let collect = |receiver: mpsc::Receiver<Vec<u8>>| match timed_out {
-        None => receiver.recv().unwrap_or_default(),
-        Some(_) => receiver
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap_or_default(),
-    };
+    // A descendant may still hold the pipes after the command exits (or is
+    // killed); take whatever output arrives promptly rather than waiting.
+    let now = Instant::now();
+    let grace = match (timed_out, deadline) {
+        (Some(_), _) => Duration::from_secs(1),
+        (None, Some(deadline)) => deadline
+            .saturating_duration_since(now)
+            .min(LINGERING_OUTPUT_GRACE),
+        (None, None) => LINGERING_OUTPUT_GRACE,
+    }
+    .max(MIN_OUTPUT_GRACE);
+    let until = now + grace;
     Ok(CommandOutput {
         status: status.code(),
-        stdout: collect(stdout),
-        stderr: collect(stderr),
+        stdout: collect(stdout, until),
+        stderr: collect(stderr, until),
         timed_out,
     })
 }
@@ -4790,6 +4837,28 @@ mod tests {
             "{log:?}"
         );
         assert_eq!(log.stdout, "started");
+
+        // A descendant that outlives the command and keeps its output pipes
+        // open must not hold the hook past the timeout (or, without one,
+        // past a short grace period).
+        for timeout in [Some(Duration::from_millis(1_500)), None] {
+            let started = std::time::Instant::now();
+            let log = run_phase_command(
+                &phase,
+                &RenderedCommand {
+                    timeout,
+                    ..command("(sleep 8) & echo checked; exit 0", 0)
+                },
+                &root,
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "lingering descendant held the pipes for {:?} ({timeout:?})",
+                started.elapsed()
+            );
+            assert_eq!(log.stdout, "checked\n");
+            assert_eq!(log.classification, Some(PhaseStatus::Clean));
+        }
     }
 
     #[test]
