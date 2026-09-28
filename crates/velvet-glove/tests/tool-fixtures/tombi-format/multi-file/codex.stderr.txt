@@ -1,2 +1,2 @@
-tombi format: changed example.toml
+tombi format: changed example.dirty.toml
 hookkit: redirected user notices and diagnostics to protocol stderr

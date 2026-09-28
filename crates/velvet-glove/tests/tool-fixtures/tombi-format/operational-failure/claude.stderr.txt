@@ -1,0 +1,16 @@
+error: tombi format: phase `format` failed; diagnostics: <workspace>/.velvet-glove/tombi-format-agent-hook/test-session_tombi-format-tool_tombi-format-tool-failure.txt
+tombi format failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: tombi format --this-flag-does-not-exist <workspace>/example.toml
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: unexpected argument '--this-flag-does-not-exist' found
+
+  tip: to pass '--this-flag-does-not-exist' as a value, use '-- --this-flag-does-not-exist'
+
+Usage: tombi format [OPTIONS] [FILES]...
+
+For more information, try '--help'.
+artifact: <workspace>/.velvet-glove/tombi-format-agent-hook/test-session_tombi-format-tool_tombi-format-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
