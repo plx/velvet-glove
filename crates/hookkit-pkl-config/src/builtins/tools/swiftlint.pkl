@@ -17,8 +17,11 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["fix"] = new Config.Phase {
       mode = "fix"
+      // `--quiet` drops the per-file "Linting '<file>'" progress lines,
+      // which would otherwise name every file of a batch as if it had issues.
       argv = new Listing<String | Config.ArgToken> {
         "--fix"
+        "--quiet"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
@@ -32,6 +35,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "lint"
+        "--quiet"
         new Config.ExtraArgs {}
         new Config.Files {}
       }

@@ -45,9 +45,40 @@ pub fn evaluate_pkl_file_patch(file_path: &Path) -> Result<RunnerConfigPatch, Pk
     mirror_source_siblings(file_path, &staging.dir)?;
     let staged_target = staging.dir.join(unique_pkl_name("user"));
     copy_to_staging(file_path, &staged_target)?;
+    // Pkl may report the canonical spelling (`/private/var/...` on macOS).
+    let mut staged_spellings = vec![staged_target.clone()];
+    staged_spellings.extend(std::fs::canonicalize(&staged_target).ok());
     let result = run_pkl_eval(&staged_target);
     drop(staging);
-    result
+    result.map_err(|error| attribute_to_source(error, &staged_spellings, file_path))
+}
+
+/// Point an evaluation error at the user's file instead of the staged copy,
+/// which is deleted by the time anyone reads the message.
+fn attribute_to_source(
+    error: PklConfigError,
+    spellings: &[PathBuf],
+    source: &Path,
+) -> PklConfigError {
+    let rewrite = |text: String| {
+        spellings.iter().fold(text, |text, spelling| {
+            text.replace(
+                &spelling.to_string_lossy().into_owned(),
+                &source.to_string_lossy(),
+            )
+        })
+    };
+    match error {
+        PklConfigError::PklEvalFailed { stderr, .. } => PklConfigError::PklEvalFailed {
+            path: source.to_path_buf(),
+            stderr: rewrite(stderr),
+        },
+        PklConfigError::JsonDecode { error, .. } => PklConfigError::JsonDecode {
+            path: source.to_path_buf(),
+            error: rewrite(error),
+        },
+        other => other,
+    }
 }
 
 /// Evaluate an in-memory Pkl source string.

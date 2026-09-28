@@ -532,6 +532,16 @@ fn deferred_checks_assert_per_file_semantics() {
         error.contains("expected auto-fixed, observed clean"),
         "{error}"
     );
+    // A workspace remedy that rewrote a file beyond the cited ones counts.
+    let mut workspace = summary("clean", "clean", false);
+    workspace["result"]["files"]["/fixture/workspace/member/src/lib.rs"] =
+        serde_json::json!({"status": "auto-fixed"});
+    assert!(check(&auto_fixed, &allowed, &workspace).is_ok());
+    let error = check(&clean, &allowed, &workspace).unwrap_err();
+    assert!(
+        error.contains("expected clean, observed auto-fixed"),
+        "{error}"
+    );
 
     // Non-cited files join the aggregate only when changed or blamed.
     let workspace = |status: &str| {
@@ -583,11 +593,28 @@ fn deferred_checks_assert_per_file_semantics() {
 }
 
 #[test]
+fn deferred_manual_cases_assert_the_loop_guard() {
+    let blocked = serde_json::json!({"decision": "block", "reason": "fix it"});
+    let allowed = serde_json::json!({"systemMessage": "not blocking again"});
+    let manual = CaseSpec::new(Outcome::Manual);
+    assert!(check_loop_guard(&manual, Some(&allowed)).is_ok());
+    let error = check_loop_guard(&manual, Some(&blocked)).unwrap_err();
+    assert!(error.contains("blocked again"), "{error}");
+    let error = check_loop_guard(&manual, None).unwrap_err();
+    assert!(error.contains("no continuation"), "{error}");
+    for outcome in [Outcome::Clean, Outcome::AutoFixed, Outcome::Operational] {
+        assert!(check_loop_guard(&CaseSpec::new(outcome), None).is_ok());
+    }
+}
+
+#[test]
 fn immediate_checks_assert_coarse_output_shape() {
     let empty = serde_json::json!({});
     let context = serde_json::json!({"hookSpecificOutput": {"additionalContext": "x"}});
     assert!(check_immediate_stdout(Outcome::Clean, &empty).is_ok());
     assert!(check_immediate_stdout(Outcome::Clean, &context).is_err());
+    let user_note = serde_json::json!({"systemMessage": "velvet-glove: not reporting issues outside the files this call changed"});
+    assert!(check_immediate_stdout(Outcome::Clean, &user_note).is_ok());
     assert!(check_immediate_stdout(Outcome::AutoFixed, &context).is_ok());
     assert!(check_immediate_stdout(Outcome::Manual, &empty).is_err());
     assert!(check_immediate_stdout(Outcome::Operational, &empty).is_ok());
@@ -1486,7 +1513,8 @@ fn run_lane(
                 &workspace.project,
                 &run.stop,
                 &run.summary,
-            )
+            )?;
+            check_loop_guard(&case.expect, run.continuation.as_ref())
         }
         Lane::Immediate => {
             let stdout = run_hook(
@@ -1504,11 +1532,17 @@ fn run_lane(
 }
 
 /// Coarse channel shape only: message wording belongs to the UX templates.
+/// A clean case may still carry a user-only `systemMessage` (for example the
+/// note about issues in files the call did not change), but nothing may reach
+/// the agent.
 fn check_immediate_stdout(outcome: Outcome, stdout: &JsonValue) -> Result<(), String> {
     let silent = stdout.as_object().is_some_and(serde_json::Map::is_empty);
+    let reaches_agent = stdout.get("hookSpecificOutput").is_some()
+        || stdout.get("decision").is_some()
+        || stdout.get("reason").is_some();
     match outcome {
-        Outcome::Clean if !silent => Err(format!(
-            "clean case must be silent (stdout {{}}), got {stdout}"
+        Outcome::Clean if reaches_agent => Err(format!(
+            "clean case must say nothing to the agent, got {stdout}"
         )),
         Outcome::AutoFixed | Outcome::Manual if silent => Err(format!(
             "{outcome} case produced no native output, so the agent is never told"
@@ -1520,10 +1554,13 @@ fn check_immediate_stdout(outcome: Outcome, stdout: &JsonValue) -> Result<(), St
 struct DeferredRun {
     stop: JsonValue,
     summary: JsonValue,
+    /// Output of the retry Stop (`stop_hook_active`) run after a block.
+    continuation: Option<JsonValue>,
 }
 
 /// Drives the plugin's hook sequence with a private state directory under
-/// `root`: `session-start-state`, one `post-tool` observation, then Stop.
+/// `root`: `session-start-state`, one `post-tool` observation, then Stop,
+/// and, when that Stop blocks, the agent's retry Stop.
 fn run_deferred_flow(
     root: &Path,
     project: &Path,
@@ -1599,7 +1636,45 @@ fn run_deferred_flow(
         .and_then(|bytes| {
             serde_json::from_slice(&bytes).map_err(|error| format!("parse {summary:?}: {error}"))
         })?;
-    Ok(DeferredRun { stop, summary })
+    // A block makes the agent continue; its next Stop carries
+    // `stop_hook_active`. With no edits in between, the same issues remain.
+    let continuation = if is_block(&stop) {
+        Some(run_hook(
+            "turn-completion",
+            Some(&state),
+            post_tool,
+            &lifecycle(
+                "Stop",
+                serde_json::json!({"stop_hook_active": true, "last_assistant_message": "tried"}),
+            ),
+            timeout,
+            &evidence.join("turn-completion-continuation"),
+            env,
+        )?)
+    } else {
+        None
+    };
+    Ok(DeferredRun {
+        stop,
+        summary,
+        continuation,
+    })
+}
+
+fn is_block(stop: &JsonValue) -> bool {
+    stop.get("decision").and_then(JsonValue::as_str) == Some("block")
+}
+
+/// The loop guard: after a manual block, the agent's unchanged retry (a Stop
+/// with `stop_hook_active`) must be allowed rather than blocked again.
+fn check_loop_guard(expect: &CaseSpec, continuation: Option<&JsonValue>) -> Result<(), String> {
+    match (expect.outcome, continuation) {
+        (Outcome::Manual, None) => Err("manual case: no continuation Stop was run".to_owned()),
+        (Outcome::Manual, Some(stop)) if is_block(stop) => Err(format!(
+            "loop guard: a Stop with stop_hook_active=true after the block blocked again: {stop}"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Runs one hook command with the native input's harness environment and
@@ -1684,7 +1759,7 @@ fn check_deferred_run(
             format!("{id}: {}", message.unwrap_or("(no message)"))
         })
         .collect::<Vec<_>>();
-    let blocked = stop.get("decision").and_then(JsonValue::as_str) == Some("block");
+    let blocked = is_block(stop);
 
     let mut problems = Vec::new();
     if expect.outcome == Outcome::Operational {
@@ -1734,6 +1809,13 @@ fn check_deferred_run(
                     "{file}: expected {expected}, but summary.json does not report it changed or blamed"
                 )),
                 _ => {}
+            }
+        }
+        // Workspace-wide remedies rewrite files beyond the edited ones, and
+        // the run reports those files too.
+        for (file, outcome) in &observed {
+            if !cited.contains(file) {
+                worst = worst.max(Some(*outcome));
             }
         }
         match worst {

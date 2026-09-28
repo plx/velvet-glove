@@ -20,6 +20,12 @@ pub fn run(cli: Cli) -> ExitCode {
         (Command::Init(args), _) => {
             crate::commands::init::run(&resolve_dir(&args.dir), args.print, args.force)
         }
+        (Command::Check(args), _) => crate::commands::check::run(
+            &resolve_dir(&args.dir),
+            cli.config.as_deref(),
+            &args.files,
+            args.json,
+        ),
         (Command::PostTool, Some(harness)) => runners::run_file_activity(harness, state_dir),
         (Command::PostToolImmediate, Some(harness)) => runners::run_immediate(harness, cli.config),
         (Command::TurnCompletion, Some(harness)) => {

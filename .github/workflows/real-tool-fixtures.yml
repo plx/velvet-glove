@@ -4,13 +4,16 @@ on:
   schedule:
     - cron: '23 7 * * 1' # Mondays, 07:23 UTC
   workflow_dispatch:
-  # Exercise changes to the lane itself before merging them.
+  # Exercise changes to the lane, its fixtures, and builtin specs before
+  # merging them. The lane runs only the CI-selected tools, so this is cheap.
   pull_request:
     paths:
       - '.github/workflows/real-tool-fixtures.yml'
       - '.github/real-tools/**'
       - 'scripts/run-real-tool-fixtures.sh'
       - 'crates/velvet-glove/tests/tool_fixtures.rs'
+      - 'crates/velvet-glove/tests/tool-fixtures/**'
+      - 'crates/hookkit-pkl-config/src/builtins/tools/**'
 
 permissions:
   contents: read

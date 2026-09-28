@@ -7,6 +7,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 /// Print every builtin tool with its Pkl key, id, executable status, and globs.
+/// Executables resolve as the hooks resolve them with the default
+/// `settings.localBinDirs` (`doctor` applies the project's own settings).
 pub fn run(dir: &Path, json: bool) -> ExitCode {
     let catalog = match hookkit_pkl_config::builtin_specs() {
         Ok(catalog) => catalog,
@@ -15,12 +17,13 @@ pub fn run(dir: &Path, json: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let local_bin_dirs = hookkit_pkl_config::schema::default_local_bin_dirs();
 
     if json {
         let entries: Vec<serde_json::Value> = catalog
             .iter()
             .map(|(key, spec)| {
-                let (program, resolution) = resolve_tool(spec, dir);
+                let (program, resolution) = resolve_tool(spec, dir, &local_bin_dirs);
                 let detect = spec.detect.clone().unwrap_or_default();
                 serde_json::json!({
                     "key": key,
@@ -53,7 +56,7 @@ pub fn run(dir: &Path, json: bool) -> ExitCode {
     let rows: Vec<[String; 5]> = catalog
         .iter()
         .map(|(key, spec)| {
-            let (program, resolution) = resolve_tool(spec, dir);
+            let (program, resolution) = resolve_tool(spec, dir, &local_bin_dirs);
             let status = match resolution.path() {
                 Some(path) => format!("{} ({})", resolution.status(), path.display()),
                 None => format!("{program}: missing"),

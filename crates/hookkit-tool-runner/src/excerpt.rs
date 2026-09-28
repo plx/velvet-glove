@@ -153,6 +153,35 @@ pub(crate) fn clip(text: &str, max_lines: usize, max_chars: usize) -> Excerpt {
     }
 }
 
+/// Fewest lines one excerpt gets from a shared budget when several share it.
+pub(crate) const MIN_SHARE_LINES: usize = 5;
+/// Fewest characters one excerpt gets from a shared budget.
+pub(crate) const MIN_SHARE_CHARS: usize = 400;
+
+/// Clip each text to a fair share of one `max_lines`/`max_chars` budget:
+/// every text gets an equal share (at least [`MIN_SHARE_LINES`] and
+/// [`MIN_SHARE_CHARS`]), never more than what earlier texts left. Stop and
+/// immediate mode divide their agent excerpt budget this way.
+pub(crate) fn clip_shared(texts: &[String], max_lines: usize, max_chars: usize) -> Vec<Excerpt> {
+    let count = texts.len().max(1);
+    let share_lines = (max_lines / count).max(MIN_SHARE_LINES);
+    let share_chars = (max_chars / count).max(MIN_SHARE_CHARS);
+    let (mut used_lines, mut used_chars) = (0usize, 0usize);
+    texts
+        .iter()
+        .map(|text| {
+            let clipped = clip(
+                text,
+                share_lines.min(max_lines.saturating_sub(used_lines)),
+                share_chars.min(max_chars.saturating_sub(used_chars)),
+            );
+            used_lines += clipped.text.lines().count();
+            used_chars += clipped.text.chars().count();
+            clipped
+        })
+        .collect()
+}
+
 /// Render an excerpt followed by a pointer to the full log when needed.
 pub(crate) fn with_log_note(excerpt: &Excerpt, log_path: Option<&str>) -> String {
     let log = log_path.map_or_else(String::new, |path| format!("; full log: {path}"));
@@ -235,6 +264,21 @@ mod tests {
             clipped.text,
             format!("{}…\nnext", "x".repeat(MAX_LINE_CHARS))
         );
+    }
+
+    #[test]
+    fn shared_budget_gives_every_text_a_fair_share() {
+        let long = (0..40)
+            .map(|n| format!("a{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let clipped = clip_shared(&[long.clone(), "b1\nb2".into()], 20, 10_000);
+        assert_eq!(clipped[0].text.lines().count(), 10);
+        assert!(clipped[0].truncated);
+        assert_eq!(clipped[1].text, "b1\nb2");
+        // A later text is not starved by an earlier long one.
+        let clipped = clip_shared(&[long.clone(), long, "c1".into()], 30, 10_000);
+        assert_eq!(clipped[2].text, "c1");
     }
 
     #[test]

@@ -108,6 +108,31 @@ impl Default for Settings {
     }
 }
 
+/// Tool caches and build output that tools regenerate and nobody edits by
+/// hand. They are excluded from tool selection by default and pruned from
+/// file-activity scans, which matters outside Git repositories (inside one,
+/// Git-ignored candidates are dropped anyway) and for scan cost:
+///
+/// - `.ruff_cache`, `.mypy_cache`, `.pytest_cache`: caches Ruff, mypy, and
+///   pytest rewrite on every run, so without pruning a Stop that ran Ruff
+///   finds "new" files there on the next Stop;
+/// - `.tox`, `.nox`: tox/nox virtual environments, whole package trees;
+/// - `.gradle`: Gradle's per-project cache (build logic lives in
+///   `build.gradle*` and `gradle/`, which stay included);
+/// - `.build`: SwiftPM's build directory, including dependency checkouts;
+/// - `.next`, `.turbo`: Next.js build output and the Turborepo cache.
+pub const TOOL_CACHE_DIRECTORIES: &[&str] = &[
+    ".ruff_cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".nox",
+    ".gradle",
+    ".build",
+    ".next",
+    ".turbo",
+];
+
 /// Global exclusions that apply unless a layer sets `merge.resetExclude`.
 ///
 /// Every pattern is unanchored so nested copies are excluded too:
@@ -116,16 +141,33 @@ impl Default for Settings {
 /// - `**/node_modules/**`: installed JavaScript dependencies;
 /// - `**/.venv/**`: the conventional Python virtual environment;
 /// - `**/__pycache__/**`: Python bytecode caches;
-/// - `**/target/**`: Cargo (and Maven) build output.
+/// - `**/target/**`: Cargo (and Maven) build output;
+/// - one `**/<dir>/**` per [`TOOL_CACHE_DIRECTORIES`] entry.
 pub fn default_excludes() -> Vec<String> {
+    [".git", "node_modules", ".venv", "__pycache__", "target"]
+        .into_iter()
+        .chain(TOOL_CACHE_DIRECTORIES.iter().copied())
+        .map(|directory| format!("**/{directory}/**"))
+        .collect()
+}
+
+/// Directory basenames pruned from file-activity scans by default: VCS
+/// metadata, `.context` scratch space, dependency trees, build output, and
+/// [`TOOL_CACHE_DIRECTORIES`]. A direct observation of an edit inside one
+/// still counts.
+pub fn default_ignored_directory_names() -> Vec<String> {
     [
-        "**/.git/**",
-        "**/node_modules/**",
-        "**/.venv/**",
-        "**/__pycache__/**",
-        "**/target/**",
+        ".context",
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "target",
+        ".venv",
+        "__pycache__",
     ]
     .into_iter()
+    .chain(TOOL_CACHE_DIRECTORIES.iter().copied())
     .map(str::to_owned)
     .collect()
 }
@@ -255,8 +297,10 @@ pub struct DeferredReporting {
     pub master_agent: String,
     /// Whether categories with no files are included in rendered output.
     pub render_empty_buckets: bool,
-    /// Whether tool crashes and configuration errors block turn completion.
-    /// Missing executables follow [`Settings::missing_tool_policy`] instead.
+    /// Whether tool crashes, timeouts, and reporting or tool-plan errors in
+    /// a policy that loaded block turn completion. A policy that fails to
+    /// load never blocks. Missing executables follow
+    /// [`Settings::missing_tool_policy`] instead.
     pub block_on_operational_errors: bool,
     /// Consecutive blocks allowed while the harness reports an active stop
     /// hook; zero disables the cap.
@@ -267,6 +311,12 @@ pub struct DeferredReporting {
     /// issues.
     pub excerpt_max_chars: u32,
 }
+
+/// Auto-fixed files named in one notice before the rest are counted as
+/// "and N more". The default `autoFixed` templates slice
+/// `auto_fixed_files[:10]`, and immediate mode's auto-fix line uses this
+/// same limit.
+pub const AUTO_FIXED_LISTED_FILES: usize = 10;
 
 const OPERATIONAL_PROBLEMS_TEMPLATE: &str = "velvet-glove could not run {% for problem in problems %}{{ problem.tool }} ({{ problem.reason }}{% if problem.missing_tool and problem.install_hint %}; {{ problem.install_hint }}{% elif problem.log_path %}; log: {{ problem.log_path }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}.";
 
@@ -461,7 +511,8 @@ pub struct FileActivitySettings {
     pub max_entries: usize,
     /// Behavior when reconciliation cannot establish complete activity coverage.
     pub coverage_gap_policy: CoverageGapPolicy,
-    /// Directory basenames pruned from recursive traversal.
+    /// Directory basenames pruned from recursive traversal; see
+    /// [`default_ignored_directory_names`].
     pub ignored_directory_names: Vec<String>,
 }
 
@@ -473,14 +524,7 @@ impl Default for FileActivitySettings {
             timestamp_tolerance_millis: 2_000,
             max_entries: 100_000,
             coverage_gap_policy: CoverageGapPolicy::BestEffort,
-            ignored_directory_names: vec![
-                ".context".into(),
-                ".git".into(),
-                ".hg".into(),
-                ".svn".into(),
-                "node_modules".into(),
-                "target".into(),
-            ],
+            ignored_directory_names: default_ignored_directory_names(),
         }
     }
 }
@@ -917,12 +961,14 @@ pub fn default_clean_changed_agent() -> String {
     "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.".into()
 }
 
-/// Returns the default agent template for a result with remaining issues.
+/// Returns the default agent template for a result with remaining issues:
+/// the files plus a bounded excerpt of the deciding check's output.
 pub fn default_issues_agent() -> String {
-    "{{ tool }} reports issues; inspect diagnostics at {{ diagnostics_path }}.".into()
+    "velvet-glove: {{ tool }} reports issues in {{ issue_files | join(\", \") }}:\n{{ excerpt }}"
+        .into()
 }
 
 /// Returns the default agent template for changed files with remaining issues.
 pub fn default_issues_changed_agent() -> String {
-    "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}.".into()
+    "velvet-glove: {{ tool }} changed {{ changed_files | join(\", \") }} (re-read before editing); issues remain in {{ issue_files | join(\", \") }}:\n{{ excerpt }}".into()
 }

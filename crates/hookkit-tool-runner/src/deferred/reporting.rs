@@ -1,3 +1,4 @@
+use super::execution::command_phase_label;
 use super::{DeferredRunResult, FileResult, FileStatus};
 use crate::excerpt;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -18,9 +19,6 @@ const OPERATIONAL_USER: &str = "operational.user";
 const OPERATIONAL_AGENT: &str = "operational.agent";
 const MASTER_USER: &str = "master.user";
 const MASTER_AGENT: &str = "master.agent";
-/// Smallest per-issue excerpt share before the global budget applies.
-const MIN_EXCERPT_LINES: usize = 5;
-const MIN_EXCERPT_CHARS: usize = 400;
 /// Longest single-line reason quoted from an operational problem.
 const MAX_REASON_CHARS: usize = 200;
 
@@ -438,12 +436,12 @@ impl DeferredReporter {
     /// One entry per distinct manual report, each with a bounded excerpt of
     /// the output of the check that decided it. The configured line and
     /// character limits apply to all excerpts together.
-    fn issue_entries(
+    pub(crate) fn issue_entries(
         &self,
         result: &DeferredRunResult,
         project_root: &Path,
         roots: &[&Path],
-    ) -> Vec<Value> {
+    ) -> Vec<IssueExcerpt> {
         let mut seen = BTreeSet::new();
         let mut entries = Vec::new();
         for report in result.manual_reports() {
@@ -463,77 +461,116 @@ impl DeferredReporter {
                 artifact.map(|artifact| artifact.absolute_path.to_string_lossy().into_owned());
             entries.push((report, files, output, log_path));
         }
-        let max_lines = self.config.excerpt_max_lines as usize;
-        let max_chars = self.config.excerpt_max_chars as usize;
-        let count = entries.len().max(1);
-        let share_lines = (max_lines / count).max(MIN_EXCERPT_LINES);
-        let share_chars = (max_chars / count).max(MIN_EXCERPT_CHARS);
-        let (mut used_lines, mut used_chars) = (0usize, 0usize);
+        let outputs = entries
+            .iter()
+            .map(|(_, _, output, _)| output.clone())
+            .collect::<Vec<_>>();
+        let clipped = excerpt::clip_shared(
+            &outputs,
+            self.config.excerpt_max_lines as usize,
+            self.config.excerpt_max_chars as usize,
+        );
         entries
             .into_iter()
-            .map(|(report, files, output, log_path)| {
-                let clipped = excerpt::clip(
-                    &output,
-                    share_lines.min(max_lines.saturating_sub(used_lines)),
-                    share_chars.min(max_chars.saturating_sub(used_chars)),
-                );
-                used_lines += clipped.text.lines().count();
-                used_chars += clipped.text.chars().count();
-                json!({
-                    "tool": report.tool_name,
-                    "tool_id": report.tool_id,
-                    "workflow": report.workflow_id,
-                    "files": files,
-                    "excerpt": excerpt::with_log_note(&clipped, log_path.as_deref()),
-                    "truncated": clipped.truncated,
-                    "log_path": log_path,
-                })
+            .zip(clipped)
+            .map(|((report, files, _, log_path), clipped)| IssueExcerpt {
+                tool: report.tool_name.clone(),
+                tool_id: report.tool_id.clone(),
+                workflow: report.workflow_id.clone(),
+                files,
+                excerpt: excerpt::with_log_note(&clipped, log_path.as_deref()),
+                truncated: clipped.truncated,
+                log_path,
             })
             .collect()
     }
 }
 
+/// One manual report's files and a bounded excerpt of its deciding check
+/// output, as the deferred templates (`issues`) and `check` see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IssueExcerpt {
+    /// Display name of the reporting tool.
+    pub tool: String,
+    /// Identifier of the reporting tool.
+    pub tool_id: String,
+    /// Workflow whose final check reported the issues.
+    pub workflow: String,
+    /// Project-relative files the issues are attributed to.
+    pub files: Vec<String>,
+    /// ANSI-free, project-relative, bounded check output; ends with a
+    /// pointer to the full log when cut.
+    pub excerpt: String,
+    /// Whether the excerpt was cut to fit the budget.
+    pub truncated: bool,
+    /// Absolute path of the deciding check's full log.
+    pub log_path: Option<String>,
+}
+
+/// One tool's operational problems, as the deferred templates (`problems`)
+/// and `check` see them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProblemSummary {
+    /// Display name of the tool, or `configuration`.
+    pub tool: String,
+    /// Identifier of the tool, when the problem belongs to one.
+    pub tool_id: Option<String>,
+    /// First line of the first problem's message, bounded.
+    pub reason: String,
+    /// Whether the executable could not be found.
+    pub missing_tool: bool,
+    /// Installation guidance for a missing tool.
+    pub install_hint: Option<String>,
+    /// Absolute path of a log supporting the problem.
+    pub log_path: Option<String>,
+    /// Number of problems recorded for this tool.
+    pub count: usize,
+}
+
 /// One entry per tool with operational problems, in first-seen order.
-fn problem_entries(result: &DeferredRunResult) -> Vec<Value> {
-    let mut entries = Vec::<(Option<String>, Value)>::new();
+pub(crate) fn problem_entries(result: &DeferredRunResult) -> Vec<ProblemSummary> {
+    let mut entries = Vec::<ProblemSummary>::new();
     for problem in result.operational_problems.values() {
-        if let Some((_, entry)) = entries
+        if let Some(entry) = entries
             .iter_mut()
-            .find(|(tool_id, _)| *tool_id == problem.tool_id)
+            .find(|entry| entry.tool_id == problem.tool_id)
         {
-            entry["count"] = json!(entry["count"].as_u64().unwrap_or(1) + 1);
+            entry.count += 1;
             continue;
         }
-        let log_path = problem
+        // Point at the log of the command that failed (a failed remedy's,
+        // not the final check that ran after it) when it is known.
+        let artifacts = problem
             .artifact_ids
             .iter()
             .filter_map(|id| result.artifacts.get(id))
-            .map(|artifact| artifact.absolute_path.to_string_lossy().into_owned())
-            .next();
+            .collect::<Vec<_>>();
+        let log_path = artifacts
+            .iter()
+            .find(|artifact| problem.phase.as_deref() == Some(command_phase_label(artifact.phase)))
+            .or(artifacts.first())
+            .map(|artifact| artifact.absolute_path.to_string_lossy().into_owned());
         let reason = problem
             .message
             .lines()
             .find(|line| !line.trim().is_empty())
             .unwrap_or_default()
             .trim();
-        entries.push((
-            problem.tool_id.clone(),
-            json!({
-                "tool": problem
-                    .tool_name
-                    .clone()
-                    .or_else(|| problem.tool_id.clone())
-                    .unwrap_or_else(|| "configuration".into()),
-                "tool_id": problem.tool_id,
-                "reason": excerpt::clip(reason, 1, MAX_REASON_CHARS).text,
-                "missing_tool": problem.missing_tool,
-                "install_hint": problem.install_hint,
-                "log_path": log_path,
-                "count": 1,
-            }),
-        ));
+        entries.push(ProblemSummary {
+            tool: problem
+                .tool_name
+                .clone()
+                .or_else(|| problem.tool_id.clone())
+                .unwrap_or_else(|| "configuration".into()),
+            tool_id: problem.tool_id.clone(),
+            reason: excerpt::clip(reason, 1, MAX_REASON_CHARS).text,
+            missing_tool: problem.missing_tool,
+            install_hint: problem.install_hint.clone(),
+            log_path,
+            count: 1,
+        });
     }
-    entries.into_iter().map(|(_, entry)| entry).collect()
+    entries
 }
 
 fn display(path: &Path, project_root: &Path) -> String {
@@ -617,6 +654,7 @@ mod tests {
             conservative_attribution: false,
             issue_files: files.iter().map(PathBuf::from).collect(),
             out_of_scope_files: Vec::new(),
+            unverified: false,
             artifact_ids: vec![format!("{id}-final-check")],
         }
     }
@@ -802,6 +840,28 @@ mod tests {
         blocking.blocks.operational = true;
         let agent = reporter.render(&result, blocking).unwrap().agent.unwrap();
         assert!(agent.starts_with("velvet-glove could not run Ruff"));
+    }
+
+    #[test]
+    fn a_failed_remedy_points_at_its_own_log() {
+        let mut result = DeferredRunResult::default();
+        result.record_artifact(artifact("r-final-check", "r", "/logs/final-check.log", ""));
+        let mut remedy = artifact("r-remedy", "r", "/logs/remedy.log", "");
+        remedy.phase = CommandPhase::Remedy;
+        result.record_artifact(remedy);
+        result.record_operational_problem(OperationalProblem {
+            id: "r-remedy".into(),
+            tool_id: Some("clippy".into()),
+            tool_name: Some("Clippy".into()),
+            missing_tool: false,
+            install_hint: None,
+            phase: Some("remedy".into()),
+            affected_files: vec!["/repo/src/main.rs".into()],
+            message: "fix failed with exit code 101".into(),
+            artifact_ids: vec!["r-final-check".into(), "r-remedy".into()],
+        });
+        let entries = problem_entries(&result);
+        assert_eq!(entries[0].log_path.as_deref(), Some("/logs/remedy.log"));
     }
 
     #[test]
