@@ -1,0 +1,63 @@
+/// gleam format — Gleam's bundled formatter.
+///
+/// `gleam format --check` exits 1 both for an unformatted file and for a
+/// syntax error, so the check's exit code alone can't tell them apart. The
+/// mutating `format` phase can: it exits 1 only when parsing fails, and it
+/// declares just `clean = 0`, so that 1 falls through to the default
+/// `unexpected = "failure"`. The immediate runner runs `format` before
+/// `verify`; the deferred flow runs `format` as the remedy for the check's
+/// "issues" verdict. Either way a broken file ends as an operational
+/// failure, not a source issue. A batch `gleam format` call formats nothing
+/// when any listed file fails to parse, so per-file invocation isolates a
+/// broken file from its siblings.
+
+module velvet_glove.builtins.tools.GleamFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "gleam-format"
+  displayName = "gleam format"
+  executable = "gleam"
+  installHint = "install the Gleam toolchain (gleam format ships with it)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.gleam"; "**/*.gleam" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "gleam.toml" }
+    role = "gleam-format"
+    default = true
+  }
+}

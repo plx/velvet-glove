@@ -1,0 +1,64 @@
+/// Ormolu — a Haskell formatter.
+///
+/// For a single file Ormolu has real per-mode exit codes: `--mode check`
+/// exits 0 clean, 100 unformatted (a diff on stdout), 3 a parse error;
+/// `--mode inplace` exits 0 on success and 3 on a parse error. With several
+/// files it still writes every file that parses but collapses any mix of
+/// outcomes into 102, so a batch containing one broken file would be
+/// charged as a whole. Per-file invocation keeps each file's classification
+/// independent. Not the only Haskell formatter (fourmolu and
+/// stylish-haskell are common alternatives) and it has no config file of
+/// its own to detect, so it is opt-in rather than a role default.
+
+module velvet_glove.builtins.tools.Ormolu
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "ormolu"
+  displayName = "Ormolu"
+  executable = "ormolu"
+  installHint = "install ormolu with `brew install ormolu`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.hs"; "**/*.hs" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "--mode"
+        "inplace"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 3 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--mode"
+        "check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 100 }
+        failure = new Listing<Int> { 3 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "haskell-format"
+    note = "opt-in only: no config file of its own, and not the only Haskell formatter"
+  }
+}

@@ -1,0 +1,1 @@
+{"outcome": "auto-fixed", "files": {"example.clean.zig": "clean", "example.dirty.zig": "auto-fixed"}}

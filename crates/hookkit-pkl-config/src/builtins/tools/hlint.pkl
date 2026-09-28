@@ -1,0 +1,45 @@
+/// HLint — a Haskell linter (suggestions only, no autofix).
+///
+/// HLint has no separate exit code for a source parse error, a missing
+/// input file, or a bad `--hint` config path: all of those and an ordinary
+/// lint hint share exit code 1 (0 is the only distinct code, for a clean
+/// run). So an unparseable file is reported as a manual lint finding rather
+/// than an operational failure; there is no fixture case asserting the
+/// latter because HLint cannot produce it. `apply-refact` can act on
+/// HLint's suggestions but is a separate tool this spec does not invoke, so
+/// there is no remedy phase.
+
+module velvet_glove.builtins.tools.Hlint
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "hlint"
+  displayName = "HLint"
+  executable = "hlint"
+  installHint = "install hlint with `brew install hlint`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.hs"; "**/*.hs" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".hlint.yaml" }
+    role = "haskell-lint"
+  }
+}

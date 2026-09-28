@@ -1,0 +1,62 @@
+/// zig fmt — Zig's bundled formatter.
+///
+/// `zig fmt --check` exits 1 both for an unformatted file (its name on
+/// stdout) and for a parse error (a diagnostic on stderr), so the check's
+/// exit code alone can't tell them apart. The mutating `format` phase can:
+/// it exits 0 after rewriting a parseable file and 1 only when parsing
+/// fails, and it declares just `clean = 0`, so that 1 falls through to the
+/// default `unexpected = "failure"`. The immediate runner runs `format`
+/// before `verify`; the deferred flow runs `format` as the remedy for the
+/// check's "issues" verdict. Either way a broken file ends as an
+/// operational failure, not a source issue. Per-file invocation keeps one
+/// broken file's failure from being charged to its siblings.
+
+module velvet_glove.builtins.tools.ZigFmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "zig-fmt"
+  displayName = "zig fmt"
+  executable = "zig"
+  installHint = "install the Zig toolchain (zig fmt ships with it)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.zig"; "**/*.zig" }
+  }
+  phaseInvocation = "per-file"
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "zig-format"
+    default = true
+  }
+}
