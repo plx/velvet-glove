@@ -1,4 +1,16 @@
 /// oxlint — Oxidation compiler's Rust-based JavaScript/TypeScript linter.
+///
+/// oxlint tiers its fixes: plain `--fix` only applies changes it considers
+/// certainly safe. Many common findings (e.g. `double-comparisons`) are
+/// tagged "suggestion" and are only applied with `--fix-suggestions`, which
+/// oxlint still keeps separate from `--fix-dangerously` (semantics-risking
+/// fixes we deliberately do not opt into). Verified empirically against
+/// oxlint 1.84.0: `--fix` alone left a `x === y || x < y` simplification
+/// untouched; adding `--fix-suggestions` rewrote it to `x <= y`.
+///
+/// Config-parse errors, syntax errors, and lint issues all exit 1 with no
+/// other observable signal, so an operational failure is not distinguishable
+/// from an "issues" result here; no `operational-failure` fixture is claimed.
 
 module velvet_glove.builtins.tools.Oxlint
 
@@ -32,6 +44,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       argv = new Listing<String | Config.ArgToken> {
         "--deny-warnings"
         "--fix"
+        "--fix-suggestions"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
