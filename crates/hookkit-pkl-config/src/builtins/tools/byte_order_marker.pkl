@@ -1,10 +1,11 @@
 /// byte-order-marker — strip a UTF-8 BOM (`U+FEFF`) from text files.
 ///
 /// Backed by hk's (jdx/hk) `hk util check-byte-order-marker` /
-/// `hk util fix-byte-order-marker`. `check` never mutates; `fix` always
-/// exits 0 and only rewrites files that actually had a BOM. Both silently
-/// treat a missing path as clean (exit 0), so an unreadable file is never
-/// misreported as an issue; a malformed invocation (bad flag) exits 2.
+/// `hk util fix-byte-order-marker`. `check` never mutates; `fix` exits 0
+/// and only rewrites files that actually had a BOM. `check` treats a
+/// missing path as clean (exit 0) while `fix` exits 1 on it, which the fix
+/// phase classifies as an operational failure, never an issue; a malformed
+/// invocation (bad flag) exits 2.
 
 module velvet_glove.builtins.tools.ByteOrderMarker
 

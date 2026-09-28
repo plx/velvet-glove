@@ -2,7 +2,8 @@
 ///
 /// Backed by hk's (jdx/hk) `hk util trailing-whitespace`. With no flag it
 /// checks without mutating and exits 1 when trailing whitespace is found;
-/// `--fix` removes it. A missing path is silently treated as clean
+/// `--fix` removes it, including Markdown's two-space hard line breaks (hk
+/// has no Markdown exemption). A missing path is silently treated as clean
 /// (exit 0); a malformed invocation (bad flag) exits 2.
 
 module velvet_glove.builtins.tools.TrailingWhitespace
