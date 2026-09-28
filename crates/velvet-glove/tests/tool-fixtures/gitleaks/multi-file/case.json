@@ -1,0 +1,1 @@
+{"outcome": "manual", "files": {"example.a-clean.txt": "clean", "example.b-secret.txt": "manual"}, "note": "gitleaks dir given two paths scans the whole cwd; per-file invocation keeps the clean file unblamed."}

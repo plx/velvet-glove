@@ -9,11 +9,9 @@
 /// exit code for "leaks found" (1) also collides with genuine operational
 /// failures (missing path, unreadable config), which also exit 1, so
 /// `--exit-code 2` reassigns the leaks-found exit code and leaves 1
-/// exclusively for operational failure. `--log-level error` drops
-/// wall-clock-timestamped info/warn logging so diagnostics are reproducible;
-/// a fatal error still stamps its own line with a timestamp, so an
-/// operational-failure case is real (exit 1) but not fixturable as an
-/// exact-match golden.
+/// exclusively for operational failure (the `operational-failure` fixture's
+/// missing `--config` exits 1). `--log-level error` drops the timestamped
+/// info/warn chrome so diagnostics hold only findings and fatal errors.
 
 module velvet_glove.builtins.tools.Gitleaks
 
@@ -46,7 +44,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         // Free up exit 1 for operational failures; see header comment.
         "--exit-code"
         "2"
-        // Drop timestamped info/warn logging so diagnostics are reproducible.
+        // Keep diagnostics to findings and fatal errors.
         "--log-level"
         "error"
         new Config.ExtraArgs {}

@@ -1,0 +1,13 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["gitleaks"] = (Builtins.gitleaks) {
+    phases {
+      ["verify"] {
+        // A missing config exits 1, which must read as operational.
+        extraArgs = new Listing<String> { "--config"; "missing-operational.toml" }
+      }
+    }
+  }
+}

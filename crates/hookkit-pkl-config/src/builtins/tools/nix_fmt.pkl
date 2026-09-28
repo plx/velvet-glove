@@ -2,10 +2,11 @@
 ///
 /// Verified with nixfmt 1.4.0: `--check` exits 0 when a file is already
 /// formatted and 1 otherwise, and plain invocation never mutates a file it
-/// can't parse. nixfmt has no distinct exit code for a parse error or a
-/// missing path, though — both also exit 1, indistinguishable from a real
-/// formatting issue by exit code alone (a real limitation of the tool, not
-/// something this spec can work around).
+/// can't parse. A parse error or missing path also exits 1, so `--check`
+/// alone cannot tell it from a formatting issue (a tool limitation). The
+/// format phase runs first and never exits 1 on success, so the immediate
+/// pipeline still reports a parse error as a failure; the Stop-time check
+/// reads it as manual and then reports the failing remedy.
 
 module velvet_glove.builtins.tools.NixFmt
 

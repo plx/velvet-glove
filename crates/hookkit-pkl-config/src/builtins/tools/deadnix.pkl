@@ -1,15 +1,13 @@
 /// deadnix — finds (and optionally removes) unused bindings in Nix code.
 ///
 /// Verified with deadnix 1.3.1: `--fail` exits 1 when unused bindings are
-/// found and 0 otherwise, including on a parse error (deadnix has no
-/// distinct exit code for a bad parse — that's a real limitation of the
-/// tool, not something this spec can work around; a syntax error is silently
-/// treated as "nothing to report" unless another file in the same batch also
-/// has dead code). `--edit` removes the unused bindings and rewrites the
-/// file in place; because that deletes code rather than just reformatting
-/// it, the `fix` phase is disabled by default so a project must opt in
-/// explicitly (`phases { ["fix"] { enabled = true } }`) before Velvet Glove
-/// will auto-remove anything.
+/// found and 0 otherwise. A parse error is printed but also exits 0 (deadnix
+/// has no distinct exit code for it), so an unparseable file reads as clean
+/// unless another file in the same batch has dead code — a tool limitation
+/// this spec cannot work around. `--edit` deletes unused bindings in place,
+/// which is why `detect` keeps the tool opt-in. Its report is ANSI-colored
+/// even when piped and `NO_COLOR` is the only switch, so diagnostics carry
+/// escape codes.
 
 module velvet_glove.builtins.tools.Deadnix
 
@@ -28,9 +26,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phases = new Mapping<String, Config.Phase> {
     ["fix"] = new Config.Phase {
       mode = "fix"
-      // Opt-in: `--edit` deletes unused bindings/imports rather than just
-      // reformatting, so autofix stays off until a project enables it.
-      enabled = false
       argv = new Listing<String | Config.ArgToken> {
         "--edit"
         new Config.ExtraArgs {}
