@@ -25,7 +25,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         // xmllint exits 1..9 for various parse/validation/usage errors; treat
-        // them as issues so the runner surfaces the diagnostics.
+        // them as issues so the runner surfaces the diagnostics. Verified
+        // against libxml2 20913: a malformed document and a missing input
+        // file both exit 1, so there is no code that distinguishes an
+        // operational failure from a source issue here.
         issues = new Listing<Int> { 1; 2; 3; 4; 5; 6; 7; 8; 9 }
       }
     }

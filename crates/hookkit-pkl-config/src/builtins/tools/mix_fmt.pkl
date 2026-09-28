@@ -2,7 +2,9 @@
 ///
 /// Operates on a Mix project, identified by `mix.exs` at the project root.
 /// Runs from the project root so `.formatter.exs` and dependency configs are
-/// picked up.
+/// picked up. Every Mix error exits 1, the same code `--check-formatted` uses
+/// for unformatted files, so a file mix cannot parse fails the format phase
+/// but is reported as an issue by the verify phase.
 
 module velvet_glove.builtins.tools.MixFmt
 

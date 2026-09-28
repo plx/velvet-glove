@@ -1,0 +1,7 @@
+{
+  "outcome": "manual",
+  "cite": ["lib/demo.ex", "test/demo_test.exs"],
+  "files": {"lib/demo.ex": "clean", "test/demo_test.exs": "manual"},
+  "deferred": false,
+  "note": "mix test exits 2 for a failing test. ExUnit reports the failure at the assertion in test/demo_test.exs, so the runners blame that file and not the lib/demo.ex change that broke it. Deferred lane skipped: only the first run prints \"Compiling 1 file (.ex)\" and \"Generated demo app\", so the loop guard's fingerprint of the unchanged retry differs and Stop blocks a second time (runtime fingerprinting limitation, not a spec issue); otherwise it asserts lib/demo.ex=clean and test/demo_test.exs=manual."
+}
