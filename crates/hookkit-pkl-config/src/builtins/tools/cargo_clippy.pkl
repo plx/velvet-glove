@@ -1,4 +1,9 @@
 /// cargo clippy — Rust linter with auto-fix.
+///
+/// Both commands end with `--` followed by ExtraArgs, so extraArgs are lint
+/// flags for clippy-driver (e.g. `-A unused_imports`) and apply identically to
+/// the fix and the verify pass. Verify puts `-D warnings` first so a later
+/// `-A <lint>` still silences that lint.
 
 module velvet_glove.builtins.tools.CargoClippy
 
@@ -29,6 +34,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--allow-staged"
         "--allow-no-vcs"
         "--quiet"
+        "--"
         new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {
@@ -47,10 +53,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--workspace"
         "--all-targets"
         "--quiet"
-        new Config.ExtraArgs {}
         "--"
         "-D"
         "warnings"
+        new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }

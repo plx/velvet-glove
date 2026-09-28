@@ -452,3 +452,82 @@ run = new Listing<String> { "ruff" }
     let verify = ruff.phases.get("verify").expect("verify phase");
     assert!(!verify.enabled, "verify should be disabled by override");
 }
+
+#[test]
+fn settings_exclude_appends_to_defaults_unless_reset() {
+    require_pkl!();
+    let defaults = hookkit_pkl_config::schema::default_excludes();
+    let home = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings { exclude { "**/vendor/**" } }
+"#,
+    )
+    .unwrap();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings { exclude { "generated/**"; "**/vendor/**" } }
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([home.clone(), project].into_iter());
+    let mut expected = defaults.clone();
+    expected.extend(["**/vendor/**".to_owned(), "generated/**".to_owned()]);
+    assert_eq!(merged.settings.exclude, expected);
+
+    let reset = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+merge { resetExclude = true }
+settings { exclude { "only/**" } }
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([home, reset].into_iter());
+    assert_eq!(merged.settings.exclude, vec!["only/**"]);
+}
+
+#[test]
+fn override_ergonomics_round_trip_through_pkl() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {
+  commandTimeoutSeconds = 30
+  localBinDirs { "bin" }
+}
+
+tools {
+  ["ruff"] = (Builtins.ruff) {
+    env { ["RUFF_NO_CACHE"] = "true" }
+    timeoutSeconds = 5
+    workflows { ["lint"] { extraArgs { "--ignore"; "F401" } } }
+  }
+  ["cargoFmt"] = (Builtins.cargoFmt) { extraArgs { "--verbose" } }
+}
+run = new Listing<String> { "ruff"; "cargoFmt" }
+"#,
+    )
+    .expect("override config");
+
+    assert_eq!(config.settings.command_timeout_seconds, 30);
+    assert_eq!(config.settings.local_bin_dirs, vec!["bin"]);
+    let ruff = &config.tools["ruff"];
+    assert_eq!(ruff.env["RUFF_NO_CACHE"], "true");
+    assert_eq!(ruff.timeout_seconds, Some(5));
+    assert_eq!(ruff.workflows["lint"].extra_args, vec!["--ignore", "F401"]);
+    assert!(ruff.workflows["format"].extra_args.is_empty());
+    assert_eq!(config.tools["cargoFmt"].extra_args, vec!["--verbose"]);
+
+    let defaults = evaluate_pkl_source("amends \"Config.pkl\"\n").expect("defaults");
+    assert_eq!(defaults.settings.command_timeout_seconds, 120);
+    assert_eq!(
+        defaults.settings.local_bin_dirs,
+        vec!["node_modules/.bin", ".venv/bin"]
+    );
+    assert_eq!(defaults.settings.diagnostics_directory, None);
+}

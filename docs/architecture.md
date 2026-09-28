@@ -32,6 +32,25 @@ Performance budgets are not yet release guarantees. The hermetic smoke lane chec
 behavior but does not currently record startup, clean no-op, or subprocess timing;
 add a dedicated benchmark/measurement lane before publishing performance claims.
 
+## Immediate PostToolUse
+
+`velvet-glove post-tool-immediate` observes the call's exact file candidates
+first and returns `{}` without evaluating Pkl when there are none. Otherwise
+it runs each `run` tool's phases over the matching files, one tool after
+another; a tool's independent jobs run in parallel (`jobs = 0` is available
+parallelism, capped at 8). Claude and Codex output uses the native channels:
+agent text in `hookSpecificOutput.additionalContext`, user notices in the
+user-only `systemMessage`, and never exit-0 stderr. Auto-fixes collapse into
+one line for both audiences; full command output goes only to diagnostics
+files, which default to `$TMPDIR/velvet-glove/state/post-tool-immediate`.
+Policy load errors become a user notice rather than a hook failure.
+
+Both hooks share command plumbing: bare program names resolve through
+`settings.localBinDirs` before `PATH`, each tool's `env` is applied, and every
+command has a wall-clock timeout (`settings.commandTimeoutSeconds`, per-tool
+`timeoutSeconds`). A timed-out command is killed with its process group and
+reported as an operational failure.
+
 ## Turn-completion batching
 
 `velvet-glove turn-completion` reuses the same Pkl catalog and execution engine,

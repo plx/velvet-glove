@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"cargo clippy changed member/src/lib.rs; re-read changed files before editing further."}}
+{"hookSpecificOutput":{"additionalContext":"velvet-glove auto-fixed member/src/lib.rs (cargo clippy); re-read before editing.","hookEventName":"PostToolUse"},"systemMessage":"velvet-glove auto-fixed member/src/lib.rs (cargo clippy); re-read before editing."}

@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"gofmt changed example.go; re-read changed files before editing further.","hookEventName":"PostToolUse"}}
+{"hookSpecificOutput":{"additionalContext":"velvet-glove auto-fixed example.go (gofmt); re-read before editing.","hookEventName":"PostToolUse"},"systemMessage":"velvet-glove auto-fixed example.go (gofmt); re-read before editing."}

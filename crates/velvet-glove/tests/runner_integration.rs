@@ -602,6 +602,41 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
         .into_bytes()
 }
 
+/// Parse an immediate-mode response: the JSON stdout plus its user-only
+/// `systemMessage` (empty when absent). Immediate mode never writes stderr.
+fn immediate_response(output: &std::process::Output) -> (serde_json::Value, String) {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "immediate mode must keep stderr empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("immediate output should be JSON");
+    let user = json["systemMessage"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    (json, user)
+}
+
+/// Contents of the single diagnostics file in `project/<directory>` whose name
+/// ends with `suffix`.
+fn read_diagnostics(project: &Path, directory: &str, suffix: &str) -> String {
+    let directory = project.join(directory);
+    let matches = std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("read {directory:?}: {error}"))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(suffix))
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "{suffix} in {directory:?}: {matches:?}");
+    std::fs::read_to_string(&matches[0]).unwrap()
+}
+
 fn codex_post_tool_case(
     project: &Path,
     tool_name: &str,
@@ -2770,15 +2805,10 @@ fn post_tool_use_autofix_sends_concise_agent_feedback_when_supported() {
         &["--claude"],
     );
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
-    assert!(
-        json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .contains("Ruff changed src/dirty.py")
-    );
+    let (json, user) = immediate_response(&output);
+    let line = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
+    assert_eq!(json["hookSpecificOutput"]["additionalContext"], line);
+    assert_eq!(user, line);
     let rewritten = std::fs::read_to_string(src.join("dirty.py")).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
@@ -2801,22 +2831,23 @@ fn post_tool_use_manual_issues_write_diagnostics_and_render_template() {
         &["--codex"],
     );
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    let (json, user) = immediate_response(&output);
     let context = json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
     assert!(context.contains("fix src/broken.py"));
     assert!(context.contains(".velvet-glove/ruff-agent-hook"));
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("F821 undefined name manual_issue"));
+    assert!(user.contains("Ruff: issues remain in src/broken.py; diagnostics: "));
     assert!(
-        project
-            .join(".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-issues.txt")
-            .is_file()
+        !user.contains("F821"),
+        "full diagnostics stay out of the notice"
     );
+
+    let diagnostics = std::fs::read_to_string(project.join(
+        ".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-issues.txt",
+    ))
+    .unwrap();
+    assert!(diagnostics.contains("F821 undefined name manual_issue"));
 }
 
 #[test]
@@ -2860,7 +2891,15 @@ fn post_tool_use_can_pass_phase_extra_args_for_unfixable_rules() {
             .unwrap()
             .contains("unused_import")
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("F401 unused import"));
+    assert!(output.stderr.is_empty());
+    assert!(
+        read_diagnostics(
+            &project,
+            ".velvet-glove/ruff-agent-hook",
+            "ruff-tool-issues.txt"
+        )
+        .contains("F401 unused import")
+    );
 }
 
 #[test]
@@ -2919,13 +2958,13 @@ fn post_tool_use_reports_missing_tool_to_user_without_failing_hook() {
         &["--claude"],
     );
 
-    assert!(output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
-    assert_eq!(stdout, serde_json::json!({}));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unavailable"));
-    assert!(stderr.contains("definitely-missing-ruff"));
+    let (json, user) = immediate_response(&output);
+    assert!(
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
+    );
+    assert!(user.contains("unavailable"));
+    assert!(user.contains("definitely-missing-ruff"));
 }
 
 #[test]
@@ -2945,18 +2984,17 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
         &["--codex"],
     );
 
-    assert!(output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
-    assert_eq!(stdout, serde_json::json!({}));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("phase `format` failed"));
-    assert!(stderr.contains("format crashed"));
+    let (json, user) = immediate_response(&output);
     assert!(
-        project
-            .join(".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt")
-            .is_file()
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
     );
+    assert!(user.contains("phase `format` failed"));
+    let diagnostics = std::fs::read_to_string(project.join(
+        ".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt",
+    ))
+    .unwrap();
+    assert!(diagnostics.contains("format crashed"));
 }
 
 #[test]
@@ -3039,17 +3077,22 @@ run = new Listing<String> {{ "combo" }}
             .unwrap()
             .contains("changed")
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    let (json, user) = immediate_response(&output);
     assert!(
         json["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap()
-            .contains("Combo changed src/a.py")
+            .contains("velvet-glove auto-fixed src/a.py (Combo)")
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Combo: phase `verify` failed"));
-    assert!(stderr.contains("verify crashed"));
+    assert!(user.contains("Combo: phase `verify` failed"));
+    assert!(
+        read_diagnostics(
+            &project,
+            ".velvet-glove/post-tool-use",
+            "combo-tool-failure.txt"
+        )
+        .contains("verify crashed")
+    );
 }
 
 #[test]
@@ -3137,9 +3180,80 @@ run = new Listing<String> {{ "failer"; "changer" }}
         std::fs::read_to_string(src.join("a.py")).unwrap(),
         "original\n"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Failer: phase `verify` failed"));
-    assert!(!stderr.contains("Changer: changed"));
+    let (_, user) = immediate_response(&output);
+    assert!(user.contains("Failer: phase `verify` failed"));
+    assert!(!user.contains("Changer"));
+}
+
+#[cfg(unix)]
+#[test]
+fn post_tool_use_kills_timed_out_local_tools_and_keeps_diagnostics_out_of_the_project() {
+    require_pkl!();
+    let project = temp_project("timeout-local-bin");
+    write_executable(
+        &project,
+        "hang",
+        "#!/bin/sh\nprintf 'started %s\\n' \"$HANG_LABEL\"\nexec sleep 30\n",
+    );
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        r#"amends "Config.pkl"
+
+settings {
+  commandTimeoutSeconds = 1
+  localBinDirs { "bin" }
+}
+
+tools {
+  ["hang"] = new ToolSpec {
+    id = "hang"
+    displayName = "Hang"
+    executable = "hang"
+    env { ["HANG_LABEL"] = "from-env" }
+    files { include { "**/*.py" } }
+    phases {
+      ["verify"] = new Phase { mode = "verify"; argv { new Files {} } }
+    }
+  }
+}
+run { "hang" }
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/a.py"), "print('ok')\n").unwrap();
+
+    let started = std::time::Instant::now();
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/a.py"),
+        &["--claude"],
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+
+    let (json, user) = immediate_response(&output);
+    assert!(
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
+    );
+    assert!(
+        user.contains("Hang: phase `verify` failed (timed out after 1s"),
+        "{user}"
+    );
+    let diagnostics_path = user.rsplit("diagnostics: ").next().unwrap();
+    assert!(
+        diagnostics_path.contains("velvet-glove/state/post-tool-immediate"),
+        "{diagnostics_path}"
+    );
+    let diagnostics = std::fs::read_to_string(diagnostics_path).unwrap();
+    assert!(diagnostics.contains("started from-env"), "{diagnostics}");
+    assert!(diagnostics.contains(&project.join("bin/hang").to_string_lossy().into_owned()));
+    assert!(
+        !project.join(".velvet-glove/post-tool-use").exists(),
+        "diagnostics must not be written inside the project by default"
+    );
 }
 
 #[test]
@@ -3227,13 +3341,13 @@ run = new Listing<String> {{ "issuer"; "changer" }}
         std::fs::read_to_string(src.join("a.py")).unwrap(),
         "original\n"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Issuer: issues remain"));
-    assert!(!stderr.contains("Changer: changed"));
+    let (_, user) = immediate_response(&output);
+    assert!(user.contains("Issuer: issues remain in src/a.py"));
+    assert!(!user.contains("Changer"));
 }
 
 #[test]
-fn post_tool_use_unknown_run_entry_fails_hook() {
+fn post_tool_use_config_error_is_a_user_notice_and_skipped_for_read_only_calls() {
     require_pkl!();
     let project = temp_project("unknown-run-entry");
     let config_dir = project.join(".velvet-glove");
@@ -3256,12 +3370,29 @@ run = new Listing<String> { "rff" }
         &["--claude"],
     );
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    let (json, user) = immediate_response(&output);
     assert!(
-        output.stderr.is_empty(),
-        "runtime diagnostics are disabled unless a sink is configured"
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
     );
+    assert!(user.starts_with("error: velvet-glove: configuration error; no tools ran:"));
+    assert!(user.contains("run names unknown tool `rff`"), "{user}");
+
+    // A call that touches no files returns before the (broken) policy is
+    // even evaluated.
+    let read = PostToolUseBuilder::new(ProtocolSurface::Claude, &project, "src/a.py")
+        .identity("claude-ruff-test", "claude-ruff-turn", "claude-ruff-read")
+        .tool(
+            "Read",
+            serde_json::json!({"file_path": project.join("src/a.py")}),
+            serde_json::json!({"type": "text"}),
+        )
+        .build()
+        .unwrap()
+        .into_bytes();
+    let output = run_example("post-tool-immediate", &read, &["--claude"]);
+    let (json, _) = immediate_response(&output);
+    assert_eq!(json, serde_json::json!({}));
 }
 
 #[test]
@@ -3281,17 +3412,11 @@ fn post_tool_use_codex_emits_posttool_agent_context() {
         &["--codex"],
     );
 
-    assert!(output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("should emit structured JSON");
+    let (stdout, user) = immediate_response(&output);
     assert_eq!(stdout["hookSpecificOutput"]["hookEventName"], "PostToolUse");
-    assert!(
-        stdout["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .contains("Ruff changed src/dirty.py")
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Ruff: changed src/dirty.py"));
+    let line = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
+    assert_eq!(stdout["hookSpecificOutput"]["additionalContext"], line);
+    assert_eq!(user, line);
 }
 
 #[test]

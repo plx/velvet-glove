@@ -504,6 +504,7 @@ dependencies = [
  "hookkit-pkl-config",
  "hookkit-runtime",
  "hookkit-session-state",
+ "libc",
  "minijinja",
  "proptest",
  "serde",

@@ -89,6 +89,12 @@ pub struct ToolSpec {
     pub diagnostics_directory: Option<String>,
     /// Whether this specification participates in execution.
     pub enabled: bool,
+    /// Environment variables set for every command of this tool.
+    pub env: Vec<(String, String)>,
+    /// Wall-clock limit per command, or `None` for no limit.
+    pub timeout: Option<Duration>,
+    /// Project-local executable directories searched before `PATH`.
+    pub local_bin_dirs: Vec<String>,
 }
 
 impl ToolSpec {
@@ -111,6 +117,9 @@ impl ToolSpec {
             messages: ToolMessages::default(),
             diagnostics_directory: None,
             enabled: true,
+            env: Vec::new(),
+            timeout: Some(Duration::from_secs(pkl::DEFAULT_COMMAND_TIMEOUT_SECONDS)),
+            local_bin_dirs: Vec::new(),
         }
     }
 
@@ -975,9 +984,8 @@ fn run_turn_completion_view(
             );
         }
     };
-    let planned = resolve_run_order(&loaded.config).and_then(|tools| {
-        build_deferred_plan(&tools, &commit.candidates, &project_root, &settings.exclude)
-    });
+    let planned = resolve_run_order(&loaded.config)
+        .and_then(|tools| build_deferred_plan(&tools, &commit.candidates, &project_root, settings));
     let (plan, planned_tools) = match planned {
         Ok(planned) => planned,
         Err(error) => {
@@ -1272,7 +1280,7 @@ fn build_deferred_plan(
     schemas: &[&pkl::ToolSpec],
     candidates: &[PathBuf],
     project_root: &Path,
-    global_exclude: &[String],
+    settings: &pkl::Settings,
 ) -> hookkit_core::Result<(Vec<ScheduledWorkflow>, Vec<PlannedDeferredTool>)> {
     let mut plan = Vec::new();
     let mut planned_tools = Vec::new();
@@ -1288,7 +1296,7 @@ fn build_deferred_plan(
                 )));
             }
         }
-        let spec = Arc::new(convert_tool_spec(schema, global_exclude));
+        let spec = Arc::new(convert_tool_spec(schema, settings));
         let matcher = FileMatcher::new(&spec.file_selection)?;
         let files = candidates
             .iter()
@@ -1915,13 +1923,43 @@ fn run_post_tool_input(
 ) -> hookkit_core::Result<PostToolUseOutput> {
     let harness = ctx.harness();
     let lowering_warning_artifact = lowering_warning_artifact(&post_tool, ctx);
+
+    // Most tool calls (Read, Grep, ...) touch no files: skip every other cost,
+    // including Pkl evaluation, for them.
+    let candidates = discover_modified_files(&post_tool, ctx)
+        .into_iter()
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return lower_domain_outcome(
+            harness,
+            RunnerDomainOutcome::Clean,
+            lowering_warning_artifact.as_ref(),
+        );
+    }
+
     let cwd = ctx
         .workspace_roots()
         .first()
         .map(|root| PathBuf::from(root.as_str()))
         .ok_or_else(|| invalid_data("post-tool-use input has no workspace root".into()))?;
-    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path)
-        .map_err(|e| invalid_data(e.to_string()))?;
+    let loaded = match hookkit_pkl_config::discover_and_load(&cwd, config_path) {
+        Ok(loaded) => loaded,
+        // A broken policy is an operational problem: tell the user, never the
+        // agent, and never fail or block the tool call.
+        Err(error) => {
+            let output = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::default())
+                .with_user_notice(UserNotice::error(format!(
+                    "velvet-glove: configuration error; no tools ran: {}",
+                    truncate_chars(error.to_string().trim(), CONFIG_ERROR_NOTICE_CHARS)
+                )));
+            return lower_domain_outcome(
+                harness,
+                RunnerDomainOutcome::Report(output),
+                lowering_warning_artifact.as_ref(),
+            );
+        }
+    };
 
     let project_root = normalize_path(&loaded.project_root);
     let lowering = loaded.config.settings.lowering_policy;
@@ -1942,26 +1980,24 @@ fn run_post_tool_input(
         );
     }
 
-    let global_exclude = &loaded.config.settings.exclude;
     let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.clone();
 
     for schema_spec in tools {
         if !schema_spec.enabled {
             continue;
         }
-        let spec = convert_tool_spec(schema_spec, global_exclude);
+        let spec = convert_tool_spec(schema_spec, &loaded.config.settings);
         let context = ToolContext {
             spec: &spec,
             project_root: &project_root,
             global_diagnostics_dir: global_diagnostics_dir.as_deref(),
         };
 
-        let candidates = discover_modified_files(&post_tool, ctx);
         let matcher = FileMatcher::new(&spec.file_selection)?;
         let runnable_paths = candidates
-            .into_iter()
-            .filter(|p| p.is_file())
+            .iter()
             .filter(|p| matcher.matches(p, &project_root))
+            .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
@@ -2020,8 +2056,54 @@ pub struct RunnerPostToolUseOutput {
     notices: Vec<UserNotice>,
     agent_feedback: Vec<String>,
     diagnostics: Vec<DiagnosticReport>,
+    auto_fixed: Vec<AutoFixed>,
     harness_block: Option<String>,
     lowering: pkl::LoweringPolicy,
+}
+
+/// Files one tool changed and left clean.
+#[derive(Debug)]
+struct AutoFixed {
+    tool: String,
+    files: Vec<String>,
+    /// Whether the agent learns about it through the shared auto-fix line
+    /// (the tool keeps the default `cleanChangedAgent` template).
+    in_agent_line: bool,
+}
+
+/// Longest configuration error echoed in a user notice.
+const CONFIG_ERROR_NOTICE_CHARS: usize = 1_500;
+
+fn truncate_chars(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+/// One terse line naming every auto-fixed file and the tools that changed it:
+/// `velvet-glove auto-fixed a.py (Ruff), b.ts (Prettier); re-read before editing.`
+fn auto_fixed_line<'a>(entries: impl IntoIterator<Item = &'a AutoFixed>) -> Option<String> {
+    let mut files = Vec::<(&str, Vec<&str>)>::new();
+    for entry in entries {
+        for file in &entry.files {
+            match files.iter_mut().find(|(known, _)| known == file) {
+                Some((_, tools)) if !tools.contains(&entry.tool.as_str()) => {
+                    tools.push(&entry.tool);
+                }
+                Some(_) => {}
+                None => files.push((file, vec![&entry.tool])),
+            }
+        }
+    }
+    (!files.is_empty()).then(|| {
+        let listed = files
+            .iter()
+            .map(|(file, tools)| format!("{file} ({})", tools.join(", ")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("velvet-glove auto-fixed {listed}; re-read before editing.")
+    })
 }
 
 impl RunnerPostToolUseOutput {
@@ -2049,6 +2131,11 @@ impl RunnerPostToolUseOutput {
 
     fn with_harness_block(mut self, message: impl Into<String>) -> Self {
         self.harness_block = Some(message.into());
+        self
+    }
+
+    fn with_auto_fixed(mut self, auto_fixed: AutoFixed) -> Self {
+        self.auto_fixed.push(auto_fixed);
         self
     }
 }
@@ -2253,27 +2340,20 @@ fn lower_report(
         };
     }
 
-    let rendered_user = output
-        .notices
+    // User: one terse auto-fix line plus one line per notice, through the
+    // native user-only `systemMessage`. Full diagnostics stay in their files.
+    let auto_fixed = auto_fixed_line(&output.auto_fixed);
+    let user_lines = auto_fixed
         .iter()
-        .map(format_notice)
-        .chain(output.diagnostics.iter().map(format_diagnostic))
+        .cloned()
+        .chain(output.notices.iter().map(format_notice))
         .collect::<Vec<_>>();
-    let mut stderr = rendered_user.clone();
-    if !stderr.is_empty() {
-        match output.lowering {
-            pkl::LoweringPolicy::Strict => {
-                return Err(invalid_data(format!(
-                    "{harness} PostToolUse has no structured user-only message channel"
-                )));
-            }
-            pkl::LoweringPolicy::BestEffort => {}
-            pkl::LoweringPolicy::BestEffortWithWarnings => stderr
-                .push("hookkit: redirected user notices and diagnostics to protocol stderr".into()),
-        }
-    }
-    let stderr = (!stderr.is_empty()).then(|| stderr.join("\n"));
-    let context = output.agent_feedback.join("\n");
+    let user_message = user_lines.join("\n");
+    let context = auto_fixed_line(output.auto_fixed.iter().filter(|entry| entry.in_agent_line))
+        .into_iter()
+        .chain(output.agent_feedback.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     match harness.as_str() {
         "claude-code" => {
@@ -2282,9 +2362,10 @@ fn lower_report(
             } else {
                 hookkit_claude::protocol::PostToolUseOutput::with_context(context)
             };
-            Ok(PostToolUseOutput::Claude(match stderr {
-                Some(stderr) => native.with_protocol_stderr(stderr)?,
-                None => native,
+            Ok(PostToolUseOutput::Claude(if user_message.is_empty() {
+                native
+            } else {
+                native.with_system_message(user_message)?
             }))
         }
         "codex" => {
@@ -2293,12 +2374,17 @@ fn lower_report(
             } else {
                 hookkit_codex::protocol::PostToolUseOutput::with_context(context)
             };
-            Ok(PostToolUseOutput::Codex(match stderr {
-                Some(stderr) => native.with_protocol_stderr(stderr)?,
-                None => native,
+            Ok(PostToolUseOutput::Codex(if user_message.is_empty() {
+                native
+            } else {
+                native.with_system_message(user_message)?
             }))
         }
         "antigravity" => {
+            let rendered_user = user_lines
+                .into_iter()
+                .chain(output.diagnostics.iter().map(format_diagnostic))
+                .collect::<Vec<_>>();
             if !context.is_empty() && output.lowering == pkl::LoweringPolicy::Strict {
                 return Err(invalid_data(
                     "antigravity PostToolUse has no structured agent-only message channel".into(),
@@ -2347,6 +2433,7 @@ fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
     output.notices.is_empty()
         && output.agent_feedback.is_empty()
         && output.diagnostics.is_empty()
+        && output.auto_fixed.is_empty()
         && output.harness_block.is_none()
 }
 
@@ -2371,15 +2458,25 @@ struct ToolBatchStatus {
 }
 
 /// Convert a Pkl-shaped tool spec to the runtime execution type.
-fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpec {
+///
+/// `ExtraArgs` expands to the tool's `extraArgs`, then the workflow's (for
+/// explicit workflows), then the phase's or command's own.
+fn convert_tool_spec(spec: &pkl::ToolSpec, settings: &pkl::Settings) -> ToolSpec {
     let phases: Vec<ToolPhase> = ordered_phases(spec)
         .into_iter()
-        .map(convert_phase)
+        .map(|(id, phase)| {
+            let mut converted = convert_phase((id, phase));
+            converted.extra_args = concat_args(&[&spec.extra_args, &phase.extra_args]);
+            converted
+        })
         .collect();
 
-    let mut exclude = global_exclude.to_vec();
+    let mut exclude = settings.exclude.clone();
     exclude.extend(spec.files.exclude.clone());
     let workflows = convert_workflows(spec, &phases);
+    let timeout_seconds = spec
+        .timeout_seconds
+        .unwrap_or(settings.command_timeout_seconds);
 
     ToolSpec {
         id: spec.id.clone(),
@@ -2397,7 +2494,18 @@ fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpe
         messages: convert_messages(&spec.messages),
         diagnostics_directory: spec.diagnostics.directory.clone(),
         enabled: spec.enabled,
+        env: spec
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        timeout: (timeout_seconds > 0).then(|| Duration::from_secs(timeout_seconds)),
+        local_bin_dirs: settings.local_bin_dirs.clone(),
     }
+}
+
+fn concat_args(parts: &[&[String]]) -> Vec<String> {
+    parts.iter().flat_map(|part| part.iter().cloned()).collect()
 }
 
 fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWorkflow> {
@@ -2407,10 +2515,18 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
             .map(|(id, workflow)| ToolWorkflow {
                 id: id.clone(),
                 check: workflow.check.as_ref().map(|command| {
-                    convert_workflow_command(format!("{id}.check"), command, PhaseMode::Verify)
+                    let mut check =
+                        convert_workflow_command(format!("{id}.check"), command, PhaseMode::Verify);
+                    check.extra_args =
+                        concat_args(&[&spec.extra_args, &workflow.extra_args, &command.extra_args]);
+                    check
                 }),
                 remedy: workflow.remedy.as_ref().map(|command| {
-                    convert_workflow_command(format!("{id}.remedy"), command, PhaseMode::Fix)
+                    let mut remedy =
+                        convert_workflow_command(format!("{id}.remedy"), command, PhaseMode::Fix);
+                    remedy.extra_args =
+                        concat_args(&[&spec.extra_args, &workflow.extra_args, &command.extra_args]);
+                    remedy
                 }),
                 check_scope: match workflow.check_scope {
                     pkl::CheckScope::TargetFiles => CheckScope::TargetFiles,
@@ -2651,15 +2767,16 @@ impl FileMatcher {
         })
     }
 
+    /// Globs match the project-relative path. Only a path outside the project
+    /// root is matched as an absolute path, so unanchored excludes such as
+    /// `**/target/**` never fire on the directories *containing* the project.
     fn matches(&self, absolute_path: &Path, project_root: &Path) -> bool {
-        let rel = absolute_path
-            .strip_prefix(project_root)
-            .unwrap_or(absolute_path);
-        let rel = slash_path(rel);
-        let abs = slash_path(absolute_path);
-
-        (self.include_all || self.include.is_match(&rel) || self.include.is_match(&abs))
-            && !(self.exclude.is_match(&rel) || self.exclude.is_match(&abs))
+        let path = slash_path(
+            absolute_path
+                .strip_prefix(project_root)
+                .unwrap_or(absolute_path),
+        );
+        (self.include_all || self.include.is_match(&path)) && !self.exclude.is_match(&path)
     }
 }
 
@@ -2755,6 +2872,8 @@ enum ToolRunOutcome {
     ToolFailed {
         phase: String,
         exit_code: Option<i32>,
+        /// Spawn or timeout error, when the command did not simply exit.
+        error: Option<String>,
         diagnostics: String,
         changed_files: Vec<PathBuf>,
     },
@@ -2838,18 +2957,23 @@ fn run_jobs(jobs: &[ToolJob], context: &ToolContext<'_>, jobs_setting: u32) -> V
     outcomes.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
+/// Upper bound for `jobs = 0` (auto).
+const AUTO_JOBS_CAP: usize = 8;
+
 /// Resolve `settings.jobs` to a worker-thread count for a batch of `job_count`
 /// independent jobs.
 ///
-/// `jobs = 0` selects "auto", which is reserved for future use and runs
-/// serially for now. `jobs = n >= 1` runs up to `n` jobs concurrently, capped
-/// at `job_count` since extra workers would have nothing to claim.
+/// `jobs = 0` selects "auto": the available parallelism, capped at
+/// [`AUTO_JOBS_CAP`]. `jobs = n >= 1` runs up to `n` jobs concurrently. Both
+/// are capped at `job_count` since extra workers would have nothing to claim.
 fn resolve_worker_count(jobs_setting: u32, job_count: usize) -> usize {
     if job_count == 0 {
         return 0;
     }
     let requested = match jobs_setting {
-        0 => 1, // auto: reserved for future use; serial for now
+        0 => std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(AUTO_JOBS_CAP),
         n => n as usize,
     };
     requested.clamp(1, job_count)
@@ -2880,10 +3004,12 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                     changed_files: changed_files_since(&before, job, context),
                 };
             }
+            let error = error.clone();
             logs.push(log);
             return ToolRunOutcome::ToolFailed {
                 phase: phase.id.clone(),
                 exit_code: None,
+                error: Some(error),
                 diagnostics: format_logs(&logs),
                 changed_files: changed_files_since(&before, job, context),
             };
@@ -2907,6 +3033,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 return ToolRunOutcome::ToolFailed {
                     phase: phase.id.clone(),
                     exit_code: logs.last().and_then(|log| log.status),
+                    error: None,
                     diagnostics: format_logs(&logs),
                     changed_files: changed_files_since(&before, job, context),
                 };
@@ -2954,13 +3081,16 @@ fn changed_files_since(
 struct RenderedCommand {
     program: String,
     args: Vec<String>,
+    env: Vec<(String, String)>,
+    timeout: Option<Duration>,
 }
 
 fn render_command(phase: &ToolPhase, job: &ToolJob, context: &ToolContext<'_>) -> RenderedCommand {
-    let program = phase
-        .program
-        .clone()
-        .unwrap_or_else(|| context.spec.executable.clone());
+    let program = resolve_program(
+        phase.program.as_deref().unwrap_or(&context.spec.executable),
+        job,
+        context,
+    );
     let mut args = Vec::new();
     for arg in &phase.args {
         match arg {
@@ -2980,21 +3110,169 @@ fn render_command(phase: &ToolPhase, job: &ToolJob, context: &ToolContext<'_>) -
                 }
             }
             CommandArgTemplate::ProjectRoot => args.push(path_arg(context.project_root)),
-            CommandArgTemplate::ToolExecutable => args.push(context.spec.executable.clone()),
+            CommandArgTemplate::ToolExecutable => {
+                args.push(resolve_program(&context.spec.executable, job, context))
+            }
             CommandArgTemplate::ExtraArgs => args.extend(phase.extra_args.iter().cloned()),
         }
     }
-    RenderedCommand { program, args }
+    RenderedCommand {
+        program,
+        args,
+        env: context.spec.env.clone(),
+        timeout: context.spec.timeout,
+    }
+}
+
+/// Resolve a bare program name against the configured project-local bin
+/// directories: each directory (in order) is tried from the job's workspace up
+/// to the project root, nearest first. Anything else is left to `PATH`.
+fn resolve_program(program: &str, job: &ToolJob, context: &ToolContext<'_>) -> String {
+    if Path::new(program).components().count() != 1 {
+        return program.to_owned();
+    }
+    for bin_dir in &context.spec.local_bin_dirs {
+        for dir in job
+            .workspace_dir
+            .ancestors()
+            .take_while(|dir| dir.starts_with(context.project_root))
+        {
+            let candidate = dir.join(bin_dir).join(program);
+            if is_executable_file(&candidate) {
+                return path_arg(&candidate);
+            }
+        }
+    }
+    program.to_owned()
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
+struct CommandOutput {
+    status: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: Option<Duration>,
+}
+
+/// Run a command with captured output, killing it (and, on Unix, its process
+/// group) if it outlives `command.timeout`.
+fn execute_command(command: &RenderedCommand, cwd: &Path) -> std::io::Result<CommandOutput> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+        let (sender, receiver) = mpsc::channel();
+        if let Some(mut pipe) = pipe {
+            std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                let _ = pipe.read_to_end(&mut buffer);
+                let _ = sender.send(buffer);
+            });
+        }
+        receiver
+    }
+
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.process_group(0);
+    }
+    let mut child = process.spawn()?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+
+    let mut timed_out = None;
+    let status = match command.timeout {
+        None => child.wait()?,
+        Some(timeout) => {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut delay = Duration::from_millis(1);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    break status;
+                }
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    kill_process_tree(&mut child);
+                    timed_out = Some(timeout);
+                    break child.wait()?;
+                }
+                std::thread::sleep(delay.min(deadline - now));
+                delay = (delay * 2).min(Duration::from_millis(20));
+            }
+        }
+    };
+    // A timed-out tool may leave descendants holding the pipes open; take
+    // whatever output arrives promptly rather than waiting for them.
+    let collect = |receiver: mpsc::Receiver<Vec<u8>>| match timed_out {
+        None => receiver.recv().unwrap_or_default(),
+        Some(_) => receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_default(),
+    };
+    Ok(CommandOutput {
+        status: status.code(),
+        stdout: collect(stdout),
+        stderr: collect(stderr),
+        timed_out,
+    })
+}
+
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+            // SAFETY: `kill` has no memory-safety preconditions; the child was
+            // spawned as the leader of its own process group.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill();
 }
 
 fn run_phase_command(phase: &ToolPhase, command: &RenderedCommand, cwd: &Path) -> PhaseLog {
-    match Command::new(&command.program)
-        .args(&command.args)
-        .current_dir(cwd)
-        .output()
-    {
+    match execute_command(command, cwd) {
+        Ok(output) if output.timed_out.is_some() => PhaseLog {
+            phase: phase.id.clone(),
+            command: display_command(&command.program, &command.args),
+            program: command.program.clone(),
+            arguments: command.args.clone(),
+            status: output.status,
+            classification: None,
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            error: Some(format!(
+                "timed out after {}s and was killed (settings.commandTimeoutSeconds / tool timeoutSeconds)",
+                output.timed_out.unwrap_or_default().as_secs()
+            )),
+        },
         Ok(output) => {
-            let status = output.status.code();
+            let status = output.status;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let mut classification = status.map(|code| classify_exit_code(&phase.exit_codes, code));
             if phase.issues_on_stdout
@@ -3195,11 +3473,12 @@ fn accumulate_outcomes(
             ToolRunOutcome::ToolFailed {
                 phase,
                 exit_code,
+                error,
                 diagnostics,
                 changed_files: files,
             } => {
                 changed_files.extend(files);
-                failure_diagnostics.push((phase, exit_code, diagnostics));
+                failure_diagnostics.push((phase, exit_code, error, diagnostics));
             }
         }
     }
@@ -3244,7 +3523,7 @@ fn accumulate_outcomes(
     if !failure_diagnostics.is_empty() {
         let diagnostics = failure_diagnostics
             .iter()
-            .map(|(phase, exit_code, diagnostics)| {
+            .map(|(phase, exit_code, _, diagnostics)| {
                 format!(
                     "== phase {phase} failed (exit {exit_code:?}) ==\n{}",
                     diagnostics.trim()
@@ -3253,7 +3532,8 @@ fn accumulate_outcomes(
             .collect::<Vec<_>>()
             .join("\n\n");
         let artifact = write_diagnostics("tool-failure", &diagnostics, context, ctx)?;
-        let message = render_failed_message(context, &artifact, failure_diagnostics[0].0.as_str())?;
+        let (phase, _, error, _) = &failure_diagnostics[0];
+        let message = render_failed_message(context, &artifact, phase, error.as_deref())?;
         *output = std::mem::take(output)
             .with_user_notice(UserNotice::error(message))
             .with_diagnostic_report(report_with_artifact(
@@ -3283,8 +3563,9 @@ fn accumulate_outcomes(
         let artifact = write_diagnostics("tool-issues", &diagnostics, context, ctx)?;
         *output = std::mem::take(output)
             .with_user_notice(UserNotice::warning(format!(
-                "{}: issues remain; diagnostics: {}",
+                "{}: issues remain in {}; diagnostics: {}",
                 context.spec.display_name,
+                issue_paths.join(", "),
                 artifact.display()
             )))
             .with_diagnostic_report(report_with_artifact(
@@ -3309,15 +3590,20 @@ fn accumulate_outcomes(
         )?;
         *output = std::mem::take(output).with_agent_feedback(rendered);
     } else if !changed_paths.is_empty() {
-        *output = std::mem::take(output).with_user_notice(UserNotice::info(format!(
-            "{}: changed {}",
-            context.spec.display_name,
-            changed_paths.join(", ")
-        )));
-        let template = context.spec.messages.clean_changed_agent.clone();
-        let rendered =
-            render_template(&template, context, &changed_paths, &issue_paths, None, None)?;
-        *output = std::mem::take(output).with_agent_feedback(rendered);
+        // Tools on the default template share one consolidated agent line;
+        // a customised `cleanChangedAgent` is rendered as configured.
+        let template = &context.spec.messages.clean_changed_agent;
+        let in_agent_line = template == DEFAULT_CLEAN_CHANGED_AGENT;
+        if !in_agent_line {
+            let rendered =
+                render_template(template, context, &changed_paths, &issue_paths, None, None)?;
+            *output = std::mem::take(output).with_agent_feedback(rendered);
+        }
+        *output = std::mem::take(output).with_auto_fixed(AutoFixed {
+            tool: context.spec.display_name.clone(),
+            files: changed_paths,
+            in_agent_line,
+        });
     }
 
     status.operational_failure = status.operational_failure || *had_hard_failure;
@@ -3355,6 +3641,7 @@ fn render_failed_message(
     context: &ToolContext<'_>,
     diagnostics_path: &Path,
     phase: &str,
+    error: Option<&str>,
 ) -> hookkit_core::Result<String> {
     if let Some(template) = context.spec.messages.failed_user.as_ref() {
         return render_template(
@@ -3367,8 +3654,9 @@ fn render_failed_message(
         );
     }
 
+    let reason = error.map(|error| format!(" ({error})")).unwrap_or_default();
     Ok(format!(
-        "{}: phase `{phase}` failed; diagnostics: {}",
+        "{}: phase `{phase}` failed{reason}; diagnostics: {}",
         context.spec.display_name,
         diagnostics_path.display()
     ))
@@ -3422,7 +3710,10 @@ fn write_diagnostics(
     ) {
         (Some(dir), _) => absolute_from(Path::new(dir), context.project_root),
         (None, Some(dir)) => absolute_from(Path::new(dir), context.project_root),
-        (None, None) => std::env::temp_dir().join("velvet-glove").join("artifacts"),
+        (None, None) => std::env::temp_dir()
+            .join("velvet-glove")
+            .join("state")
+            .join("post-tool-immediate"),
     };
     let manager = ArtifactManager::new(base_dir)?;
     manager
@@ -3557,6 +3848,84 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn default_excludes_are_unanchored_and_ignore_directories_above_the_project() {
+        let matcher = FileMatcher::new(&FileSelection {
+            include: vec!["**/*.py".into()],
+            exclude: pkl::default_excludes(),
+        })
+        .unwrap();
+        let root = Path::new("/home/user/target/project");
+        assert!(matcher.matches(&root.join("src/a.py"), root));
+        for excluded in [
+            "node_modules/x.py",
+            "web/node_modules/pkg/x.py",
+            "svc/.venv/lib/x.py",
+            "pkg/__pycache__/x.py",
+            "crates/a/target/x.py",
+            ".git/hooks/x.py",
+        ] {
+            assert!(!matcher.matches(&root.join(excluded), root), "{excluded}");
+        }
+    }
+
+    fn emitted_json(output: PostToolUseOutput) -> (serde_json::Value, Vec<u8>) {
+        let emission = match output {
+            PostToolUseOutput::Claude(native) => {
+                hookkit_claude::protocol::PostToolUse::emit(native).unwrap()
+            }
+            PostToolUseOutput::Codex(native) => {
+                hookkit_codex::protocol::PostToolUse::emit(native).unwrap()
+            }
+            _ => panic!("expected Claude or Codex output"),
+        };
+        assert_eq!(emission.exit_code(), 0);
+        (
+            serde_json::from_slice(emission.stdout()).unwrap(),
+            emission.stderr().to_vec(),
+        )
+    }
+
+    #[test]
+    fn immediate_user_notices_use_system_message_and_auto_fixes_share_one_line() {
+        let fixed = |tool: &str, files: &[&str], in_agent_line| AutoFixed {
+            tool: tool.into(),
+            files: files.iter().map(|file| file.to_string()).collect(),
+            in_agent_line,
+        };
+        for harness in [HarnessId::CLAUDE_CODE, HarnessId::CODEX] {
+            let output = RunnerPostToolUseOutput::default()
+                .with_auto_fixed(fixed("Ruff", &["src/a.py", "src/b.py"], true))
+                .with_auto_fixed(fixed("Black", &["src/a.py"], true))
+                .with_auto_fixed(fixed("Custom", &["web/c.ts"], false))
+                .with_agent_feedback("Custom rewrote web/c.ts")
+                .with_user_notice(UserNotice::warning("Lint: `lint` is unavailable"))
+                .with_diagnostic_report(DiagnosticReport::new("Lint diagnostics", "full log"));
+            let (json, stderr) = emitted_json(lower_report(&harness, output, None).unwrap());
+
+            assert!(
+                stderr.is_empty(),
+                "{harness}: user notices must not use stderr"
+            );
+            assert_eq!(
+                json["systemMessage"],
+                "velvet-glove auto-fixed src/a.py (Ruff, Black), src/b.py (Ruff), web/c.ts (Custom); re-read before editing.\nwarning: Lint: `lint` is unavailable",
+                "{harness}"
+            );
+            assert_eq!(
+                json["hookSpecificOutput"]["additionalContext"],
+                "velvet-glove auto-fixed src/a.py (Ruff, Black), src/b.py (Ruff); re-read before editing.\nCustom rewrote web/c.ts",
+                "{harness}"
+            );
+
+            let (json, stderr) = emitted_json(
+                lower_report(&harness, RunnerPostToolUseOutput::default(), None).unwrap(),
+            );
+            assert_eq!(json, serde_json::json!({}), "{harness}: clean is silent");
+            assert!(stderr.is_empty());
+        }
+    }
 
     #[test]
     fn domain_outcomes_keep_clean_failure_and_unsupported_distinct() {
@@ -3759,8 +4128,12 @@ mod tests {
 
     #[test]
     fn resolve_worker_count_honors_jobs_setting() {
-        // auto (0) is reserved for future use and runs serially for now.
-        assert_eq!(resolve_worker_count(0, 5), 1);
+        // auto (0) uses the available parallelism, capped at 8.
+        let auto = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(AUTO_JOBS_CAP);
+        assert_eq!(resolve_worker_count(0, 64), auto);
+        assert!(resolve_worker_count(0, 5) <= 5);
         // explicit serial.
         assert_eq!(resolve_worker_count(1, 5), 1);
         // bounded parallelism up to the requested count.
@@ -3987,11 +4360,14 @@ mod tests {
             let actual = resolve_worker_count(jobs_setting, job_count);
             let expected = if job_count == 0 {
                 0
+            } else if jobs_setting == 0 {
+                resolve_worker_count(0, usize::MAX).min(job_count)
             } else {
-                usize::try_from(jobs_setting.max(1)).unwrap_or(usize::MAX).min(job_count)
+                usize::try_from(jobs_setting).unwrap_or(usize::MAX).min(job_count)
             };
 
             prop_assert_eq!(actual, expected);
+            prop_assert!(jobs_setting != 0 || actual <= AUTO_JOBS_CAP);
             prop_assert!(actual <= job_count);
             prop_assert_eq!(actual == 0, job_count == 0);
         }
@@ -4088,6 +4464,179 @@ mod tests {
     }
 
     #[test]
+    fn extra_args_expand_tool_then_workflow_then_command() {
+        let args = |values: &[&str]| values.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        let command = |extra: &[&str]| pkl::WorkflowCommand {
+            argv: vec![pkl::ArgvElement::Token(pkl::ArgToken::ExtraArgs)],
+            extra_args: args(extra),
+            ..pkl::WorkflowCommand::default()
+        };
+        let explicit = pkl::ToolSpec {
+            id: "ruff".into(),
+            executable: "ruff".into(),
+            extra_args: args(&["--tool"]),
+            env: BTreeMap::from([("RUFF_CACHE_DIR".into(), "/tmp/cache".into())]),
+            timeout_seconds: Some(7),
+            workflows: BTreeMap::from([(
+                "lint".into(),
+                pkl::Workflow {
+                    check: Some(command(&["--check"])),
+                    remedy: Some(pkl::WorkflowCommand {
+                        writes: pkl::WriteBehavior::TargetFiles,
+                        ..command(&["--remedy"])
+                    }),
+                    extra_args: args(&["--ignore", "F401"]),
+                    ..pkl::Workflow::default()
+                },
+            )]),
+            ..pkl::ToolSpec::default()
+        };
+        let settings = pkl::Settings {
+            local_bin_dirs: args(&["bin"]),
+            ..pkl::Settings::default()
+        };
+        let spec = convert_tool_spec(&explicit, &settings);
+        let workflow = &spec.workflows[0];
+        assert_eq!(
+            workflow.check.as_ref().unwrap().extra_args,
+            args(&["--tool", "--ignore", "F401", "--check"])
+        );
+        assert_eq!(
+            workflow.remedy.as_ref().unwrap().extra_args,
+            args(&["--tool", "--ignore", "F401", "--remedy"])
+        );
+        assert_eq!(
+            spec.env,
+            vec![("RUFF_CACHE_DIR".to_owned(), "/tmp/cache".to_owned())]
+        );
+        assert_eq!(spec.timeout, Some(Duration::from_secs(7)));
+        assert_eq!(spec.local_bin_dirs, args(&["bin"]));
+
+        let phased = pkl::ToolSpec {
+            id: "fmt".into(),
+            executable: "fmt".into(),
+            extra_args: args(&["--tool"]),
+            timeout_seconds: Some(0),
+            phases: BTreeMap::from([
+                (
+                    "format".into(),
+                    pkl::Phase {
+                        mode: pkl::PhaseMode::Format,
+                        writes: pkl::WriteBehavior::TargetFiles,
+                        extra_args: args(&["--format"]),
+                        ..pkl::Phase::default()
+                    },
+                ),
+                (
+                    "verify".into(),
+                    pkl::Phase {
+                        extra_args: args(&["--verify"]),
+                        ..pkl::Phase::default()
+                    },
+                ),
+            ]),
+            ..pkl::ToolSpec::default()
+        };
+        let spec = convert_tool_spec(&phased, &pkl::Settings::default());
+        assert_eq!(spec.phases[0].extra_args, args(&["--tool", "--format"]));
+        assert_eq!(spec.phases[1].extra_args, args(&["--tool", "--verify"]));
+        // Phase-translated workflows reuse the converted phases.
+        let translated = &spec.workflows[0];
+        assert_eq!(
+            translated.remedy.as_ref().unwrap().extra_args,
+            args(&["--tool", "--format"])
+        );
+        assert_eq!(
+            translated.check.as_ref().unwrap().extra_args,
+            args(&["--tool", "--verify"])
+        );
+        assert_eq!(spec.timeout, None, "timeoutSeconds = 0 disables the limit");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_bin_dirs_resolve_nearest_first_before_path() {
+        let root = unique_test_directory("local-bin");
+        let workspace = root.join("packages/web");
+        for dir in [
+            root.join("node_modules/.bin"),
+            workspace.join("node_modules/.bin"),
+            workspace.join(".venv/bin"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        let write_tool = |path: PathBuf, mode: u32| {
+            std::fs::write(&path, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+        let root_eslint = write_tool(root.join("node_modules/.bin/eslint"), 0o755);
+        let nested_eslint = write_tool(workspace.join("node_modules/.bin/eslint"), 0o755);
+        let venv_eslint = write_tool(workspace.join(".venv/bin/eslint"), 0o755);
+        write_tool(root.join("node_modules/.bin/not-executable"), 0o644);
+        let ruff = write_tool(workspace.join(".venv/bin/ruff"), 0o755);
+
+        let mut spec = ToolSpec::new("eslint", "ESLint", "eslint");
+        spec.local_bin_dirs = pkl::default_local_bin_dirs();
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &root,
+            global_diagnostics_dir: None,
+        };
+        let job = job_with_file(&workspace, "a.ts");
+        let root_job = job_with_file(&root, "a.ts");
+        let resolve = |program: &str, job: &ToolJob| resolve_program(program, job, &context);
+
+        assert_eq!(resolve("eslint", &job), path_arg(&nested_eslint));
+        assert_eq!(resolve("eslint", &root_job), path_arg(&root_eslint));
+        assert_eq!(resolve("ruff", &job), path_arg(&ruff));
+        assert_eq!(resolve("not-executable", &job), "not-executable");
+        assert_eq!(resolve("absent", &job), "absent");
+        assert_eq!(resolve("/usr/bin/env", &job), "/usr/bin/env");
+        assert_ne!(resolve("eslint", &job), path_arg(&venv_eslint));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commands_receive_tool_env_and_are_killed_at_the_timeout() {
+        let root = std::env::temp_dir();
+        let phase = ToolPhase::new("verify", PhaseMode::Verify);
+        let command = |script: &str, timeout_ms: u64| RenderedCommand {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![("VELVET_GLOVE_PROBE".into(), "probe-value".into())],
+            timeout: Some(Duration::from_millis(timeout_ms)),
+        };
+
+        let log = run_phase_command(
+            &phase,
+            &command("printf %s \"$VELVET_GLOVE_PROBE\"", 5_000),
+            &root,
+        );
+        assert_eq!(log.stdout, "probe-value");
+        assert_eq!(log.classification, Some(PhaseStatus::Clean));
+
+        let started = std::time::Instant::now();
+        let log = run_phase_command(
+            &phase,
+            &command("printf started; sleep 30 & wait", 200),
+            &root,
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timeout must kill the command"
+        );
+        assert_eq!(log.classification, None);
+        assert!(
+            log.error.as_deref().unwrap().contains("timed out after"),
+            "{log:?}"
+        );
+        assert_eq!(log.stdout, "started");
+    }
+
+    #[test]
     fn compatibility_workflows_inherit_phase_invocation() {
         let schema = pkl::ToolSpec {
             id: "jq".into(),
@@ -4098,7 +4647,7 @@ mod tests {
             ..pkl::ToolSpec::default()
         };
 
-        let spec = convert_tool_spec(&schema, &[]);
+        let spec = convert_tool_spec(&schema, &pkl::Settings::default());
 
         assert_eq!(spec.phase_invocation, InvocationGranularity::PerFile);
         assert_eq!(spec.workflows.len(), 1);

@@ -55,6 +55,11 @@ pub enum PklConfigError {
     #[error("builtin catalog validation failed:\n{0}")]
     /// One or more embedded builtin tool definitions are inconsistent.
     CatalogValidation(String),
+
+    #[error("invalid Velvet Glove configuration:\n{0}")]
+    /// The resolved configuration names an unknown tool or a tool whose
+    /// definition is structurally invalid.
+    ConfigValidation(String),
 }
 
 impl From<PklConfigError> for hookkit_core::HookkitError {

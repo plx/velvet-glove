@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"cargo fmt changed example.rs; re-read changed files before editing further.","hookEventName":"PostToolUse"}}
+{"hookSpecificOutput":{"additionalContext":"velvet-glove auto-fixed example.rs (cargo fmt); re-read before editing.","hookEventName":"PostToolUse"},"systemMessage":"velvet-glove auto-fixed example.rs (cargo fmt); re-read before editing."}
