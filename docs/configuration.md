@@ -128,7 +128,8 @@ one from scratch with `new ToolSpec { ... }`.
 | `id`, `displayName` | Identifier used in artifacts; name used in messages. |
 | `executable`, `installHint` | Program to run and the hint shown when it is missing. |
 | `files.include`, `files.exclude` | Globs over project-relative paths; empty `include` selects every file. |
-| `workspaceIndicator` | Marker file (e.g. `Cargo.toml`); files are grouped by their nearest marker, up to the project root. Files without one are skipped. |
+| `workspaceIndicator` | Marker file (e.g. `Cargo.toml`); files are grouped by their nearest marker, up to the project root, and each group runs from the marker's directory. Files without one are skipped. |
+| `workspaceFallback` | `skip` (default) or `project-root`: run files with no marker above them from the project root instead of skipping them. ESLint, Biome, and dprint use `package.json` with this fallback, so a nested package's config is found and files outside every package still run. Prettier, stylelint, oxlint, and oxfmt find config per file, and standard and xo read it only from their working directory (so a package would lose a monorepo's root config); they run from the project root. |
 | `phases`, `phaseOrder`, `phaseInvocation` | Commands for the immediate PostToolUse hook, in order. Unlisted phases run after listed ones, by mode (`format`, `fix`, `verify`, `check-only`), then name. |
 | `workflows`, `workflowOrder` | Check/remedy pairs for the deferred Stop hook. Without `workflows`, the deferred hook translates `phases`: each mutating phase becomes a remedy checked by the last verify phase. |
 | `extraArgs` | Arguments added to **every** command's `ExtraArgs` token. |
@@ -171,7 +172,10 @@ mutating phase and remedy needs one, and every check must be `none`.
 | `new ToolExecutable {}` | The resolved tool executable. |
 | `new ExtraArgs {}` | The tool's `extraArgs`, then the workflow's, then the phase's or command's own. |
 
-Without a `workspaceIndicator`, commands run in the project root.
+Without a `workspaceIndicator` (or, with `workspaceFallback =
+"project-root"`, for files outside every marked workspace), commands run in
+the project root and `new WorkspaceIndicator {}` expands to nothing, so a
+tool with that fallback may not use it.
 
 ### Executable resolution
 

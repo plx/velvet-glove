@@ -74,6 +74,8 @@ pub struct ToolSpec {
     pub file_selection: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Where files with no workspace indicator above them run.
+    pub workspace_fallback: WorkspaceFallback,
     /// Granularity used by the immediate pipeline and phase-derived workflows.
     pub phase_invocation: InvocationGranularity,
     /// Deferred workflows executed at turn completion.
@@ -108,6 +110,7 @@ impl ToolSpec {
             install_hint: None,
             file_selection: FileSelection::default(),
             workspace_indicator: None,
+            workspace_fallback: WorkspaceFallback::default(),
             phase_invocation: InvocationGranularity::default(),
             workflows: Vec::new(),
             phases: Vec::new(),
@@ -138,6 +141,12 @@ impl ToolSpec {
         self
     }
 
+    /// Sets where files with no workspace indicator above them run.
+    pub fn with_workspace_fallback(mut self, fallback: WorkspaceFallback) -> Self {
+        self.workspace_fallback = fallback;
+        self
+    }
+
     /// Appends a phase to the execution order.
     pub fn with_phase(mut self, phase: ToolPhase) -> Self {
         self.phases.push(phase);
@@ -155,6 +164,17 @@ impl ToolSpec {
         self.messages = messages;
         self
     }
+}
+
+/// Where a tool runs a file with no workspace indicator between it and the
+/// project root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkspaceFallback {
+    /// Leave the file out: the tool needs its workspace.
+    #[default]
+    Skip,
+    /// Run the file from the project root, as without an indicator.
+    ProjectRoot,
 }
 
 /// One Stop-time non-mutating check and optional automatic remedy.
@@ -2768,6 +2788,10 @@ fn convert_tool_spec(spec: &pkl::ToolSpec, settings: &pkl::Settings) -> ToolSpec
             exclude,
         },
         workspace_indicator: spec.workspace_indicator.clone(),
+        workspace_fallback: match spec.workspace_fallback {
+            pkl::WorkspaceFallback::Skip => WorkspaceFallback::Skip,
+            pkl::WorkspaceFallback::ProjectRoot => WorkspaceFallback::ProjectRoot,
+        },
         phase_invocation: convert_invocation(spec.phase_invocation),
         workflows,
         phases,
@@ -3098,23 +3122,30 @@ struct ToolJob {
     files: Vec<PathBuf>,
 }
 
+/// Group `paths` into jobs: by nearest workspace indicator when the tool has
+/// one, where a file with no indicator above it is skipped or, with the
+/// project-root fallback, grouped at the project root without a marker.
 fn build_jobs(paths: &[PathBuf], project_root: &Path, spec: &ToolSpec) -> Vec<ToolJob> {
     if let Some(indicator) = &spec.workspace_indicator {
         let mut grouped = BTreeMap::<PathBuf, ToolJob>::new();
         for path in paths {
-            if let Some((workspace_dir, indicator_path)) =
-                nearest_workspace_indicator(path, project_root, indicator)
-            {
-                grouped
-                    .entry(workspace_dir.clone())
-                    .or_insert_with(|| ToolJob {
-                        workspace_dir,
-                        workspace_indicator: Some(indicator_path),
-                        files: Vec::new(),
-                    })
-                    .files
-                    .push(path.clone());
-            }
+            let (workspace_dir, indicator_path) =
+                match nearest_workspace_indicator(path, project_root, indicator) {
+                    Some((workspace_dir, indicator_path)) => (workspace_dir, Some(indicator_path)),
+                    None if spec.workspace_fallback == WorkspaceFallback::ProjectRoot => {
+                        (project_root.to_path_buf(), None)
+                    }
+                    None => continue,
+                };
+            grouped
+                .entry(workspace_dir.clone())
+                .or_insert_with(|| ToolJob {
+                    workspace_dir,
+                    workspace_indicator: indicator_path,
+                    files: Vec::new(),
+                })
+                .files
+                .push(path.clone());
         }
         grouped.into_values().collect()
     } else {
@@ -4941,6 +4972,37 @@ mod tests {
             nearest_workspace_indicator(&file, &root, "sorbet/config").expect("config found");
         assert_eq!(nested_dir, root);
         assert_eq!(nested_indicator, root.join("sorbet/config"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn files_without_an_indicator_run_from_the_project_root_only_with_the_fallback() {
+        let root = unique_test_directory("workspace-fallback");
+        std::fs::create_dir_all(root.join("frontend/src")).unwrap();
+        std::fs::write(root.join("frontend/package.json"), "{}\n").unwrap();
+        let nested = root.join("frontend/src/x.js");
+        let loose = root.join("README.md");
+        let paths = [nested.clone(), loose.clone()];
+        let spec = ToolSpec::new("tool", "Tool", "tool").with_workspace_indicator("package.json");
+
+        let skipped = build_jobs(&paths, &root, &spec);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].workspace_dir, root.join("frontend"));
+        assert_eq!(skipped[0].files, std::slice::from_ref(&nested));
+
+        let spec = spec.with_workspace_fallback(WorkspaceFallback::ProjectRoot);
+        let jobs = build_jobs(&paths, &root, &spec);
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].workspace_dir, root);
+        assert_eq!(jobs[0].workspace_indicator, None);
+        assert_eq!(jobs[0].files, [loose]);
+        assert_eq!(jobs[1].workspace_dir, root.join("frontend"));
+        assert_eq!(
+            jobs[1].workspace_indicator,
+            Some(root.join("frontend/package.json"))
+        );
+        assert_eq!(jobs[1].files, [nested]);
 
         std::fs::remove_dir_all(root).unwrap();
     }

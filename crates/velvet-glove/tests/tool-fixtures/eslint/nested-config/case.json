@@ -1,0 +1,5 @@
+{
+  "outcome": "manual",
+  "cite": ["frontend/src/x.js"],
+  "note": "A backend+frontend repository: the only ESLint config is frontend/eslint.config.mjs, beside frontend/package.json, and only it enables no-console, so a manual result proves it applied. The spec's package.json workspace indicator runs ESLint from frontend/. ESLint 9 finds its flat config from the working directory, so run from the project root it failed operationally (\"couldn't find an eslint.config\"); ESLint 10 looks from each file's directory and passes either way, so this case guards the fix only under ESLint 9 (checked with 9.39.2 and 10.11.0)."
+}

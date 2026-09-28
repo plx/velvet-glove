@@ -245,7 +245,17 @@ class ToolSpec {
   executable: String
   installHint: String?
   files: FileSelection = new FileSelection {}
+  /// Marker file (e.g. "Cargo.toml"): files are grouped by the nearest one
+  /// between them and the project root, and each group runs from the
+  /// marker's directory.
   workspaceIndicator: String?
+  /// Where a file with no `workspaceIndicator` between it and the project
+  /// root goes: "skip" leaves it out (the tool needs its workspace, as cargo
+  /// needs Cargo.toml); "project-root" runs it from the project root, as if
+  /// the tool had no indicator. The fallback suits a tool that finds its
+  /// config from its working directory: a nested package's files run from
+  /// that package, and files outside every package still run.
+  workspaceFallback: "skip" | "project-root" = "skip"
   /// Granularity used by the immediate phase pipeline and phase-derived
   /// compatibility workflows. Explicit workflows declare their own.
   phaseInvocation: "per-file" | "batch" | "workspace" = "batch"

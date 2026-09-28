@@ -3,6 +3,11 @@
 /// Biome reports configuration errors (e.g. an invalid rule level in
 /// `biome.json`) with exit 1, the same code as lint findings (verified on
 /// 2.5.14), so no `operational-failure` fixture is claimed.
+///
+/// Biome finds `biome.json` from the working directory upward and rejects a
+/// nested root config found from above it, so files run from their nearest
+/// `package.json` directory; files outside every package run from the
+/// project root.
 
 module velvet_glove.builtins.tools.Biome
 
@@ -13,6 +18,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   displayName = "Biome"
   executable = "biome"
   installHint = "install biome with `brew install biome` or add `@biomejs/biome` to the project"
+  workspaceIndicator = "package.json"
+  workspaceFallback = "project-root"
 
   files = new Config.FileSelection {
     include = new Listing<String> {

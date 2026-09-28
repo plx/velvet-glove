@@ -3286,6 +3286,104 @@ fn post_tool_use_syntax_error_reports_the_diagnostic_not_a_formatter_failure() {
     assert!(!user.contains("failed"), "{user}");
 }
 
+/// A backend+frontend project on the ESLint builtin, backed by a fake with
+/// ESLint 9's config lookup: it reads `eslint.config.mjs` from its working
+/// directory only and reports that config's rule for every file.
+fn write_nested_eslint_project(project: &Path) {
+    let eslint = write_executable(
+        project,
+        "eslint",
+        r#"#!/bin/sh
+if [ ! -f eslint.config.mjs ]; then
+  echo "ESLint couldn't find an eslint.config.(js|mjs|cjs) file." >&2
+  exit 2
+fi
+rule=$(cat eslint.config.mjs)
+for file in "$@"; do
+  case "$file" in -*) continue ;; esac
+  echo "$file:1:1: error $rule"
+done
+exit 1
+"#,
+    );
+    let eslint = eslint.to_string_lossy().replace('\\', "\\\\");
+    for (path, contents) in [
+        ("eslint.config.mjs", "root-rule\n"),
+        ("frontend/package.json", "{}\n"),
+        ("frontend/eslint.config.mjs", "frontend-rule\n"),
+        ("frontend/src/app.js", "app()\n"),
+        ("scripts/build.js", "build()\n"),
+    ] {
+        let path = project.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {{ fileActivity {{ filesystemMtime = false }} }}
+tools {{ ["eslint"] = (Builtins.eslint) {{ executable = "{eslint}" }} }}
+run {{ "eslint" }}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn eslint_runs_from_the_nearest_package_and_other_files_from_the_project_root() {
+    require_pkl!();
+    let project = temp_project("eslint-nested-package");
+    write_nested_eslint_project(&project);
+
+    // Immediate: each file is checked from its own directory's config.
+    for (file, rule) in [
+        ("frontend/src/app.js", "frontend-rule"),
+        ("scripts/build.js", "root-rule"),
+    ] {
+        let output = run_example(
+            "post-tool-immediate",
+            &post_tool_use_fixture("claude", &project, file),
+            &["--claude"],
+        );
+        let (json, _) = immediate_response(&output);
+        let context = json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            context.contains(&format!("{file}:1:1: error {rule}")),
+            "{json}"
+        );
+    }
+
+    // Stop: one job per workspace, the package's and the project root's.
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    for file in ["frontend/src/app.js", "scripts/build.js"] {
+        seed_pending_file(&state_dir, "codex", &project.join(file));
+    }
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    let reason = response["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("frontend/src/app.js:1:1: error frontend-rule"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("scripts/build.js:1:1: error root-rule"),
+        "{reason}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 2);
+    assert_eq!(summary["counts"]["operationalErrors"], 0);
+}
+
 #[test]
 fn post_tool_use_skips_git_ignored_files() {
     require_pkl!();

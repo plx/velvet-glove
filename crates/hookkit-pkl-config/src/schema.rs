@@ -628,6 +628,8 @@ pub struct ToolSpec {
     pub files: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Where files with no workspace indicator above them run.
+    pub workspace_fallback: WorkspaceFallback,
     /// Granularity used by the immediate pipeline and phase-derived workflows.
     pub phase_invocation: InvocationGranularity,
     /// Named deferred workflows.
@@ -681,6 +683,7 @@ impl Default for ToolSpec {
             install_hint: None,
             files: FileSelection::default(),
             workspace_indicator: None,
+            workspace_fallback: WorkspaceFallback::default(),
             phase_invocation: InvocationGranularity::default(),
             workflows: BTreeMap::new(),
             workflow_order: Vec::new(),
@@ -770,6 +773,18 @@ pub enum CheckScope {
     TargetFiles,
     /// Any change in the workspace invalidates the workflow's check.
     Workspace,
+}
+
+/// Where a tool runs a file with no workspace indicator between it and the
+/// project root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceFallback {
+    /// Leave the file out: the tool needs its workspace.
+    #[default]
+    Skip,
+    /// Run the file from the project root, as without an indicator.
+    ProjectRoot,
 }
 
 /// How candidates are divided into workflow invocations.

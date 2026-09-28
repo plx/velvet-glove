@@ -2,7 +2,7 @@
 
 use crate::schema::{
     ArgToken, ArgvElement, CheckScope, ExitCodes, InvocationGranularity, Phase, PhaseMode,
-    RunnerConfig, ToolSpec, WorkflowCommand, WriteBehavior,
+    RunnerConfig, ToolSpec, WorkflowCommand, WorkspaceFallback, WriteBehavior,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -128,11 +128,41 @@ fn validate_specs(
             errors,
         );
 
+        validate_workspace_fallback(&prefix, spec, errors);
+
         if spec.workflows.is_empty() {
             validate_compatibility_tool(&prefix, spec, strictness, errors);
         } else {
             validate_explicit_tool(&prefix, spec, strictness, errors);
         }
+    }
+}
+
+/// A project-root fallback groups files that have no workspace indicator, so
+/// it needs one, and its jobs have no marker for a `WorkspaceIndicator`
+/// token to name.
+fn validate_workspace_fallback(prefix: &str, spec: &ToolSpec, errors: &mut Vec<String>) {
+    if spec.workspace_fallback != WorkspaceFallback::ProjectRoot {
+        return;
+    }
+    if spec.workspace_indicator.is_none() {
+        errors.push(format!(
+            "{prefix}: workspaceFallback = \"project-root\" needs a workspaceIndicator"
+        ));
+    }
+    let phases = spec.phases.values().map(|phase| &phase.argv);
+    let workflows = spec.workflows.values().flat_map(|workflow| {
+        let commands = workflow.check.iter().chain(workflow.remedy.iter());
+        commands.map(|command| &command.argv)
+    });
+    let names_marker = |argv: &Vec<ArgvElement>| {
+        argv.iter()
+            .any(|element| matches!(element, ArgvElement::Token(ArgToken::WorkspaceIndicator)))
+    };
+    if phases.chain(workflows).any(names_marker) {
+        errors.push(format!(
+            "{prefix}: workspaceFallback = \"project-root\" runs jobs without a marker, so no command may use WorkspaceIndicator"
+        ));
     }
 }
 
@@ -310,7 +340,16 @@ pub fn render_builtin_catalog_markdown(specs: &BTreeMap<String, ToolSpec>) -> St
     output.push_str("| Built-in | Tool ID | Mode | Checks | Remedies | Check scope | Invocation | Precision / known limitation |\n");
     output.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for (key, spec) in specs {
-        let audit = audit_tool(spec);
+        let mut audit = audit_tool(spec);
+        if let (WorkspaceFallback::ProjectRoot, Some(indicator)) =
+            (spec.workspace_fallback, &spec.workspace_indicator)
+        {
+            for invocation in &mut audit.invocations {
+                invocation.push_str(&format!(
+                    " (per {indicator} directory, else the project root)"
+                ));
+            }
+        }
         output.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
             cell(key),
@@ -606,4 +645,47 @@ fn nonempty_or_dash(values: Vec<String>) -> Vec<String> {
 
 fn cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::{Phase, PhaseMode};
+
+    fn fallback_spec(indicator: Option<&str>, argv: Vec<ArgvElement>) -> ToolSpec {
+        let verify = Phase {
+            mode: PhaseMode::Verify,
+            argv,
+            ..Phase::default()
+        };
+        ToolSpec {
+            id: "tool".into(),
+            display_name: "Tool".into(),
+            executable: "tool".into(),
+            workspace_indicator: indicator.map(str::to_owned),
+            workspace_fallback: WorkspaceFallback::ProjectRoot,
+            phases: BTreeMap::from([("verify".to_owned(), verify)]),
+            ..ToolSpec::default()
+        }
+    }
+
+    fn fallback_errors(spec: ToolSpec) -> Vec<String> {
+        let mut errors = Vec::new();
+        validate_workspace_fallback("tool (tool)", &spec, &mut errors);
+        errors
+    }
+
+    #[test]
+    fn project_root_fallback_needs_an_indicator_and_no_marker_token() {
+        let files = vec![ArgvElement::Token(ArgToken::Files)];
+        assert!(fallback_errors(fallback_spec(Some("package.json"), files.clone())).is_empty());
+        assert_eq!(
+            fallback_errors(fallback_spec(None, files)),
+            vec!["tool (tool): workspaceFallback = \"project-root\" needs a workspaceIndicator"]
+        );
+        let marker = vec![ArgvElement::Token(ArgToken::WorkspaceIndicator)];
+        let errors = fallback_errors(fallback_spec(Some("Cargo.toml"), marker));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("no command may use WorkspaceIndicator"));
+    }
 }
