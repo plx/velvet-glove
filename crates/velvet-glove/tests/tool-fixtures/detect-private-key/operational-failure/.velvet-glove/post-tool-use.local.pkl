@@ -1,0 +1,14 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["detect-private-key"] = (Builtins.detectPrivateKey) {
+    phases {
+      ["verify"] {
+        // Exercise grep's missing-file failure through supported extra args:
+        // an extra positional path grep must also open, which doesn't exist.
+        extraArgs = new Listing<String> { "missing-operational.txt" }
+      }
+    }
+  }
+}

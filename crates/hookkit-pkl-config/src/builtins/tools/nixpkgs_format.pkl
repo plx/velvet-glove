@@ -1,8 +1,15 @@
 /// nixpkgs-fmt — the nixpkgs project's Nix formatter.
 ///
-/// DRAFT: exit-code policy is inferred from the hk reference and typical
-/// formatter conventions. Verify with a real run when `nixpkgs-fmt` is
-/// available before relying on this in production.
+/// Verified with nixpkgs-fmt 1.3.0: `--check` exits 0 when nothing needs
+/// reformatting and 1 when it does, and plain invocation only rewrites files
+/// it actually reformats. Its parser is error-tolerant (rnix-based) and
+/// gives *no* signal at all for a file it can't meaningfully parse: even
+/// wholly unparseable input is reported as "0 would have been reformatted"
+/// at exit 0 (indistinguishable from a genuinely clean file) and is left
+/// untouched rather than mutated. This is a real limitation of the tool
+/// itself — there is no flag or exit code to recover a parse-error signal —
+/// so no operational-failure case can be demonstrated for it; nixfmt (RFC
+/// 166) is the actively maintained formatter and does surface parse errors.
 
 module velvet_glove.builtins.tools.NixpkgsFormat
 
