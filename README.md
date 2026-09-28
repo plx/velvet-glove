@@ -8,7 +8,67 @@ for Claude Code, Codex, and Antigravity through
 
 HookKit is not yet published as a crate. All upstream HookKit dependencies are
 therefore pinned to Git commit
-`83c49d46970602e8fb40a8afaeea521dfb7e9b61`.
+`828d8d6feacf60015ae325d798b2bc3f32b2bf3b`.
+
+## Quickstart: use Velvet Glove in another project
+
+1. **Install the binary and Pkl** (0.31.1 or newer). Velvet Glove runs the
+   formatters and linters you already have; it does not install them.
+
+   ```sh
+   brew install pkl   # or see https://pkl-lang.org
+   cargo install --locked --git https://github.com/plx/velvet-glove velvet-glove
+   ```
+
+2. **Register the hooks.** The plugin is simplest:
+
+   ```sh
+   claude plugin marketplace add plx/velvet-glove
+   claude plugin install velvet-glove@velvet-glove
+   # Codex: `codex plugin marketplace add plx/velvet-glove`,
+   # `codex plugin add velvet-glove@velvet-glove`, then review /hooks.
+   ```
+
+   By default the plugin records edits quietly and runs the tools once when
+   the agent stops. Export `VELVET_GLOVE_MODE=immediate` before starting the
+   agent to run them after every edit instead. To register hooks by hand
+   (Claude Code shown; use `--harness codex` for Codex), add to
+   `.claude/settings.json`:
+
+   ```json
+   {
+     "hooks": {
+       "SessionStart": [{ "hooks": [{ "type": "command", "command": "velvet-glove --harness claude session-start-state" }] }],
+       "PostToolUse": [{ "hooks": [{ "type": "command", "command": "velvet-glove --harness claude post-tool" }] }],
+       "Stop": [{ "hooks": [{ "type": "command", "command": "velvet-glove --harness claude turn-completion", "timeout": 900 }] }]
+     }
+   }
+   ```
+
+   For immediate mode, register only `PostToolUse` with
+   `velvet-glove --harness claude post-tool-immediate`. Use one mode, not both.
+
+3. **Generate and check the project policy.** Nothing runs until a policy
+   lists tools.
+
+   ```sh
+   cd your-project
+   velvet-glove init     # detects fitting tools, writes .velvet-glove/post-tool-use.pkl
+   velvet-glove doctor   # config chain, run list, executables, Pkl version
+   ```
+
+   `init` picks a builtin when its files exist in the project, its executable
+   is on `PATH`, and the project's config files point at it (or it is the
+   standard choice, such as Ruff for Python). The file explains each choice
+   and lists alternatives; `velvet-glove tools` shows the whole catalog.
+   Commit the policy, and keep personal tweaks in
+   `.velvet-glove/post-tool-use.local.pkl` (add it to `.gitignore`).
+
+4. **What you will see.** Clean edits produce no output. When the tools fix
+   files automatically, the agent is told which files changed so it re-reads
+   them. When issues need a manual fix, the agent is asked to fix them before
+   it finishes, with pointers to the full tool output. Complete logs are kept
+   on disk rather than in the agent's context.
 
 ## Install
 
@@ -26,7 +86,11 @@ to `target/release/velvet-glove`.
 This repository is an experimental plugin marketplace for both Claude Code and
 Codex. Both marketplace entries install the shared `velvet-glove` plugin, which
 registers the deferred SessionStart, PostToolUse, and Stop workflow and includes
-the `working-with-velvet-glove` skill skeleton.
+the `working-with-velvet-glove` skill. With `VELVET_GLOVE_MODE=immediate` in
+the agent's environment, PostToolUse runs `post-tool-immediate` and the
+SessionStart and Stop hooks do nothing. The launcher chooses Codex when both
+`PLUGIN_ROOT` and `PLUGIN_DATA` are set and Claude Code otherwise;
+`VELVET_GLOVE_HARNESS=claude|codex` overrides that.
 
 The plugin does not bundle prebuilt executables yet. Install `velvet-glove` and
 Pkl 0.31.1 or newer separately; if `velvet-glove` is not on `PATH`, its launcher warns at
@@ -47,7 +111,7 @@ they run. Open `/hooks` in the Codex CLI after installing the plugin.
 
 ## Commands
 
-Every invocation explicitly selects its harness and event:
+Every hook invocation explicitly selects its harness and event:
 
 | Command | Native event | Purpose |
 | --- | --- | --- |
@@ -55,6 +119,10 @@ Every invocation explicitly selects its harness and event:
 | `post-tool` | PostToolUse | Quietly record file activity for deferred work. |
 | `turn-completion` | Stop/turn completion | Reconcile activity, run batched workflows, and report or block. |
 | `session-start-state` | SessionStart | Record an exact Claude/Codex session lower bound. |
+
+Setup commands take no `--harness`: `velvet-glove tools [--json]` lists the
+builtin catalog, `velvet-glove init` writes a starter policy, and
+`velvet-glove doctor` explains what the hooks would do in a directory.
 
 ```sh
 cargo build --release -p velvet-glove --bin velvet-glove
@@ -87,7 +155,10 @@ generated example policy is
 [`crates/velvet-glove/config/velvet-glove.pkl`](crates/velvet-glove/config/velvet-glove.pkl).
 
 The embedded catalog contains immediate phases and deferred workflows for a
-broad set of formatters and linters. See the generated
+broad set of formatters and linters, but nothing runs until a policy lists
+tools in `run`. Policies can add hook-only arguments, environment variables,
+and timeouts per tool; project-local `node_modules/.bin` and `.venv/bin`
+executables are preferred over `PATH`. See the generated
 [built-in workflow audit](docs/builtin-deferred-workflow-audit.md) and the
 [configuration reference](docs/configuration.md).
 
@@ -102,6 +173,12 @@ override it.
 | Session lower bound | `session-start-state` | `session-start-state` | unavailable |
 | Activity producer | `post-tool` | `post-tool` | `post-tool` |
 | Deferred consumer | `turn-completion` | `turn-completion` | `turn-completion` |
+
+At Stop, clean runs are silent and auto-fixes produce one terse line naming the
+files and tools. Only issues that need manual fixes block, and the agent then
+sees a bounded excerpt of each failing check instead of log paths. Missing or
+crashing tools and configuration errors are reported to the user without
+blocking.
 
 The consumer commits command artifacts and `summary.json` before changing the
 pending window. Clean and auto-fixed work is acknowledged; manual issues,
@@ -141,7 +218,9 @@ cargo test -p velvet-glove --test tool_fixtures -- --ignored --nocapture
 ```
 
 The weekly/manual [real-tool CI lane](.github/workflows/real-tool-fixtures.yml)
-tests the five v2 reference tools on Ubuntu and macOS. See the
+tests the five v2 reference tools on Ubuntu and macOS. It runs each fixture
+case through the deferred plugin flow and the immediate hook, and checks
+semantic outcomes and file post-state rather than output transcripts. See the
 [fixture README](crates/velvet-glove/tests/tool-fixtures/README.md#scheduled-real-tool-ci)
 for its scope, local reproduction, reports, and how to add tools.
 

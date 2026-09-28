@@ -28,4 +28,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".flake8" }
+    contains = new Mapping<String, String> { ["setup.cfg"] = "[flake8]"; ["tox.ini"] = "[flake8]" }
+    role = "python-lint"
+  }
 }

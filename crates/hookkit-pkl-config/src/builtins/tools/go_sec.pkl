@@ -36,4 +36,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     issuesAgent =
       "gosec reports security issues; inspect diagnostics at {{ diagnostics_path }}."
   }
+
+  detect = new Config.Detect {
+    note = "opt-in only: noisy security findings"
+  }
 }

@@ -41,4 +41,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".standard.yml" }
+    contains = new Mapping<String, String> { ["Gemfile"] = "standard" }
+    role = "ruby-lint"
+  }
 }

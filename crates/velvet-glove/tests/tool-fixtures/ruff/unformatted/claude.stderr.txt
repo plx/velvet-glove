@@ -1,2 +1,0 @@
-Ruff: changed example.py
-hookkit: redirected user notices and diagnostics to protocol stderr

@@ -1,0 +1,1 @@
+{"outcome": "auto-fixed", "files": {"example.clean.go": "clean", "example.dirty.go": "auto-fixed"}}

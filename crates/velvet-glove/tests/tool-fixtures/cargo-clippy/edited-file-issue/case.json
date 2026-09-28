@@ -1,0 +1,5 @@
+{
+  "outcome": "manual",
+  "cite": ["example.rs", "member/tests/persistent.rs"],
+  "files": {"example.rs": "clean", "member/tests/persistent.rs": "manual"}
+}

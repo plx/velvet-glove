@@ -1,9 +1,0 @@
-warning: flake8: issues remain; diagnostics: <workspace>/.velvet-glove/flake8-agent-hook/test-session_flake8-tool_flake8-tool-issues.txt
-flake8 diagnostics:
-[verify] command: flake8 <workspace>/example.py
-status: Some(1)
-classification: Some(Issues)
-stdout:
-<workspace>/example.py:1:2: E225 missing whitespace around operator
-artifact: <workspace>/.velvet-glove/flake8-agent-hook/test-session_flake8-tool_flake8-tool-issues.txt
-hookkit: redirected user notices and diagnostics to protocol stderr

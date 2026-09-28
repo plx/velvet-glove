@@ -1,38 +1,274 @@
-//! Fixture-driven validation for Velvet Glove's built-in immediate workflows.
+//! Fixture-driven validation for Velvet Glove's built-in tool specs.
 //!
-//! The non-ignored tests fail closed on fixture discovery and prove, with a
-//! hermetic executable, that every native protocol reaches a subprocess through
-//! the real `velvet-glove` binary. The opt-in test additionally executes the
-//! host's real tools against the checked-in golden corpus.
+//! The non-ignored tests fail closed on fixture discovery (including each
+//! case's `case.json` semantic expectation) and prove, with a hermetic
+//! executable, that every native protocol surface — immediate and deferred —
+//! reaches a subprocess through the real `velvet-glove` binary. The opt-in
+//! test additionally executes the host's real tools against the checked-in
+//! cases and asserts semantics (per-file outcome, post-state), never bytes.
 
 #[path = "support/process.rs"]
 mod bounded_process;
 mod support;
 
-use bounded_process::{BoundedCommandError, BoundedOutput, run_with_timeout};
+use bounded_process::{BoundedCommandError, run_with_timeout};
 use hookkit_pkl_config::ToolSpec;
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use support::native_events::{PostToolUseBuilder, ProtocolSurface, canonical_project, shell_quote};
+use support::native_events::{
+    NativePostToolInput, PostToolUseBuilder, ProtocolSurface, canonical_project, shell_quote,
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-const REAL_TOOL_SURFACES: &[ProtocolSurface] = &[ProtocolSurface::Claude, ProtocolSurface::Codex];
+/// Surfaces every real-tool case runs on, in order. Deferred runs first so a
+/// requested `expected/` capture reflects the flow the shipped plugin uses.
+const FIXTURE_SURFACES: [FixtureSurface; 3] = [
+    FixtureSurface::deferred(ProtocolSurface::Claude),
+    FixtureSurface::immediate(ProtocolSurface::Claude),
+    FixtureSurface::immediate(ProtocolSurface::Codex),
+];
+/// Surfaces the hermetic probe drives through the real binary.
+const PROBE_SURFACES: [FixtureSurface; 4] = [
+    FixtureSurface::immediate(ProtocolSurface::Claude),
+    FixtureSurface::immediate(ProtocolSurface::Codex),
+    FixtureSurface::immediate(ProtocolSurface::Antigravity),
+    FixtureSurface::deferred(ProtocolSurface::Claude),
+];
+const REPORT_FORMAT_VERSION: u64 = 2;
+const CASE_SPEC: &str = "case.json";
+const FIXTURE_SESSION: &str = "test-session";
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const TIMEOUT_ENV: &str = "VELVET_GLOVE_FIXTURE_TIMEOUT_SECS";
 const ARTIFACT_ENV: &str = "VELVET_GLOVE_FIXTURE_ARTIFACT_DIR";
 const REQUIRED_TOOLS_ENV: &str = "VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS";
 const SELECTED_TOOLS_ENV: &str = "VELVET_GLOVE_FIXTURE_TOOLS";
+const CAPTURE_ENV: &str = "VELVET_GLOVE_FIXTURE_CAPTURE_EXPECTED";
 const REPORT_PREFIX: &str = "VELVET_GLOVE_FIXTURE_JSON=";
 const PROBE_SENTINEL_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_SENTINEL";
 const PROBE_DIR_ENV: &str = "VELVET_GLOVE_FIXTURE_PROBE_DIR";
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Which hook flow a surface drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lane {
+    /// `session-start-state` → `post-tool` → `turn-completion` (the plugin).
+    Deferred,
+    /// `post-tool-immediate`.
+    Immediate,
+}
+
+/// One hook flow on one native protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FixtureSurface {
+    lane: Lane,
+    protocol: ProtocolSurface,
+}
+
+impl FixtureSurface {
+    const fn deferred(protocol: ProtocolSurface) -> Self {
+        Self {
+            lane: Lane::Deferred,
+            protocol,
+        }
+    }
+
+    const fn immediate(protocol: ProtocolSurface) -> Self {
+        Self {
+            lane: Lane::Immediate,
+            protocol,
+        }
+    }
+}
+
+impl fmt::Display for FixtureSurface {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lane = match self.lane {
+            Lane::Deferred => "deferred",
+            Lane::Immediate => "immediate",
+        };
+        write!(formatter, "{lane}-{}", self.protocol.cli_name())
+    }
+}
+
+/// Expected semantic outcome, ordered by severity for normal outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Outcome {
+    Clean,
+    AutoFixed,
+    Manual,
+    Operational,
+}
+
+impl Outcome {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "clean" => Ok(Self::Clean),
+            "auto-fixed" => Ok(Self::AutoFixed),
+            "manual" => Ok(Self::Manual),
+            "operational" => Ok(Self::Operational),
+            _ => Err(format!(
+                "unknown outcome {value:?}; use clean, auto-fixed, manual, or operational"
+            )),
+        }
+    }
+
+    /// Maps a deferred `summary.json` per-file status.
+    fn from_file_status(value: &str) -> Option<Self> {
+        match value {
+            "clean" => Some(Self::Clean),
+            "auto-fixed" => Some(Self::AutoFixed),
+            "manual-fixes-needed" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Clean => "clean",
+            Self::AutoFixed => "auto-fixed",
+            Self::Manual => "manual",
+            Self::Operational => "operational",
+        })
+    }
+}
+
+/// A case's `case.json`: what a correct spec does with its cited files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CaseSpec {
+    /// Aggregate (worst) outcome across the cited files and every non-cited
+    /// file the run reports changed or blamed.
+    outcome: Outcome,
+    /// Exact per-file outcomes: cited files, or non-cited files the run is
+    /// expected to change or blame.
+    files: BTreeMap<String, Outcome>,
+    immediate: bool,
+    deferred: bool,
+    note: Option<String>,
+}
+
+impl CaseSpec {
+    fn new(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            files: BTreeMap::new(),
+            immediate: true,
+            deferred: true,
+            note: None,
+        }
+    }
+
+    /// Parses `case.json` against the case's input files (case-relative
+    /// paths) and returns the cited files with the expectation.
+    fn parse(text: &str, inputs: &[String]) -> Result<(Vec<String>, Self), String> {
+        let value: JsonValue =
+            serde_json::from_str(text).map_err(|error| format!("{CASE_SPEC}: {error}"))?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{CASE_SPEC} must be a JSON object"))?;
+        if let Some(key) = object.keys().find(|key| {
+            !matches!(
+                key.as_str(),
+                "outcome" | "cite" | "files" | "immediate" | "deferred" | "note"
+            )
+        }) {
+            return Err(format!("{CASE_SPEC}: unknown key {key:?}"));
+        }
+        let outcome = object
+            .get("outcome")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| format!("{CASE_SPEC}: missing string `outcome`"))
+            .and_then(|value| Outcome::parse(value).map_err(|e| format!("{CASE_SPEC}: {e}")))?;
+        let cited = match object.get("cite") {
+            None => default_cited(inputs)?,
+            Some(cite) => parse_cite(cite, inputs)?,
+        };
+        let mut spec = Self::new(outcome);
+        if let Some(files) = object.get("files") {
+            let files = files
+                .as_object()
+                .ok_or_else(|| format!("{CASE_SPEC}: `files` must map case files to outcomes"))?;
+            for (file, value) in files {
+                if !inputs.contains(file) {
+                    return Err(format!(
+                        "{CASE_SPEC}: `files` names {file:?}, which is not an input file of the case"
+                    ));
+                }
+                let file_outcome = value
+                    .as_str()
+                    .ok_or_else(|| format!("{CASE_SPEC}: outcome for {file:?} must be a string"))
+                    .and_then(|value| {
+                        Outcome::parse(value).map_err(|e| format!("{CASE_SPEC}: {e}"))
+                    })?;
+                if file_outcome == Outcome::Operational || outcome == Outcome::Operational {
+                    return Err(format!(
+                        "{CASE_SPEC}: per-file outcomes are clean, auto-fixed, or manual and \
+                         require a non-operational aggregate"
+                    ));
+                }
+                if file_outcome == Outcome::Clean && !cited.contains(file) {
+                    return Err(format!(
+                        "{CASE_SPEC}: `files` expects non-cited {file:?} to be clean, but a \
+                         non-cited file is reported only when changed or blamed; expect \
+                         auto-fixed or manual, or cite it"
+                    ));
+                }
+                spec.files.insert(file.clone(), file_outcome);
+            }
+            let worst = spec.files.values().max().copied();
+            let names_every_cited = cited.iter().all(|file| spec.files.contains_key(file));
+            if worst > Some(outcome) || (names_every_cited && worst != Some(outcome)) {
+                return Err(format!(
+                    "{CASE_SPEC}: per-file outcomes disagree with aggregate `{outcome}` (when \
+                     `files` names every cited file, also name the non-cited files that set \
+                     the aggregate)"
+                ));
+            }
+        }
+        for (key, slot) in [
+            ("immediate", &mut spec.immediate),
+            ("deferred", &mut spec.deferred),
+        ] {
+            match object.get(key) {
+                None => {}
+                Some(JsonValue::Bool(value)) => *slot = *value,
+                Some(_) => return Err(format!("{CASE_SPEC}: `{key}` must be a boolean")),
+            }
+        }
+        match object.get("note") {
+            None => {}
+            Some(JsonValue::String(note)) if !note.trim().is_empty() => {
+                spec.note = Some(note.clone());
+            }
+            Some(_) => return Err(format!("{CASE_SPEC}: `note` must be a non-empty string")),
+        }
+        if !spec.immediate && !spec.deferred {
+            return Err(format!("{CASE_SPEC}: a case must run on at least one lane"));
+        }
+        if (!spec.immediate || !spec.deferred) && spec.note.is_none() {
+            return Err(format!(
+                "{CASE_SPEC}: explain why a lane is skipped in `note`"
+            ));
+        }
+        Ok((cited, spec))
+    }
+
+    const fn runs_on(&self, lane: Lane) -> bool {
+        match lane {
+            Lane::Deferred => self.deferred,
+            Lane::Immediate => self.immediate,
+        }
+    }
+}
 
 #[test]
 fn fixture_inventory_is_non_empty_and_has_no_orphans() {
@@ -42,16 +278,22 @@ fn fixture_inventory_is_non_empty_and_has_no_orphans() {
     let catalog = discover_fixture_catalog(&fixtures_root(), &specs)
         .unwrap_or_else(|error| panic!("fixture discovery failed: {error}"));
 
+    let mut outcomes = BTreeMap::<String, usize>::new();
+    for case in &catalog.cases {
+        *outcomes.entry(case.expect.outcome.to_string()).or_default() += 1;
+    }
     let report = serde_json::json!({
-        "formatVersion": 1,
+        "formatVersion": REPORT_FORMAT_VERSION,
         "kind": "inventory",
+        "surfaces": surface_names(),
         "totals": {
             "tools": catalog.tool_count,
             "cases": catalog.cases.len(),
-            "fixtureSurfaces": REAL_TOOL_SURFACES.len(),
-            "protocolProbeSurfaces": ProtocolSurface::ALL.len(),
-            "plannedSurfaceCases": catalog.cases.len() * REAL_TOOL_SURFACES.len(),
-        }
+            "fixtureSurfaces": FIXTURE_SURFACES.len(),
+            "protocolProbeSurfaces": PROBE_SURFACES.len(),
+            "plannedSurfaceCases": catalog.cases.len() * FIXTURE_SURFACES.len(),
+        },
+        "expectedOutcomes": outcomes,
     });
     println!("{REPORT_PREFIX}{report}");
 }
@@ -63,7 +305,7 @@ fn probe_reaches_external_command_on_every_surface() {
     require_pkl(timeout).unwrap_or_else(|error| panic!("{error}"));
     let commands = run_probe_matrix(timeout, artifact_dir.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(commands, ProtocolSurface::ALL.len());
+    assert_eq!(commands, PROBE_SURFACES.len());
 }
 
 #[test]
@@ -139,17 +381,248 @@ fn discovery_rejects_zero_cases_and_orphan_tools() {
 }
 
 #[test]
-fn discovery_rejects_goldens_for_unexecuted_surfaces() {
-    let case = unique_temp_dir("velvet-glove-unsupported-golden");
+fn discovery_requires_case_specs_and_rejects_legacy_goldens() {
+    let case = unique_temp_dir("velvet-glove-case-spec");
     std::fs::write(case.join("example.txt"), "fixture").expect("fixture input");
-    std::fs::write(case.join("antigravity.json"), "{}").expect("unsupported golden");
+    let error = load_case(&case).expect_err("a case without case.json must fail closed");
+    assert!(error.contains(CASE_SPEC), "{error}");
 
-    let error = validate_supported_goldens(&case)
-        .expect_err("goldens outside the real fixture matrix must fail closed");
-    assert!(error.contains("antigravity"));
-    assert!(error.contains("not executed"));
+    std::fs::write(case.join(CASE_SPEC), r#"{"outcome": "clean"}"#).expect("case spec");
+    let (cited, spec) = load_case(&case).expect("valid case");
+    assert_eq!(cited, ["example.txt"]);
+    assert_eq!(spec, CaseSpec::new(Outcome::Clean));
+    assert_eq!(input_files(&case).unwrap(), [PathBuf::from("example.txt")]);
+
+    for legacy in ["claude.json", "codex.stderr.txt", "antigravity.exit"] {
+        std::fs::write(case.join(legacy), "{}").expect("legacy golden");
+        let error = load_case(&case).expect_err("byte goldens must fail closed");
+        assert!(error.contains(legacy), "{error}");
+        std::fs::remove_file(case.join(legacy)).expect("remove legacy golden");
+    }
+
+    for dir in ["member", "expected/member"] {
+        std::fs::create_dir_all(case.join(dir)).expect("nested fixture directory");
+        std::fs::write(case.join(dir).join("lib.txt"), "fixture").expect("nested file");
+    }
+    let cite = |paths: &str| {
+        let text = format!(r#"{{"outcome": "manual", "cite": [{paths}]}}"#);
+        std::fs::write(case.join(CASE_SPEC), text).expect("case spec");
+        load_case(&case)
+    };
+    let (cited, _) = cite(r#""member/lib.txt", "example.txt""#).expect("nested cite");
+    assert_eq!(cited, ["member/lib.txt", "example.txt"]);
+    for (paths, reason) in [
+        (r#""expected/member/lib.txt""#, "expected/ holds post-state"),
+        (r#""member/missing.txt""#, "not an input file"),
+        (r#""case.json""#, "not an input file"),
+    ] {
+        let error = cite(paths).expect_err("invalid cite must fail closed");
+        assert!(error.contains(reason), "{error}");
+    }
 
     let _ = std::fs::remove_dir_all(case);
+}
+
+#[test]
+fn case_specs_are_strict() {
+    let inputs = ["example.a.json", "example.b.json", "member/lib.json"].map(str::to_owned);
+    let (cited, mixed) = CaseSpec::parse(
+        r#"{"outcome": "manual", "files": {"example.a.json": "clean", "example.b.json": "manual"}}"#,
+        &inputs,
+    )
+    .expect("mixed multi-file case");
+    assert_eq!(cited, ["example.a.json", "example.b.json"]);
+    assert_eq!(mixed.files["example.a.json"], Outcome::Clean);
+    let (_, deferred_only) = CaseSpec::parse(
+        r#"{"outcome": "clean", "immediate": false, "note": "deferred-only behavior"}"#,
+        &inputs,
+    )
+    .expect("explained lane skip");
+    assert!(deferred_only.runs_on(Lane::Deferred) && !deferred_only.runs_on(Lane::Immediate));
+    let (cited, _) = CaseSpec::parse(
+        r#"{"outcome": "manual", "cite": ["member/lib.json"]}"#,
+        &inputs,
+    )
+    .expect("explicit nested cite");
+    assert_eq!(cited, ["member/lib.json"]);
+    let (_, workspace) = CaseSpec::parse(
+        r#"{"outcome": "auto-fixed", "files": {"example.a.json": "clean", "example.b.json": "clean", "member/lib.json": "auto-fixed"}}"#,
+        &inputs,
+    )
+    .expect("a non-cited file the tool changes sets the aggregate");
+    assert_eq!(workspace.files["member/lib.json"], Outcome::AutoFixed);
+
+    for invalid in [
+        "[]",
+        "{}",
+        r#"{"outcome": "broken"}"#,
+        r#"{"outcome": "clean", "golden": "{}"}"#,
+        r#"{"outcome": "clean", "files": {"other.json": "clean"}}"#,
+        r#"{"outcome": "auto-fixed", "files": {"example.a.json": "manual"}}"#,
+        r#"{"outcome": "manual", "files": {"example.a.json": "clean", "example.b.json": "clean"}}"#,
+        r#"{"outcome": "operational", "files": {"example.a.json": "clean"}}"#,
+        r#"{"outcome": "clean", "immediate": false}"#,
+        r#"{"outcome": "clean", "immediate": false, "deferred": false, "note": "x"}"#,
+        r#"{"outcome": "clean", "deferred": "no", "note": "x"}"#,
+        r#"{"outcome": "clean", "cite": []}"#,
+        r#"{"outcome": "clean", "cite": "example.a.json"}"#,
+        r#"{"outcome": "clean", "cite": [1]}"#,
+        r#"{"outcome": "clean", "cite": ["example.a.json", "example.a.json"]}"#,
+        r#"{"outcome": "clean", "cite": ["/fixture/example.a.json"]}"#,
+        r#"{"outcome": "auto-fixed", "files": {"member/lib.json": "clean"}}"#,
+        r#"{"outcome": "auto-fixed", "files": {"example.a.json": "clean", "example.b.json": "clean"}}"#,
+        r#"{"outcome": "manual", "cite": ["member/lib.json"], "files": {"example.a.json": "clean"}}"#,
+    ] {
+        assert!(
+            CaseSpec::parse(invalid, &inputs).is_err(),
+            "{invalid} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn deferred_checks_assert_per_file_semantics() {
+    let project = Path::new("/fixture/workspace");
+    let cited = ["example.a.json".to_owned(), "example.b.json".to_owned()];
+    let summary = |a: &str, b: &str, operational: bool| {
+        let problems = if operational {
+            serde_json::json!({"p1": {"toolId": "fixture-tool", "message": "phase failed"}})
+        } else {
+            serde_json::json!({})
+        };
+        serde_json::json!({"result": {
+            "files": {
+                "/fixture/workspace/example.a.json": {"status": a},
+                "/fixture/workspace/example.b.json": {"status": b},
+            },
+            "operationalProblems": problems,
+        }})
+    };
+    let blocked = serde_json::json!({"decision": "block", "reason": "fix it"});
+    let allowed = serde_json::json!({});
+    let check = |spec: &CaseSpec, stop: &JsonValue, summary: &JsonValue| {
+        check_deferred_run(spec, &cited, project, stop, summary)
+    };
+
+    let clean = CaseSpec::new(Outcome::Clean);
+    assert!(check(&clean, &allowed, &summary("clean", "clean", false)).is_ok());
+    let error = check(&clean, &allowed, &summary("clean", "clean", true)).unwrap_err();
+    assert!(error.contains("unexpected operational"), "{error}");
+    let partial = serde_json::json!({"result": {"files": {
+        "/fixture/workspace/example.a.json": {"status": "clean"},
+    }}});
+    let error = check(&clean, &allowed, &partial).unwrap_err();
+    assert!(error.contains("example.b.json: not assessed"), "{error}");
+
+    let mut mixed = CaseSpec::new(Outcome::Manual);
+    mixed
+        .files
+        .insert("example.a.json".to_owned(), Outcome::Clean);
+    let summary_mixed = summary("clean", "manual-fixes-needed", false);
+    assert!(check(&mixed, &blocked, &summary_mixed).is_ok());
+    let error = check(&mixed, &allowed, &summary_mixed).unwrap_err();
+    assert!(error.contains("decision=block"), "{error}");
+    let misattributed = summary("manual-fixes-needed", "manual-fixes-needed", false);
+    let error = check(&mixed, &blocked, &misattributed).unwrap_err();
+    assert!(error.contains("example.a.json: expected clean"), "{error}");
+
+    let auto_fixed = CaseSpec::new(Outcome::AutoFixed);
+    let error = check(&auto_fixed, &allowed, &summary("clean", "clean", false)).unwrap_err();
+    assert!(
+        error.contains("expected auto-fixed, observed clean"),
+        "{error}"
+    );
+
+    // Non-cited files join the aggregate only when changed or blamed.
+    let workspace = |status: &str| {
+        serde_json::json!({"result": {"files": {
+            "/fixture/workspace/example.a.json": {"status": "clean"},
+            "/fixture/workspace/example.b.json": {"status": "clean"},
+            "/fixture/workspace/member/lib.json": {"status": status},
+        }}})
+    };
+    assert!(check(&clean, &allowed, &workspace("clean")).is_ok());
+    let error = check(&clean, &allowed, &workspace("auto-fixed")).unwrap_err();
+    assert!(
+        error.contains("expected clean, observed auto-fixed"),
+        "{error}"
+    );
+    assert!(check(&auto_fixed, &allowed, &workspace("auto-fixed")).is_ok());
+    let manual = CaseSpec::new(Outcome::Manual);
+    assert!(check(&manual, &blocked, &workspace("manual-fixes-needed")).is_ok());
+    let mut spread = CaseSpec::new(Outcome::AutoFixed);
+    for (file, outcome) in [
+        ("example.a.json", Outcome::Clean),
+        ("member/lib.json", Outcome::AutoFixed),
+    ] {
+        spread.files.insert(file.to_owned(), outcome);
+    }
+    assert!(check(&spread, &allowed, &workspace("auto-fixed")).is_ok());
+    let error = check(&spread, &blocked, &workspace("manual-fixes-needed")).unwrap_err();
+    assert!(
+        error.contains("member/lib.json: expected auto-fixed, observed manual"),
+        "{error}"
+    );
+    let error = check(&spread, &allowed, &summary("clean", "clean", false)).unwrap_err();
+    assert!(
+        error.contains("member/lib.json: expected auto-fixed, but summary.json does not report"),
+        "{error}"
+    );
+
+    let operational = CaseSpec::new(Outcome::Operational);
+    assert!(check(&operational, &blocked, &summary("clean", "clean", true)).is_ok());
+    let error = check(&operational, &allowed, &summary("clean", "clean", false)).unwrap_err();
+    assert!(error.contains("no operational problem"), "{error}");
+    let error = check(
+        &operational,
+        &blocked,
+        &summary("manual-fixes-needed", "clean", true),
+    )
+    .unwrap_err();
+    assert!(error.contains("misclassified"), "{error}");
+}
+
+#[test]
+fn immediate_checks_assert_coarse_output_shape() {
+    let empty = serde_json::json!({});
+    let context = serde_json::json!({"hookSpecificOutput": {"additionalContext": "x"}});
+    assert!(check_immediate_stdout(Outcome::Clean, &empty).is_ok());
+    assert!(check_immediate_stdout(Outcome::Clean, &context).is_err());
+    assert!(check_immediate_stdout(Outcome::AutoFixed, &context).is_ok());
+    assert!(check_immediate_stdout(Outcome::Manual, &empty).is_err());
+    assert!(check_immediate_stdout(Outcome::Operational, &empty).is_ok());
+    assert!(check_immediate_stdout(Outcome::Operational, &context).is_ok());
+}
+
+#[test]
+fn post_state_compares_expected_unchanged_and_captures_on_request() {
+    let case_dir = unique_temp_dir("velvet-glove-post-state-case");
+    let project = unique_temp_dir("velvet-glove-post-state-project");
+    std::fs::write(case_dir.join("example.txt"), "before\n").expect("fixture input");
+    std::fs::write(project.join("example.txt"), "after\n").expect("post-run file");
+    let mut case = fixture_case("post-state");
+    case.directory = case_dir.clone();
+
+    case.expect = CaseSpec::new(Outcome::Manual);
+    let error = verify_post_state(&case, &project, false).unwrap_err();
+    assert!(
+        error.contains("example.txt") && error.contains(CAPTURE_ENV),
+        "{error}"
+    );
+    case.expect = CaseSpec::new(Outcome::AutoFixed);
+    assert!(verify_post_state(&case, &project, false).is_ok());
+
+    assert!(verify_post_state(&case, &project, true).is_ok());
+    assert_eq!(
+        std::fs::read_to_string(case_dir.join("expected/example.txt")).unwrap(),
+        "after\n"
+    );
+    std::fs::write(project.join("example.txt"), "different\n").expect("drifted file");
+    let error = verify_post_state(&case, &project, true).unwrap_err();
+    assert!(error.contains("post-run file mismatch"), "{error}");
+
+    let _ = std::fs::remove_dir_all(case_dir);
+    let _ = std::fs::remove_dir_all(project);
 }
 
 #[test]
@@ -165,16 +638,9 @@ fn requested_failure_artifacts_copy_actionable_evidence() {
     .expect("fixture config");
     std::fs::write(source.join("evidence/input.json"), "{}").expect("fixture input evidence");
     std::fs::write(source.join("evidence/stderr"), "failure").expect("fixture stderr evidence");
-    let case = FixtureCase {
-        tool: "probe-tool".to_owned(),
-        case: "failure-case".to_owned(),
-        directory: PathBuf::new(),
-        entry: PathBuf::new(),
-        pkl_property: String::new(),
-        spec: ToolSpec::default(),
-    };
+    let case = fixture_case("failure-case");
 
-    let retained = retain_failure(&source, &artifact_root, &case, ProtocolSurface::Claude)
+    let retained = retain_failure(&source, &artifact_root, &case, FIXTURE_SURFACES[0])
         .expect("retain requested artifacts");
     assert_eq!(
         std::fs::read_to_string(retained.join("evidence/input.json")).unwrap(),
@@ -201,22 +667,17 @@ fn setup_failures_are_retained_when_requested() {
     let artifact_root = unique_temp_dir("velvet-glove-setup-failure-artifacts");
     std::os::unix::fs::symlink("missing-target", fixture_root.join("example.txt"))
         .expect("fixture symlink");
-    let case = FixtureCase {
-        tool: "fixture-tool".to_owned(),
-        case: "setup-failure".to_owned(),
-        directory: fixture_root.clone(),
-        entry: PathBuf::from("example.txt"),
-        pkl_property: "fixtureTool".to_owned(),
-        spec: ToolSpec::default(),
-    };
+    let mut case = fixture_case("setup-failure");
+    case.directory = fixture_root.clone();
     let options = HarnessOptions {
         timeout: Duration::from_secs(1),
         artifact_dir: Some(artifact_root.clone()),
         required_tools: RequiredTools::default(),
         selected_tools: None,
+        capture_expected: false,
     };
 
-    let outcome = run_fixture_case(&case, ProtocolSurface::Claude, &options);
+    let outcome = run_fixture_case(&case, FIXTURE_SURFACES[0], &options);
     assert!(matches!(outcome.status, FixtureStatus::Fail(_)));
     let retained = outcome.artifacts.expect("retained setup failure artifacts");
     assert!(retained.join("evidence/outcome.json").is_file());
@@ -296,23 +757,25 @@ fn selection_precedes_availability_and_required_tools_fail_closed() {
             names: BTreeSet::new(),
         },
         selected_tools: None,
+        capture_expected: false,
     };
+    let lanes = FIXTURE_SURFACES.len();
     let outcomes = run_selected_fixtures(&catalog, &selection, &options);
     assert!(
-        outcomes[..2]
+        outcomes[..lanes]
             .iter()
             .all(|o| matches!(o.status, FixtureStatus::Fail(_)))
     );
-    assert!(outcomes[2..].iter().all(|o| matches!(
+    assert!(outcomes[lanes..].iter().all(|o| matches!(
         &o.status, FixtureStatus::Skip(reason) if reason.code == "not-selected"
     )));
-    let report = build_report(&catalog, &outcomes, 3);
-    assert_eq!(report["totals"]["failed"], 2);
-    assert_eq!(report["skipReasons"]["not-selected"], 2);
+    let report = build_report(&catalog, &outcomes, PROBE_SURFACES.len());
+    assert_eq!(report["totals"]["failed"], lanes);
+    assert_eq!(report["skipReasons"]["not-selected"], lanes);
 
     options.required_tools = RequiredTools::default();
     let outcomes = run_selected_fixtures(&catalog, &selection, &options);
-    assert!(outcomes[..2].iter().all(|o| matches!(
+    assert!(outcomes[..lanes].iter().all(|o| matches!(
         &o.status, FixtureStatus::Skip(reason) if reason.code == "executable-unavailable"
     )));
     let required = RequiredTools {
@@ -325,7 +788,7 @@ fn selection_precedes_availability_and_required_tools_fail_closed() {
 #[test]
 fn requested_probe_failure_artifacts_are_retained() {
     let artifact_root = unique_temp_dir("velvet-glove-probe-artifact-root");
-    let error = run_probe_attempt(ProtocolSurface::Claude, Some(&artifact_root), |root| {
+    let error = run_probe_attempt(PROBE_SURFACES[0], Some(&artifact_root), |root| {
         std::fs::create_dir_all(root.join("evidence"))
             .map_err(|error| format!("create probe evidence: {error}"))?;
         std::fs::write(root.join("evidence/input.json"), "{\"probe\":true}")
@@ -336,8 +799,8 @@ fn requested_probe_failure_artifacts_are_retained() {
 
     assert!(error.contains("intentional probe failure"));
     assert!(error.contains("retained probe artifacts"));
-    let retained =
-        sorted_entries(&artifact_root.join("probe/claude")).expect("retained probe directories");
+    let retained = sorted_entries(&artifact_root.join("probe/immediate-claude"))
+        .expect("retained probe directories");
     assert_eq!(retained.len(), 1);
     assert_eq!(
         std::fs::read_to_string(retained[0].path().join("evidence/input.json")).unwrap(),
@@ -359,34 +822,42 @@ fn machine_report_reconciles_totals_and_structured_skips() {
         tool_count: 1,
         cases: vec![fixture_case("case-a"), fixture_case("case-b")],
     };
+    let [deferred, claude, codex] = FIXTURE_SURFACES;
     let outcomes = vec![
-        FixtureOutcome::pass(&catalog.cases[0], ProtocolSurface::Claude),
+        FixtureOutcome::pass(&catalog.cases[0], deferred),
+        FixtureOutcome::pass(&catalog.cases[0], claude),
         FixtureOutcome::skipped(
             &catalog.cases[0],
-            ProtocolSurface::Codex,
+            codex,
             SkipReason {
                 code: "executable-unavailable",
                 detail: "missing fixture-tool".to_owned(),
             },
         ),
-        FixtureOutcome::failed(
-            &catalog.cases[1],
-            ProtocolSurface::Claude,
-            "golden mismatch",
-        ),
-        FixtureOutcome::pass(&catalog.cases[1], ProtocolSurface::Codex),
+        FixtureOutcome::failed(&catalog.cases[1], deferred, "outcome mismatch"),
+        FixtureOutcome::pass(&catalog.cases[1], claude),
+        FixtureOutcome::pass(&catalog.cases[1], codex),
     ];
 
-    let report = build_report(&catalog, &outcomes, ProtocolSurface::ALL.len());
+    let report = build_report(&catalog, &outcomes, PROBE_SURFACES.len());
     let totals = &report["totals"];
-    assert_eq!(totals["plannedSurfaceCases"], 4);
-    assert_eq!(totals["attemptedSurfaceCases"], 3);
-    assert_eq!(totals["passed"], 2);
+    assert_eq!(report["formatVersion"], REPORT_FORMAT_VERSION);
+    assert_eq!(
+        report["surfaces"],
+        serde_json::json!(["deferred-claude", "immediate-claude", "immediate-codex"])
+    );
+    assert_eq!(totals["plannedSurfaceCases"], 6);
+    assert_eq!(totals["attemptedSurfaceCases"], 5);
+    assert_eq!(totals["passed"], 4);
     assert_eq!(totals["skipped"], 1);
     assert_eq!(totals["failed"], 1);
+    assert_eq!(report["bySurface"]["deferred-claude"]["failed"], 1);
     assert_eq!(report["skipReasons"]["executable-unavailable"], 1);
+    assert_eq!(report["outcomes"][2]["surface"], "immediate-codex");
+    assert_eq!(report["outcomes"][2]["lane"], "immediate");
+    assert_eq!(report["outcomes"][2]["expected"], "clean");
     assert_eq!(
-        report["outcomes"][1]["reason"]["code"],
+        report["outcomes"][2]["reason"]["code"],
         "executable-unavailable"
     );
     assert_eq!(
@@ -404,7 +875,8 @@ fn fixture_case(name: &str) -> FixtureCase {
         tool: "fixture-tool".to_owned(),
         case: name.to_owned(),
         directory: PathBuf::new(),
-        entry: PathBuf::from("example.txt"),
+        cited: vec!["example.txt".to_owned()],
+        expect: CaseSpec::new(Outcome::Clean),
         pkl_property: "fixtureTool".to_owned(),
         spec: ToolSpec::default(),
     }
@@ -438,7 +910,7 @@ fn run_all_tool_fixtures() {
         println!("machine-readable report: {}", path.display());
     }
 
-    let planned = catalog.cases.len() * REAL_TOOL_SURFACES.len();
+    let planned = catalog.cases.len() * FIXTURE_SURFACES.len();
     assert_eq!(
         outcomes.len(),
         planned,
@@ -474,16 +946,27 @@ fn run_selected_fixtures(
     options: &HarnessOptions,
 ) -> Vec<FixtureOutcome> {
     let mut availability = BTreeMap::<String, Result<(), Vec<String>>>::new();
-    let mut outcomes = Vec::with_capacity(catalog.cases.len() * REAL_TOOL_SURFACES.len());
+    let mut outcomes = Vec::with_capacity(catalog.cases.len() * FIXTURE_SURFACES.len());
     for case in &catalog.cases {
-        for surface in REAL_TOOL_SURFACES {
+        for surface in FIXTURE_SURFACES {
             if !selected.contains(&case.tool) {
                 outcomes.push(FixtureOutcome::skipped(
                     case,
-                    *surface,
+                    surface,
                     SkipReason {
                         code: "not-selected",
                         detail: format!("outside {SELECTED_TOOLS_ENV}; not validated by this run"),
+                    },
+                ));
+                continue;
+            }
+            if !case.expect.runs_on(surface.lane) {
+                outcomes.push(FixtureOutcome::skipped(
+                    case,
+                    surface,
+                    SkipReason {
+                        code: "excluded-by-case",
+                        detail: case.expect.note.clone().unwrap_or_default(),
                     },
                 ));
                 continue;
@@ -492,17 +975,17 @@ fn run_selected_fixtures(
                 .entry(case.tool.clone())
                 .or_insert_with(|| check_tool_programs(&case.spec));
             match available {
-                Ok(()) => outcomes.push(run_fixture_case(case, *surface, options)),
+                Ok(()) => outcomes.push(run_fixture_case(case, surface, options)),
                 Err(programs) if options.required_tools.requires(&case.tool) => {
                     outcomes.push(FixtureOutcome::failed(
                         case,
-                        *surface,
+                        surface,
                         format!("required prerequisite unavailable: {}", programs.join(", ")),
                     ));
                 }
                 Err(programs) => outcomes.push(FixtureOutcome::skipped(
                     case,
-                    *surface,
+                    surface,
                     SkipReason {
                         code: "executable-unavailable",
                         detail: format!("programs not found on PATH: {}", programs.join(", ")),
@@ -548,6 +1031,8 @@ struct HarnessOptions {
     artifact_dir: Option<PathBuf>,
     required_tools: RequiredTools,
     selected_tools: Option<String>,
+    /// Write missing `expected/` post-state for human review.
+    capture_expected: bool,
 }
 
 impl HarnessOptions {
@@ -563,6 +1048,12 @@ impl HarnessOptions {
                         .map_err(|_| format!("{SELECTED_TOOLS_ENV} must be UTF-8"))
                 })
                 .transpose()?,
+            capture_expected: match std::env::var_os(CAPTURE_ENV) {
+                None => false,
+                Some(value) if value == "0" || value.is_empty() => false,
+                Some(value) if value == "1" => true,
+                Some(value) => return Err(format!("{CAPTURE_ENV} must be 0 or 1, got {value:?}")),
+            },
         })
     }
 }
@@ -639,7 +1130,9 @@ struct FixtureCase {
     tool: String,
     case: String,
     directory: PathBuf,
-    entry: PathBuf,
+    /// Case-relative files the synthetic tool call says the agent wrote.
+    cited: Vec<String>,
+    expect: CaseSpec,
     pkl_property: String,
     spec: ToolSpec,
 }
@@ -716,15 +1209,14 @@ fn discover_fixture_catalog(
                 .into_string()
                 .map_err(|name| format!("case directory name is not UTF-8: {name:?}"))?;
             let directory = case_entry.path();
-            validate_supported_goldens(&directory)
-                .map_err(|error| format!("{tool}/{case}: {error}"))?;
-            let entry =
-                find_entry_file(&directory).map_err(|error| format!("{tool}/{case}: {error}"))?;
+            let (cited, expect) =
+                load_case(&directory).map_err(|error| format!("{tool}/{case}: {error}"))?;
             cases.push(FixtureCase {
                 tool: tool.clone(),
                 case,
                 directory,
-                entry,
+                cited,
+                expect,
                 pkl_property: property.clone(),
                 spec: spec.clone(),
             });
@@ -758,7 +1250,8 @@ fn sorted_entries(path: &Path) -> Result<Vec<std::fs::DirEntry>, String> {
 struct FixtureOutcome {
     tool: String,
     case: String,
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
+    expected: Outcome,
     status: FixtureStatus,
     artifacts: Option<PathBuf>,
 }
@@ -777,34 +1270,27 @@ struct SkipReason {
 }
 
 impl FixtureOutcome {
-    fn pass(case: &FixtureCase, surface: ProtocolSurface) -> Self {
+    fn new(case: &FixtureCase, surface: FixtureSurface, status: FixtureStatus) -> Self {
         Self {
             tool: case.tool.clone(),
             case: case.case.clone(),
             surface,
-            status: FixtureStatus::Pass,
+            expected: case.expect.outcome,
+            status,
             artifacts: None,
         }
     }
 
-    fn skipped(case: &FixtureCase, surface: ProtocolSurface, reason: SkipReason) -> Self {
-        Self {
-            tool: case.tool.clone(),
-            case: case.case.clone(),
-            surface,
-            status: FixtureStatus::Skip(reason),
-            artifacts: None,
-        }
+    fn pass(case: &FixtureCase, surface: FixtureSurface) -> Self {
+        Self::new(case, surface, FixtureStatus::Pass)
     }
 
-    fn failed(case: &FixtureCase, surface: ProtocolSurface, reason: impl Into<String>) -> Self {
-        Self {
-            tool: case.tool.clone(),
-            case: case.case.clone(),
-            surface,
-            status: FixtureStatus::Fail(reason.into()),
-            artifacts: None,
-        }
+    fn skipped(case: &FixtureCase, surface: FixtureSurface, reason: SkipReason) -> Self {
+        Self::new(case, surface, FixtureStatus::Skip(reason))
+    }
+
+    fn failed(case: &FixtureCase, surface: FixtureSurface, reason: impl Into<String>) -> Self {
+        Self::new(case, surface, FixtureStatus::Fail(reason.into()))
     }
 
     fn as_json(&self) -> JsonValue {
@@ -819,7 +1305,13 @@ impl FixtureOutcome {
         serde_json::json!({
             "tool": self.tool,
             "case": self.case,
-            "surface": self.surface.cli_name(),
+            "surface": self.surface.to_string(),
+            "lane": match self.surface.lane {
+                Lane::Deferred => "deferred",
+                Lane::Immediate => "immediate",
+            },
+            "protocol": self.surface.protocol.cli_name(),
+            "expected": self.expected.to_string(),
             "status": status,
             "reason": detail,
             "artifacts": self.artifacts.as_ref().map(|path| path.to_string_lossy()),
@@ -839,7 +1331,7 @@ struct FixtureSetupFailure {
 }
 
 impl FixtureWorkspace {
-    fn prepare(case: &FixtureCase, surface: ProtocolSurface) -> Result<Self, FixtureSetupFailure> {
+    fn prepare(case: &FixtureCase, surface: FixtureSurface) -> Result<Self, FixtureSetupFailure> {
         let root = unique_temp_dir(&format!(
             "velvet-glove-fixture-{}-{}-{surface}",
             case.tool, case.case
@@ -858,7 +1350,7 @@ impl FixtureWorkspace {
                 detail: format!("create fixture evidence {evidence:?}: {error}"),
             });
         }
-        if let Err(error) = copy_fixture_inputs(&case.directory, &case.directory, &project) {
+        if let Err(error) = copy_fixture_inputs(&case.directory, &project) {
             return Err(FixtureSetupFailure {
                 root,
                 detail: error,
@@ -874,7 +1366,7 @@ impl FixtureWorkspace {
 
 fn run_fixture_case(
     case: &FixtureCase,
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
     options: &HarnessOptions,
 ) -> FixtureOutcome {
     let workspace = match FixtureWorkspace::prepare(case, surface) {
@@ -889,10 +1381,17 @@ fn run_fixture_case(
             );
         }
     };
-    let result = run_fixture_case_inner(case, surface, options.timeout, &workspace);
-    let outcome = match result {
-        Ok(()) => FixtureOutcome::pass(case, surface),
-        Err(error) => FixtureOutcome::failed(case, surface, error),
+    let lane = write_pkl_config(&workspace.project, &case.tool, &case.pkl_property)
+        .and_then(|()| run_lane(case, surface, options.timeout, &workspace));
+    // Only a semantically passing run may seed `expected/` for review.
+    let capture = options.capture_expected && lane.is_ok();
+    let post_state = verify_post_state(case, &workspace.project, capture);
+    let outcome = match (lane, post_state) {
+        (Ok(()), Ok(())) => FixtureOutcome::pass(case, surface),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => FixtureOutcome::failed(case, surface, error),
+        (Err(lane), Err(post_state)) => {
+            FixtureOutcome::failed(case, surface, format!("{lane}\n{post_state}"))
+        }
     };
     finalize_fixture_outcome(&workspace.root, case, surface, options, outcome)
 }
@@ -900,7 +1399,7 @@ fn run_fixture_case(
 fn finalize_fixture_outcome(
     root: &Path,
     case: &FixtureCase,
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
     options: &HarnessOptions,
     mut outcome: FixtureOutcome,
 ) -> FixtureOutcome {
@@ -943,23 +1442,22 @@ fn finalize_fixture_outcome(
     outcome
 }
 
-fn run_fixture_case_inner(
+/// The synthetic tool call citing the case's files, as the agent's edit.
+fn post_tool_input(
     case: &FixtureCase,
-    surface: ProtocolSurface,
-    timeout: Duration,
-    workspace: &FixtureWorkspace,
-) -> Result<(), String> {
-    write_pkl_config(&workspace.project, &case.tool, &case.pkl_property)?;
-    let mut input = PostToolUseBuilder::new(surface, &workspace.project, &case.entry).identity(
-        "test-session",
+    protocol: ProtocolSurface,
+    project: &Path,
+) -> Result<NativePostToolInput, String> {
+    let mut input = PostToolUseBuilder::new(protocol, project, &case.cited[0]).identity(
+        FIXTURE_SESSION,
         "test-turn",
         format!("{}-tool", case.tool),
     );
-    let example_files = find_example_files(&case.directory)?;
-    if example_files.len() > 1 {
-        let command = example_files
+    if case.cited.len() > 1 {
+        let command = case
+            .cited
             .iter()
-            .map(|path| format!("printf fixture > {}", shell_quote(&path.to_string_lossy())))
+            .map(|path| format!("printf fixture > {}", shell_quote(path)))
             .collect::<Vec<_>>()
             .join("; ");
         input = input.tool(
@@ -968,105 +1466,368 @@ fn run_fixture_case_inner(
             serde_json::json!({ "exit_code": 0 }),
         );
     }
-    let input = input.build()?;
-    std::fs::write(workspace.evidence.join("input.json"), input.bytes())
-        .map_err(|error| format!("write input evidence: {error}"))?;
-
-    let binary = env!("CARGO_BIN_EXE_velvet-glove");
-    let mut command = Command::new(binary);
-    command.args(["--harness", surface.cli_name(), "post-tool-immediate"]);
-    input.configure_command(&mut command);
-    let output = run_with_timeout(&mut command, input.bytes(), timeout, &workspace.evidence)
-        .map_err(|error| format!("run {binary} for {surface}: {error}"))?;
-    std::fs::write(
-        workspace.evidence.join("exit.txt"),
-        format!("{}\n", output.status.code().unwrap_or(-1)),
-    )
-    .map_err(|error| format!("write exit evidence: {error}"))?;
-    verify_outputs(case, surface, &workspace.project, &output)
+    input.build()
 }
 
-fn verify_outputs(
+/// Runs one lane for a case and checks its lane-specific semantics.
+fn run_lane(
     case: &FixtureCase,
-    surface: ProtocolSurface,
-    project: &Path,
-    output: &BoundedOutput,
+    surface: FixtureSurface,
+    timeout: Duration,
+    workspace: &FixtureWorkspace,
 ) -> Result<(), String> {
-    let actual_stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let actual_stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let actual_exit = output.status.code().unwrap_or(-1);
-    let project_paths = workspace_path_aliases(project);
-
-    let stdout_golden_path = case.directory.join(format!("{}.json", surface.cli_name()));
-    let golden_stdout = if stdout_golden_path.exists() {
-        std::fs::read_to_string(&stdout_golden_path)
-            .map_err(|error| format!("read {stdout_golden_path:?}: {error}"))?
-    } else {
-        "{}".to_owned()
-    };
-    let golden_stdout = normalize(&golden_stdout, &project_paths);
-    let actual_stdout_normalized = normalize(&actual_stdout, &project_paths);
-    match (
-        serde_json::from_str::<JsonValue>(&golden_stdout),
-        serde_json::from_str::<JsonValue>(&actual_stdout_normalized),
-    ) {
-        (Ok(expected), Ok(actual)) if expected == actual => {}
-        (Ok(expected), Ok(actual)) => {
-            return Err(format!(
-                "stdout JSON mismatch:\n  expected: {expected}\n  actual:   {actual}"
-            ));
+    let input = post_tool_input(case, surface.protocol, &workspace.project)?;
+    match surface.lane {
+        Lane::Deferred => {
+            let run = run_deferred_flow(&workspace.root, &workspace.project, &input, timeout, &[])?;
+            check_deferred_run(
+                &case.expect,
+                &case.cited,
+                &workspace.project,
+                &run.stop,
+                &run.summary,
+            )
         }
-        _ if golden_stdout.trim() == actual_stdout_normalized.trim() => {}
-        _ => {
-            return Err(format!(
-                "stdout mismatch:\n  expected: {golden_stdout}\n  actual:   {actual_stdout_normalized}"
-            ));
+        Lane::Immediate => {
+            let stdout = run_hook(
+                "post-tool-immediate",
+                None,
+                &input,
+                input.bytes(),
+                timeout,
+                &workspace.evidence,
+                &[],
+            )?;
+            check_immediate_stdout(case.expect.outcome, &stdout)
         }
     }
+}
 
-    let stderr_golden_path = case
-        .directory
-        .join(format!("{}.stderr.txt", surface.cli_name()));
-    if stderr_golden_path.exists() {
-        let expected = std::fs::read_to_string(&stderr_golden_path)
-            .map_err(|error| format!("read {stderr_golden_path:?}: {error}"))?;
-        let expected = normalize(&expected, &project_paths);
-        let actual = normalize(&actual_stderr, &project_paths);
-        if expected.trim() != actual.trim() {
-            return Err(format!(
-                "stderr mismatch:\n  expected:\n{expected}\n  actual:\n{actual}"
-            ));
-        }
-    } else {
-        let actual = normalize(&actual_stderr, &project_paths);
-        if !actual.trim().is_empty() {
-            return Err(format!(
-                "stderr expected empty but got:\n{actual}\n(write {stderr_golden_path:?} to assert content)"
-            ));
-        }
+/// Coarse channel shape only: message wording belongs to the UX templates.
+fn check_immediate_stdout(outcome: Outcome, stdout: &JsonValue) -> Result<(), String> {
+    let silent = stdout.as_object().is_some_and(serde_json::Map::is_empty);
+    match outcome {
+        Outcome::Clean if !silent => Err(format!(
+            "clean case must be silent (stdout {{}}), got {stdout}"
+        )),
+        Outcome::AutoFixed | Outcome::Manual if silent => Err(format!(
+            "{outcome} case produced no native output, so the agent is never told"
+        )),
+        _ => Ok(()),
     }
+}
 
-    let exit_golden_path = case.directory.join(format!("{}.exit", surface.cli_name()));
-    let expected_exit = if exit_golden_path.exists() {
-        std::fs::read_to_string(&exit_golden_path)
-            .map_err(|error| format!("read {exit_golden_path:?}: {error}"))?
-            .trim()
-            .parse::<i32>()
-            .map_err(|error| format!("parse {exit_golden_path:?}: {error}"))?
-    } else {
-        0
-    };
-    if actual_exit != expected_exit {
+struct DeferredRun {
+    stop: JsonValue,
+    summary: JsonValue,
+}
+
+/// Drives the plugin's hook sequence with a private state directory under
+/// `root`: `session-start-state`, one `post-tool` observation, then Stop.
+fn run_deferred_flow(
+    root: &Path,
+    project: &Path,
+    post_tool: &NativePostToolInput,
+    timeout: Duration,
+    env: &[(&str, &OsStr)],
+) -> Result<DeferredRun, String> {
+    if post_tool.surface() != ProtocolSurface::Claude {
         return Err(format!(
-            "exit code mismatch: expected {expected_exit}, got {actual_exit}\nstdout:\n{actual_stdout}\nstderr:\n{actual_stderr}"
+            "deferred fixtures drive Claude lifecycle events, not {}",
+            post_tool.surface()
         ));
     }
+    let state = root.join("state");
+    let evidence = root.join("evidence");
+    let lifecycle = |event: &str, fields: JsonValue| {
+        let mut input = serde_json::json!({
+            "session_id": post_tool.session_id(),
+            "transcript_path": project.join(".fixture-transcript.jsonl"),
+            "cwd": project,
+            "hook_event_name": event,
+        });
+        if let (Some(input), Some(fields)) = (input.as_object_mut(), fields.as_object()) {
+            input.extend(fields.clone());
+        }
+        input.to_string().into_bytes()
+    };
+    let env_file = root.join("claude-env");
+    let mut start_env = env.to_vec();
+    start_env.push(("CLAUDE_ENV_FILE", env_file.as_os_str()));
+    run_hook(
+        "session-start-state",
+        Some(&state),
+        post_tool,
+        &lifecycle(
+            "SessionStart",
+            serde_json::json!({"source": "startup", "model": "fixture-model"}),
+        ),
+        timeout,
+        &evidence.join("session-start-state"),
+        &start_env,
+    )?;
+    run_hook(
+        "post-tool",
+        Some(&state),
+        post_tool,
+        post_tool.bytes(),
+        timeout,
+        &evidence.join("post-tool"),
+        env,
+    )?;
+    let stop = run_hook(
+        "turn-completion",
+        Some(&state),
+        post_tool,
+        &lifecycle(
+            "Stop",
+            serde_json::json!({"stop_hook_active": false, "last_assistant_message": "done"}),
+        ),
+        timeout,
+        &evidence.join("turn-completion"),
+        env,
+    )?;
+    let summaries = files_named(&state, "summary.json")?;
+    let [summary] = summaries.as_slice() else {
+        return Err(format!(
+            "expected one deferred summary.json under {state:?}, found {}; Stop stdout: {stop}",
+            summaries.len()
+        ));
+    };
+    let summary = std::fs::read(summary)
+        .map_err(|error| format!("read {summary:?}: {error}"))
+        .and_then(|bytes| {
+            serde_json::from_slice(&bytes).map_err(|error| format!("parse {summary:?}: {error}"))
+        })?;
+    Ok(DeferredRun { stop, summary })
+}
 
+/// Runs one hook command with the native input's harness environment and
+/// returns its stdout JSON. Any nonzero exit is a failure.
+fn run_hook(
+    command_name: &str,
+    state_dir: Option<&Path>,
+    identity: &NativePostToolInput,
+    payload: &[u8],
+    timeout: Duration,
+    evidence: &Path,
+    env: &[(&str, &OsStr)],
+) -> Result<JsonValue, String> {
+    std::fs::create_dir_all(evidence)
+        .map_err(|error| format!("create evidence {evidence:?}: {error}"))?;
+    std::fs::write(evidence.join("input.json"), payload)
+        .map_err(|error| format!("write {command_name} input evidence: {error}"))?;
+    let binary = env!("CARGO_BIN_EXE_velvet-glove");
+    let mut command = Command::new(binary);
+    command.args(["--harness", identity.surface().cli_name()]);
+    if let Some(state_dir) = state_dir {
+        command.arg("--state-dir").arg(state_dir);
+    }
+    command.arg(command_name);
+    identity.configure_command(&mut command);
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let output = run_with_timeout(&mut command, payload, timeout, evidence)
+        .map_err(|error| format!("{command_name} ({}): {error}", identity.surface()))?;
+    let _ = std::fs::write(
+        evidence.join("exit.txt"),
+        format!("{}\n", output.status.code().unwrap_or(-1)),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        return Err(format!(
+            "{command_name} exited {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    serde_json::from_str(&stdout)
+        .map_err(|error| format!("{command_name} stdout is not JSON ({error}):\n{stdout}"))
+}
+
+/// Compares a deferred run's `summary.json` per-file statuses and operational
+/// problems with the case's expectation. The aggregate covers the cited files
+/// plus any non-cited file reported auto-fixed or manual-fixes-needed. Stop
+/// output is checked only for its coarse block decision; its wording belongs
+/// to the UX templates.
+fn check_deferred_run(
+    expect: &CaseSpec,
+    cited: &[String],
+    project: &Path,
+    stop: &JsonValue,
+    summary: &JsonValue,
+) -> Result<(), String> {
+    let result = summary
+        .get("result")
+        .ok_or("summary.json has no `result` object")?;
+    let aliases = workspace_path_aliases(project);
+    let mut observed = BTreeMap::new();
+    for (path, file) in result
+        .get("files")
+        .and_then(JsonValue::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let status = file.get("status").and_then(JsonValue::as_str).unwrap_or("");
+        let outcome = Outcome::from_file_status(status)
+            .ok_or_else(|| format!("summary.json: unknown status {status:?} for {path}"))?;
+        observed.insert(project_relative(path, &aliases), outcome);
+    }
+    let operational = result
+        .get("operationalProblems")
+        .and_then(JsonValue::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(id, problem)| {
+            let message = problem.get("message").and_then(JsonValue::as_str);
+            format!("{id}: {}", message.unwrap_or("(no message)"))
+        })
+        .collect::<Vec<_>>();
+    let blocked = stop.get("decision").and_then(JsonValue::as_str) == Some("block");
+
+    let mut problems = Vec::new();
+    if expect.outcome == Outcome::Operational {
+        if operational.is_empty() {
+            problems.push(
+                "expected an operational problem, but summary.json records no operational problem"
+                    .to_owned(),
+            );
+        }
+        for file in cited {
+            if observed.get(file) == Some(&Outcome::Manual) {
+                problems.push(format!(
+                    "{file}: operational failure misclassified as manual-fixes-needed"
+                ));
+            }
+        }
+    } else {
+        if !operational.is_empty() {
+            problems.push(format!(
+                "unexpected operational problem(s): {}",
+                operational.join("; ")
+            ));
+        }
+        let mut worst = None;
+        for file in cited {
+            let Some(actual) = observed.get(file).copied() else {
+                problems.push(format!(
+                    "{file}: not assessed (absent from summary.json files; uncovered or not applicable)"
+                ));
+                continue;
+            };
+            worst = worst.max(Some(actual));
+        }
+        // A workspace tool may change or blame files the agent did not cite;
+        // those count toward the aggregate. Untouched clean files do not.
+        for (file, actual) in &observed {
+            if !cited.contains(file) && *actual > Outcome::Clean {
+                worst = worst.max(Some(*actual));
+            }
+        }
+        for (file, expected) in &expect.files {
+            match observed.get(file) {
+                Some(actual) if actual != expected => {
+                    problems.push(format!("{file}: expected {expected}, observed {actual}"));
+                }
+                None if !cited.contains(file) => problems.push(format!(
+                    "{file}: expected {expected}, but summary.json does not report it changed or blamed"
+                )),
+                _ => {}
+            }
+        }
+        match worst {
+            Some(worst) if worst != expect.outcome => problems.push(format!(
+                "aggregate: expected {}, observed {worst}",
+                expect.outcome
+            )),
+            _ => {}
+        }
+        match (expect.outcome == Outcome::Manual, blocked) {
+            (true, false) => {
+                problems.push("manual case did not block Stop (no decision=block)".to_owned())
+            }
+            (false, true) => problems.push(format!("{} case blocked Stop", expect.outcome)),
+            _ => {}
+        }
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    let observed = observed
+        .iter()
+        .map(|(file, outcome)| format!("{file}={outcome}"))
+        .collect::<Vec<_>>();
+    Err(format!(
+        "deferred outcome mismatch:\n  {}\nobserved files: [{}]; operational: [{}]; blocked: {blocked}",
+        problems.join("\n  "),
+        observed.join(", "),
+        operational.join("; "),
+    ))
+}
+
+fn project_relative(path: &str, aliases: &[String]) -> String {
+    aliases
+        .iter()
+        .filter_map(|alias| path.strip_prefix(alias.as_str()))
+        .filter_map(|rest| rest.strip_prefix('/'))
+        .min_by_key(|rest| rest.len())
+        .unwrap_or(path)
+        .to_owned()
+}
+
+/// Checks post-run content: `expected/` when present, otherwise unchanged
+/// inputs unless the case is auto-fixed. With `capture`, a missing
+/// `expected/` is written from an auto-fixed or manual (partial-fix) run.
+fn verify_post_state(case: &FixtureCase, project: &Path, capture: bool) -> Result<(), String> {
     let expected_root = case.directory.join("expected");
     if expected_root.exists() {
-        verify_expected_tree(&expected_root, &expected_root, project)?;
+        return verify_expected_tree(&expected_root, &expected_root, project);
     }
-    Ok(())
+    let changed = changed_inputs(&case.directory, project)?;
+    if changed.is_empty() {
+        return Ok(());
+    }
+    if capture && matches!(case.expect.outcome, Outcome::AutoFixed | Outcome::Manual) {
+        for relative in &changed {
+            let destination = expected_root.join(relative);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("create {parent:?}: {error}"))?;
+            }
+            std::fs::copy(project.join(relative), &destination)
+                .map_err(|error| format!("capture {relative:?} into {destination:?}: {error}"))?;
+        }
+        println!(
+            "CAPTURED {}/{} expected/: {} (review before committing)",
+            case.tool,
+            case.case,
+            changed.join(", ")
+        );
+        return Ok(());
+    }
+    if case.expect.outcome == Outcome::AutoFixed {
+        return Ok(());
+    }
+    Err(format!(
+        "{} changed during a {} case without expected/ post-state; review the change and \
+         capture it with {CAPTURE_ENV}=1",
+        changed.join(", "),
+        case.expect.outcome
+    ))
+}
+
+fn changed_inputs(case_dir: &Path, project: &Path) -> Result<Vec<String>, String> {
+    let mut changed = Vec::new();
+    for relative in input_files(case_dir)? {
+        let before = std::fs::read(case_dir.join(&relative))
+            .map_err(|error| format!("read fixture input {relative:?}: {error}"))?;
+        let after = std::fs::read(project.join(&relative)).ok();
+        if after.as_deref() != Some(before.as_slice()) {
+            changed.push(relative.to_string_lossy().into_owned());
+        }
+    }
+    Ok(changed)
 }
 
 fn verify_expected_tree(root: &Path, current: &Path, project: &Path) -> Result<(), String> {
@@ -1101,12 +1862,15 @@ fn write_pkl_config(project: &Path, tool: &str, property: &str) -> Result<(), St
     let config_dir = project.join(".velvet-glove");
     std::fs::create_dir_all(&config_dir)
         .map_err(|error| format!("create config directory {config_dir:?}: {error}"))?;
+    // Deferred candidates come only from the cited tool call: the mtime
+    // fallback would also pick up freshly copied supporting files.
     let body = format!(
         r#"amends "Config.pkl"
 import "Builtins.pkl"
 
 settings {{
   diagnosticsDirectory = ".velvet-glove/{tool}-agent-hook"
+  fileActivity {{ filesystemMtime = false }}
 }}
 
 tools {{
@@ -1119,118 +1883,150 @@ run = new Listing<String> {{ "{tool}" }}
         .map_err(|error| format!("write post-tool-use.pkl: {error}"))
 }
 
-fn copy_fixture_inputs(root: &Path, current: &Path, target: &Path) -> Result<(), String> {
-    for entry in sorted_entries(current)? {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_text = name.to_string_lossy();
-        if current == root
-            && (name == OsStr::new("expected")
-                || name == OsStr::new("README.md")
-                || is_golden_output(&name_text))
-        {
-            continue;
-        }
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("file type for {path:?}: {error}"))?;
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|error| format!("strip fixture prefix from {path:?}: {error}"))?;
-        let destination = target.join(relative);
-        if file_type.is_dir() {
-            std::fs::create_dir_all(&destination)
-                .map_err(|error| format!("create {destination:?}: {error}"))?;
-            copy_fixture_inputs(root, &path, target)?;
-        } else if file_type.is_file() {
-            if let Some(parent) = destination.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|error| format!("create {parent:?}: {error}"))?;
-            }
-            std::fs::copy(&path, &destination)
-                .map_err(|error| format!("copy {path:?} to {destination:?}: {error}"))?;
-        } else {
-            return Err(format!("unsupported fixture entry type: {path:?}"));
-        }
-    }
-    Ok(())
-}
-
-fn find_entry_file(directory: &Path) -> Result<PathBuf, String> {
-    let mut candidates = Vec::new();
+/// Validates a case directory and returns its cited files and expectation.
+fn load_case(directory: &Path) -> Result<(Vec<String>, CaseSpec), String> {
     for entry in sorted_entries(directory)? {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_text = name.to_string_lossy();
-        if name == OsStr::new("expected")
-            || name == OsStr::new("README.md")
-            || is_golden_output(&name_text)
-        {
-            continue;
-        }
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("file type for {path:?}: {error}"))?;
-        if !file_type.is_file() {
-            continue;
-        }
-        if name_text.starts_with("example.") {
-            return Ok(PathBuf::from(name));
-        }
-        candidates.push(PathBuf::from(name));
-    }
-    candidates.sort();
-    candidates.into_iter().next().ok_or_else(|| {
-        format!("no entry file in {directory:?}; add an `example.<ext>` at the case root")
-    })
-}
-
-fn find_example_files(directory: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut examples = Vec::new();
-    for entry in sorted_entries(directory)? {
-        let path = entry.path();
-        let name = entry.file_name();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("file type for {path:?}: {error}"))?;
-        if file_type.is_file() && name.to_string_lossy().starts_with("example.") {
-            examples.push(PathBuf::from(name));
-        }
-    }
-    Ok(examples)
-}
-
-fn is_golden_output(name: &str) -> bool {
-    ProtocolSurface::ALL.iter().any(|surface| {
-        name == format!("{}.json", surface.cli_name())
-            || name == format!("{}.stderr.txt", surface.cli_name())
-            || name == format!("{}.exit", surface.cli_name())
-    })
-}
-
-fn validate_supported_goldens(directory: &Path) -> Result<(), String> {
-    for entry in sorted_entries(directory)? {
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("file type for {:?}: {error}", entry.path()))?;
-        if !file_type.is_file() {
-            continue;
-        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        for surface in ProtocolSurface::ALL {
-            let is_surface_golden = name == format!("{}.json", surface.cli_name())
-                || name == format!("{}.stderr.txt", surface.cli_name())
-                || name == format!("{}.exit", surface.cli_name());
-            if is_surface_golden && !REAL_TOOL_SURFACES.contains(&surface) {
-                return Err(format!(
-                    "{} golden is not executed by the real-tool fixture matrix",
-                    surface.cli_name()
-                ));
-            }
+        if is_legacy_golden(&name) {
+            return Err(format!(
+                "legacy byte golden {name}: cases assert semantics in {CASE_SPEC}, not \
+                 transcripts; delete it (see tests/tool-fixtures/README.md)"
+            ));
         }
     }
+    let inputs = input_files(directory)?
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let text = std::fs::read_to_string(directory.join(CASE_SPEC)).map_err(|error| {
+        format!("read {CASE_SPEC} (every case declares its expected outcome there): {error}")
+    })?;
+    CaseSpec::parse(&text, &inputs)
+}
+
+fn is_legacy_golden(name: &str) -> bool {
+    ProtocolSurface::ALL.iter().any(|surface| {
+        ["json", "stderr.txt", "exit"]
+            .iter()
+            .any(|extension| name == format!("{}.{extension}", surface.cli_name()))
+    })
+}
+
+/// Without `cite`: the top-level `example.*` inputs, or else the first
+/// top-level input file.
+fn default_cited(inputs: &[String]) -> Result<Vec<String>, String> {
+    let top_level = inputs
+        .iter()
+        .filter(|path| Path::new(path).components().count() == 1)
+        .collect::<Vec<_>>();
+    let examples = top_level
+        .iter()
+        .filter(|name| name.starts_with("example."))
+        .map(|name| (*name).clone())
+        .collect::<Vec<_>>();
+    if !examples.is_empty() {
+        return Ok(examples);
+    }
+    top_level
+        .first()
+        .map(|file| vec![(*file).clone()])
+        .ok_or_else(|| {
+            "no top-level input file to cite; add an `example.<ext>` at the case root or \
+             list inputs in `cite`"
+                .to_owned()
+        })
+}
+
+/// An explicit `cite`: distinct case-relative input files, never `expected/`.
+fn parse_cite(value: &JsonValue, inputs: &[String]) -> Result<Vec<String>, String> {
+    let entries = value
+        .as_array()
+        .filter(|entries| !entries.is_empty())
+        .ok_or_else(|| format!("{CASE_SPEC}: `cite` must be a non-empty list of case files"))?;
+    let mut cited = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let path = entry
+            .as_str()
+            .ok_or_else(|| format!("{CASE_SPEC}: `cite` entries must be strings"))?;
+        if Path::new(path).starts_with("expected") {
+            return Err(format!(
+                "{CASE_SPEC}: `cite` names {path:?}, but expected/ holds post-state, not inputs"
+            ));
+        }
+        if !inputs.iter().any(|input| input == path) {
+            return Err(format!(
+                "{CASE_SPEC}: `cite` names {path:?}, which is not an input file of the case"
+            ));
+        }
+        if cited.iter().any(|file| file == path) {
+            return Err(format!("{CASE_SPEC}: `cite` names {path:?} twice"));
+        }
+        cited.push(path.to_owned());
+    }
+    Ok(cited)
+}
+
+/// Case-relative paths of every fixture input: all files except
+/// `case.json`, a case `README.md`, and the `expected/` tree.
+fn input_files(case_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    fn collect(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in sorted_entries(current)? {
+            let path = entry.path();
+            let name = entry.file_name();
+            if current == root
+                && (name == OsStr::new("expected")
+                    || name == OsStr::new("README.md")
+                    || name == OsStr::new(CASE_SPEC))
+            {
+                continue;
+            }
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("file type for {path:?}: {error}"))?;
+            if file_type.is_dir() {
+                collect(root, &path, files)?;
+            } else if file_type.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|error| format!("strip fixture prefix from {path:?}: {error}"))?;
+                files.push(relative.to_path_buf());
+            } else {
+                return Err(format!("unsupported fixture entry type: {path:?}"));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    collect(case_dir, case_dir, &mut files)?;
+    Ok(files)
+}
+
+fn copy_fixture_inputs(case_dir: &Path, project: &Path) -> Result<(), String> {
+    for relative in input_files(case_dir)? {
+        let source = case_dir.join(&relative);
+        let destination = project.join(&relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("create {parent:?}: {error}"))?;
+        }
+        std::fs::copy(&source, &destination)
+            .map_err(|error| format!("copy {source:?} to {destination:?}: {error}"))?;
+    }
     Ok(())
+}
+
+fn files_named(root: &Path, name: &str) -> Result<Vec<PathBuf>, String> {
+    let mut found = Vec::new();
+    for entry in sorted_entries(root)? {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_named(&path, name)?);
+        } else if entry.file_name() == OsStr::new(name) {
+            found.push(path);
+        }
+    }
+    Ok(found)
 }
 
 fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
@@ -1240,6 +2036,13 @@ fn check_tool_programs(spec: &ToolSpec) -> Result<(), Vec<String>> {
             .values()
             .filter(|phase| phase.enabled)
             .filter_map(|phase| phase.program.as_deref()),
+    );
+    programs.extend(
+        spec.workflows
+            .values()
+            .filter(|workflow| workflow.enabled)
+            .flat_map(|workflow| workflow.check.iter().chain(workflow.remedy.iter()))
+            .filter_map(|command| command.program.as_deref()),
     );
     let missing = programs
         .into_iter()
@@ -1289,7 +2092,7 @@ fn is_executable(path: &Path) -> bool {
 
 fn run_probe_matrix(timeout: Duration, artifact_root: Option<&Path>) -> Result<usize, String> {
     let mut commands = 0;
-    for surface in ProtocolSurface::ALL {
+    for surface in PROBE_SURFACES {
         match run_probe_case(surface, timeout, artifact_root) {
             Ok(executed) => commands += executed,
             Err(mut error) => {
@@ -1318,24 +2121,25 @@ fn run_probe_matrix(timeout: Duration, artifact_root: Option<&Path>) -> Result<u
     Ok(commands)
 }
 
-fn probe_report(commands: usize, failure: Option<(ProtocolSurface, &str)>) -> JsonValue {
+fn probe_report(commands: usize, failure: Option<(FixtureSurface, &str)>) -> JsonValue {
     serde_json::json!({
-        "formatVersion": 1,
+        "formatVersion": REPORT_FORMAT_VERSION,
         "kind": "probe",
         "status": if failure.is_some() { "fail" } else { "pass" },
+        "surfaces": PROBE_SURFACES.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "totals": {
-            "protocolProbeSurfaces": ProtocolSurface::ALL.len(),
+            "protocolProbeSurfaces": PROBE_SURFACES.len(),
             "commandsExecuted": commands,
         },
         "failure": failure.map(|(surface, detail)| serde_json::json!({
-            "surface": surface.cli_name(),
+            "surface": surface.to_string(),
             "detail": detail,
         })),
     })
 }
 
 fn run_probe_case(
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
     timeout: Duration,
     artifact_root: Option<&Path>,
 ) -> Result<usize, String> {
@@ -1345,7 +2149,7 @@ fn run_probe_case(
 }
 
 fn run_probe_attempt(
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
     artifact_root: Option<&Path>,
     execute: impl FnOnce(&Path) -> Result<usize, String>,
 ) -> Result<usize, String> {
@@ -1363,8 +2167,8 @@ fn run_probe_attempt(
                     write_json(
                         &evidence.join("probe-outcome.json"),
                         &serde_json::json!({
-                            "formatVersion": 1,
-                            "surface": surface.cli_name(),
+                            "formatVersion": REPORT_FORMAT_VERSION,
+                            "surface": surface.to_string(),
                             "status": "fail",
                             "detail": error,
                         }),
@@ -1396,7 +2200,7 @@ fn run_probe_attempt(
 }
 
 fn run_probe_case_inner(
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
     timeout: Duration,
     root: &Path,
 ) -> Result<usize, String> {
@@ -1427,35 +2231,44 @@ fn run_probe_case_inner(
     }
     write_probe_config(&project, &probe)?;
 
-    let input = PostToolUseBuilder::new(surface, &project, "example.fixture")
+    let input = PostToolUseBuilder::new(surface.protocol, &project, "example.fixture")
         .identity("probe-session", "probe-turn", "probe-tool")
         .build()?;
-    std::fs::write(evidence.join("input.json"), input.bytes())
-        .map_err(|error| format!("write probe input: {error}"))?;
-    let sentinel = format!("surface:{}", surface.cli_name());
-    let binary = env!("CARGO_BIN_EXE_velvet-glove");
-    let mut command = Command::new(binary);
-    command.args(["--harness", surface.cli_name(), "post-tool-immediate"]);
-    input.configure_command(&mut command);
-    command
-        .env(PROBE_DIR_ENV, &probe_dir)
-        .env(PROBE_SENTINEL_ENV, &sentinel);
-    let output = run_with_timeout(&mut command, input.bytes(), timeout, &evidence)
-        .map_err(|error| format!("{surface} probe through {binary}: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{surface} probe exited {:?}\nstdout:\n{}\nstderr:\n{}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let stdout: JsonValue = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("parse {surface} probe stdout as JSON: {error}"))?;
-    if stdout != serde_json::json!({}) {
-        return Err(format!(
-            "{surface} probe expected {{}} stdout, got {stdout}"
-        ));
+    let sentinel = format!("surface:{surface}");
+    let env = [
+        (PROBE_DIR_ENV, probe_dir.as_os_str()),
+        (PROBE_SENTINEL_ENV, OsStr::new(&sentinel)),
+    ];
+    match surface.lane {
+        Lane::Immediate => {
+            let stdout = run_hook(
+                "post-tool-immediate",
+                None,
+                &input,
+                input.bytes(),
+                timeout,
+                &evidence,
+                &env,
+            )
+            .map_err(|error| format!("{surface} probe: {error}"))?;
+            if stdout != serde_json::json!({}) {
+                return Err(format!(
+                    "{surface} probe expected {{}} stdout, got {stdout}"
+                ));
+            }
+        }
+        Lane::Deferred => {
+            let run = run_deferred_flow(root, &project, &input, timeout, &env)
+                .map_err(|error| format!("{surface} probe: {error}"))?;
+            check_deferred_run(
+                &CaseSpec::new(Outcome::Clean),
+                &["example.fixture".to_owned()],
+                &project,
+                &run.stop,
+                &run.summary,
+            )
+            .map_err(|error| format!("{surface} probe: {error}"))?;
+        }
     }
 
     let invocations_dir = probe_dir.join("invocations");
@@ -1627,10 +2440,10 @@ fn build_report(
     let mut skipped = 0;
     let mut failed = 0;
     let mut skip_reasons = BTreeMap::<&str, usize>::new();
-    let mut by_surface = BTreeMap::<&str, [usize; 3]>::new();
+    let mut by_surface = BTreeMap::<String, [usize; 3]>::new();
     for outcome in outcomes {
         let counts = by_surface
-            .entry(outcome.surface.cli_name())
+            .entry(outcome.surface.to_string())
             .or_insert([0, 0, 0]);
         match &outcome.status {
             FixtureStatus::Pass => {
@@ -1652,7 +2465,7 @@ fn build_report(
         .into_iter()
         .map(|(surface, counts)| {
             (
-                surface.to_owned(),
+                surface,
                 serde_json::json!({
                     "passed": counts[0],
                     "skipped": counts[1],
@@ -1662,14 +2475,15 @@ fn build_report(
         })
         .collect::<serde_json::Map<_, _>>();
     serde_json::json!({
-        "formatVersion": 1,
+        "formatVersion": REPORT_FORMAT_VERSION,
         "kind": "real-tool-fixtures",
+        "surfaces": surface_names(),
         "totals": {
             "tools": catalog.tool_count,
             "cases": catalog.cases.len(),
-            "fixtureSurfaces": REAL_TOOL_SURFACES.len(),
-            "protocolProbeSurfaces": ProtocolSurface::ALL.len(),
-            "plannedSurfaceCases": catalog.cases.len() * REAL_TOOL_SURFACES.len(),
+            "fixtureSurfaces": FIXTURE_SURFACES.len(),
+            "protocolProbeSurfaces": PROBE_SURFACES.len(),
+            "plannedSurfaceCases": catalog.cases.len() * FIXTURE_SURFACES.len(),
             "attemptedSurfaceCases": passed + failed,
             "passed": passed,
             "skipped": skipped,
@@ -1680,6 +2494,10 @@ fn build_report(
         "skipReasons": skip_reasons,
         "outcomes": outcomes.iter().map(FixtureOutcome::as_json).collect::<Vec<_>>(),
     })
+}
+
+fn surface_names() -> Vec<String> {
+    FIXTURE_SURFACES.iter().map(ToString::to_string).collect()
 }
 
 fn print_outcomes(outcomes: &[FixtureOutcome]) {
@@ -1695,8 +2513,8 @@ fn print_outcomes(outcomes: &[FixtureOutcome]) {
             ),
             FixtureStatus::Fail(reason) => {
                 eprintln!(
-                    "FAIL  {}/{} ({}):\n{reason}",
-                    outcome.tool, outcome.case, outcome.surface
+                    "FAIL  {}/{} ({}, expected {}):\n{reason}",
+                    outcome.tool, outcome.case, outcome.surface, outcome.expected
                 );
                 if let Some(path) = &outcome.artifacts {
                     eprintln!("retained artifacts: {}", path.display());
@@ -1710,14 +2528,13 @@ fn retain_failure(
     source: &Path,
     artifact_root: &Path,
     case: &FixtureCase,
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
 ) -> Result<PathBuf, String> {
     let destination = artifact_root
         .join(sanitize_component(&case.tool))
         .join(sanitize_component(&case.case))
         .join(format!(
-            "{}-{}-{}",
-            surface.cli_name(),
+            "{surface}-{}-{}",
             std::process::id(),
             unique_nonce()
         ));
@@ -1732,11 +2549,11 @@ fn retain_failure(
 fn retain_probe_failure(
     source: &Path,
     artifact_root: &Path,
-    surface: ProtocolSurface,
+    surface: FixtureSurface,
 ) -> Result<PathBuf, String> {
     let destination = artifact_root
         .join("probe")
-        .join(surface.cli_name())
+        .join(surface.to_string())
         .join(format!("{}-{}", std::process::id(), unique_nonce()));
     copy_tree(source, &destination).map_err(|error| {
         format!(
@@ -1793,38 +2610,6 @@ fn append_failure(outcome: &mut FixtureOutcome, extra: String) {
             outcome.status = FixtureStatus::Fail(extra);
         }
     }
-}
-
-fn normalize(text: &str, project_aliases: &[String]) -> String {
-    let mut output = text.to_owned();
-    let mut aliases = project_aliases.iter().collect::<Vec<_>>();
-    aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
-    for alias in aliases {
-        output = output.replace(alias, "<workspace>");
-    }
-    mask_volatile_lines(&output)
-}
-
-/// Masks a wall-clock timestamp or interpreter version a tool embeds in
-/// otherwise-deterministic output (e.g. bandit's `Run started: <ISO-8601>`
-/// banner and `running on Python <version>` line), so fixture goldens can
-/// assert a fixed placeholder instead of a value that changes on every run
-/// or across installed versions. Applied to both golden and actual text, so
-/// goldens simply spell out the placeholder. Only a recognized "<label>"
-/// prefix is touched.
-fn mask_volatile_lines(text: &str) -> String {
-    const MARKERS: &[&str] = &["Run started:", "running on Python "];
-    text.lines()
-        .map(|line| {
-            for marker in MARKERS {
-                if let Some((prefix, _rest)) = line.split_once(marker) {
-                    return format!("{prefix}{marker}<value>");
-                }
-            }
-            line.to_owned()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn workspace_path_aliases(project: &Path) -> Vec<String> {
