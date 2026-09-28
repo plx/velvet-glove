@@ -414,10 +414,18 @@ The default Stop-time messages follow one contract:
 | Result | Agent | User |
 | --- | --- | --- |
 | Clean | nothing | nothing |
-| Auto-fixed only | `velvet-glove auto-fixed src/a.py (Ruff), web/b.ts (Prettier); re-read before editing.` | the same line |
-| Manual fixes needed (blocks) | a short header plus, per tool, a bounded, ANSI-free, project-relative excerpt of the final check's output (`…truncated; full log: <path>` when cut) | file count, files, and the run directory |
+| Auto-fixed only | nothing | `velvet-glove auto-fixed src/a.py (Ruff), web/b.ts (Prettier); re-read before editing.` |
+| Manual fixes needed (blocks) | the auto-fix line (if any), then a short header plus, per tool, a bounded, ANSI-free, project-relative excerpt of the final check's output (`…truncated; full log: <path>` when cut) | the auto-fix line (if any), file count, files, and the run directory |
 | Tool missing, crashed, or misconfigured | nothing | one line naming the tool, the reason, and an install hint or log path |
 | Issues only in files not changed this turn | nothing | a one-line "not blocking" note |
+
+The default `autoFixed.agent` template renders only when the Stop blocks
+(`{% if blocks.manual or blocks.operational or blocks.coverage %}`), so the
+agent re-reads fixed files before fixing the rest. On an allowed Stop, agent
+context would cost a model turn spent acknowledging it (and Claude Code
+already tells the agent when a file it read changed on disk); set
+`autoFixed = new TemplatePair { agent = "…" }` to send it anyway. Immediate
+mode keeps its agent line, which rides on the tool result.
 
 A file counts as auto-fixed only when a remedy changed its bytes and its final
 check passed. When a batch or workspace check fails, its output decides the

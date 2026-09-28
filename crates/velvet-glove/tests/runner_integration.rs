@@ -1133,23 +1133,12 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
                     serde_json::json!({}),
                     "{harness}/{case}: clean runs are silent"
                 ),
-                ("claude", _) => {
-                    assert_eq!(
-                        response,
-                        serde_json::json!({
-                            "systemMessage": notice,
-                            "hookSpecificOutput": {
-                                "hookEventName": "Stop",
-                                "additionalContext": notice,
-                            },
-                        }),
-                        "{case}"
-                    );
-                }
+                // An allowed Stop tells only the user: agent context would
+                // cost Claude a turn spent acknowledging it.
                 _ => assert_eq!(
                     response,
                     serde_json::json!({"systemMessage": notice}),
-                    "{harness}/{case}: an omitted agent copy of the user notice needs no warning"
+                    "{harness}/{case}"
                 ),
             }
             let summary = only_summary(&state_dir);
@@ -1368,12 +1357,15 @@ run {{ "upcase" }}
 fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
     require_pkl!();
 
+    let agent_auto_fix =
+        r#"    autoFixed = new TemplatePair { agent = "auto-fixed {{ counts.auto_fixed }}" }"#;
     let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
         "codex",
         "turn-completion-strict-unrepresentable",
         &[("src/dirty.py", "import os  # unused_import\n")],
     );
     add_runner_setting(&project, r#"loweringPolicy = "strict""#);
+    add_deferred_reporting_config(&project, agent_auto_fix);
     let strict = run_deferred_case("codex", &project, &state_arg);
     assert!(!strict.status.success());
     assert!(
@@ -1394,6 +1386,7 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
         &[("src/dirty.py", "import os  # unused_import\n")],
     );
     add_runner_setting(&project, r#"loweringPolicy = "best-effort""#);
+    add_deferred_reporting_config(&project, agent_auto_fix);
     let best_effort = run_deferred_case("codex", &project, &state_arg);
     assert!(best_effort.status.success());
     let response: serde_json::Value = serde_json::from_slice(&best_effort.stdout).unwrap();
@@ -1483,8 +1476,11 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     let notice = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
-    assert_eq!(response["systemMessage"], notice);
-    assert_eq!(response["hookSpecificOutput"]["additionalContext"], notice);
+    assert_eq!(
+        response,
+        serde_json::json!({"systemMessage": notice}),
+        "an allowed Stop reports auto-fixes to the user only"
+    );
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));

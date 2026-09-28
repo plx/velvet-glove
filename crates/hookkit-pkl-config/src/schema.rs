@@ -326,9 +326,15 @@ impl Default for DeferredReporting {
         Self {
             groups: default_file_groups(),
             clean: TemplatePair::default(),
+            // The agent hears about auto-fixes only when the Stop blocks and
+            // it must edit again. On an allowed Stop, extra agent context
+            // costs a model turn that only acknowledges it, and Claude Code
+            // already tells the agent when a file it read changed on disk.
             auto_fixed: TemplatePair {
                 user: auto_fixed.into(),
-                agent: auto_fixed.into(),
+                agent: format!(
+                    "{{% if blocks.manual or blocks.operational or blocks.coverage %}}{auto_fixed}{{% endif %}}"
+                ),
             },
             manual_fixes_needed: TemplatePair {
                 user: "velvet-glove: {{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes ({% for file in manual_fix_files[:10] %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}{% if counts.manual_fixes_needed > 10 %}, …{% endif %}). Details: {{ run.directory }}".into(),

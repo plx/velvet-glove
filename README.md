@@ -82,16 +82,18 @@ At Stop, in the default deferred mode:
 | Result | Agent | User |
 | --- | --- | --- |
 | Clean | nothing | nothing |
-| Auto-fixed only | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` | the same line |
-| Manual fixes needed | Stop is blocked; the reason lists each tool's files with a bounded, ANSI-free, project-relative excerpt of its final check output | file count, files, and the run's log directory |
+| Auto-fixed only | nothing | `velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.` |
+| Manual fixes needed | Stop is blocked; the reason starts with the auto-fix line (if any) and lists each tool's files with a bounded, ANSI-free, project-relative excerpt of its final check output | the auto-fix line (if any), file count, files, and the run's log directory |
 | Tool missing, crashed, or timed out; broken policy | nothing | one line with the tool, reason, and install hint or log path |
 | Issues only in files not changed this turn | nothing | a one-line "not blocking" note |
 
 Stop never blocks twice in a row on the same issues: when the agent's retry
 leaves them unchanged (or after three consecutive blocks), the user gets a
-note instead and the files stay queued for the next turn. Codex has no
-agent channel on an allowed Stop, so there the auto-fix line reaches only
-the user.
+note instead and the files stay queued for the next turn. An allowed Stop
+tells the agent nothing about auto-fixes: any context there costs a model
+turn spent acknowledging it, and Claude Code already tells the agent when a
+file it read changed on disk. (`deferredReporting.autoFixed.agent` restores
+the agent copy.)
 
 In immediate mode the same contract applies per tool call, except that
 nothing blocks: remaining issues reach the agent as context
