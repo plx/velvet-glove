@@ -108,7 +108,8 @@ A loop guard in the family's session scope records the fingerprint of the
 issues behind the last block (tool, workflow, blamed files, normalized final
 check output). When the harness reports `stop_hook_active` and the fingerprint
 is unchanged, or `maxConsecutiveBlocks` is reached, completion is allowed with
-a user note instead of another block.
+a user note instead of another block. Antigravity has no such flag, so a Stop
+right after a block is presumed to continue the chain.
 
 Coverage gaps use the Pkl `fileActivity.coverageGapPolicy`. The default
 `best-effort` policy retains and records incomplete targets in the summary

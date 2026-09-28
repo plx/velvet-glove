@@ -2164,6 +2164,25 @@ fn turn_completion_loop_guard_stops_reblocking_unchanged_issues() {
 }
 
 #[test]
+fn turn_completion_loop_guard_presumes_continuation_without_a_native_flag() {
+    require_pkl!();
+    let (project, _state_dir, state_arg) = prepare_deferred_ruff_case(
+        "antigravity",
+        "turn-completion-loop-guard-antigravity",
+        &[("src/manual.py", "print(manual_issue)\n")],
+    );
+    let first = run_deferred_case("antigravity", &project, &state_arg);
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first["decision"], "continue");
+    let second = run_deferred_case("antigravity", &project, &state_arg);
+    let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(
+        second["decision"], "stop",
+        "identical issues right after a block must not loop: {second}"
+    );
+}
+
+#[test]
 fn turn_completion_reruns_format_after_a_lint_fix_dirties_it() {
     require_pkl!();
     let project = temp_project("turn-completion-lint-dirties-format");

@@ -133,9 +133,10 @@ Missing executables follow `settings.missingToolPolicy` at Stop too:
 `settings.failFast`, an operational failure skips only the same tool's later
 remedies; other tools still fix their files.
 
-A Stop that follows a block (Claude and Codex `stop_hook_active`) is not
-blocked again for an identical set of issues; the user is told instead, and the
-unfixed files stay pending for the next turn.
+A Stop that follows a block (Claude and Codex `stop_hook_active`; for
+Antigravity, the Stop right after a block) is not blocked again for an
+identical set of issues; the user is told instead, and the unfixed files stay
+pending for the next turn.
 
 Native Stop events have different output capacity:
 

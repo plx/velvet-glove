@@ -760,7 +760,8 @@ struct DeferredSession<'a, 'c> {
     ctx: &'a RuntimeContext<'c>,
     activity_store: &'a FileActivityStore,
     runner_family: &'a StateFamily,
-    stop_hook_active: bool,
+    /// The harness's `stop_hook_active` flag, when its Stop event has one.
+    stop_hook_active: Option<bool>,
 }
 
 /// A sealed pending window with its resolved candidates, ready to commit.
@@ -850,14 +851,15 @@ fn run_turn_completion_input(
         })
 }
 
-/// Whether the harness reports that this Stop follows a Stop-hook block.
-fn stop_hook_active(input: &TurnCompletionInput) -> bool {
+/// Whether the harness reports that this Stop follows a Stop-hook block;
+/// `None` when its Stop event carries no such flag (Antigravity).
+fn stop_hook_active(input: &TurnCompletionInput) -> Option<bool> {
     let field = match input {
         TurnCompletionInput::Claude(input) => input.field("stop_hook_active"),
         TurnCompletionInput::Codex(input) => input.field("stop_hook_active"),
-        _ => None,
+        _ => return None,
     };
-    field.and_then(serde_json::Value::as_bool).unwrap_or(false)
+    Some(field.and_then(serde_json::Value::as_bool).unwrap_or(false))
 }
 
 fn run_turn_completion_view(
@@ -1130,9 +1132,16 @@ impl DeferredCommit<'_, '_> {
             .map_err(state_error)?
             .directory()
             .join(LOOP_GUARD_FILE);
+        let previous = LoopGuardState::load(&guard_path);
+        // Without a native flag, a Stop right after a block is presumed to be
+        // the agent's continuation, so the guard still bounds the chain.
+        let stop_hook_active = self
+            .session
+            .stop_hook_active
+            .unwrap_or(previous.consecutive_blocks > 0);
         let decision = decide_loop_guard(
-            &LoopGuardState::load(&guard_path),
-            self.session.stop_hook_active,
+            &previous,
+            stop_hook_active,
             blocks.any(),
             &fingerprint,
             policy.max_consecutive_blocks,
@@ -1172,7 +1181,7 @@ impl DeferredCommit<'_, '_> {
             lowering: lowering.metadata.clone(),
             block: BlockMetadata {
                 reasons: blocks,
-                stop_hook_active: self.session.stop_hook_active,
+                stop_hook_active,
                 fingerprint,
                 blocked: decision.block,
                 guard_note: decision.note.clone(),
