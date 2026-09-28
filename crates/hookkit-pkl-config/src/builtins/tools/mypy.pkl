@@ -1,4 +1,15 @@
 /// mypy — static type checker for Python.
+///
+/// Validated empirically: batch invocation checks all cited files together
+/// and correctly scopes errors to the file they came from (see the
+/// multi-file fixture). mypy writes a `.mypy_cache/` directory in its
+/// current working directory as normal, expected caching behavior (unlike
+/// python-check-ast's accidental `.pyc` writes, this is a documented mypy
+/// feature, not something this spec should disable); `writes = "none"`
+/// still correctly describes that mypy never rewrites the *target* source
+/// files. Without a project config pointing at the right interpreter/venv,
+/// imports of third-party packages outside the standard library may report
+/// as missing, matching what running mypy directly would show.
 
 module velvet_glove.builtins.tools.Mypy
 
