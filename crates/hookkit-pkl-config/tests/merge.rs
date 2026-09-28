@@ -90,6 +90,44 @@ settings {
 }
 
 #[test]
+fn deferred_blocking_and_excerpt_settings_default_and_merge_per_field() {
+    require_pkl!();
+    let defaults = hookkit_pkl_config::DeferredReporting::default();
+    assert!(!defaults.block_on_operational_errors);
+    assert_eq!(defaults.max_consecutive_blocks, 3);
+    assert_eq!(defaults.excerpt_max_lines, 60);
+    assert_eq!(defaults.excerpt_max_chars, 6_000);
+
+    let user = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings {
+  deferredReporting = new DeferredReporting {
+    blockOnOperationalErrors = true
+    excerptMaxLines = 10
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings {
+  deferredReporting = new DeferredReporting { maxConsecutiveBlocks = 0 }
+}
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([user, project].into_iter()).settings;
+
+    assert!(merged.deferred_reporting.block_on_operational_errors);
+    assert_eq!(merged.deferred_reporting.max_consecutive_blocks, 0);
+    assert_eq!(merged.deferred_reporting.excerpt_max_lines, 10);
+    assert_eq!(merged.deferred_reporting.excerpt_max_chars, 6_000);
+}
+
+#[test]
 fn deferred_reporting_reset_restores_defaults_before_local_patch() {
     require_pkl!();
     let user = evaluate_pkl_source_patch(

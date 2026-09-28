@@ -9,6 +9,8 @@
 //! whether a turn may stop.
 
 mod deferred;
+mod excerpt;
+mod vcs;
 
 pub use deferred::{
     ArtifactClassification, CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult,
@@ -16,8 +18,10 @@ pub use deferred::{
     ToolReportRef,
 };
 use deferred::{
-    DeferredLog, DeferredReporter, RenderedBuckets, RenderedMessages, ScheduledWorkflow,
-    StopLoweringMetadata, TemplateRun, execute_deferred_workflows, plan_stop_lowering,
+    BlockReasons, DEFAULT_BLOCK_REASON, DeferredLog, DeferredReporter, LoopGuardState,
+    RenderedBuckets, RenderedMessages, ScheduledWorkflow, StopLoweringMetadata, TemplateRun,
+    combined_output, decide_loop_guard, execute_deferred_workflows, issue_fingerprint,
+    plan_stop_lowering,
 };
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -601,8 +605,8 @@ struct BatchRunSummary {
     manual_fix_files: Vec<PathBuf>,
     groups: Vec<BatchGroupSummary>,
     artifact_paths: Vec<PathBuf>,
-    artifact_contents: BTreeMap<PathBuf, String>,
     state_disposition: PlannedStateDisposition,
+    block: BlockMetadata,
     rendered_messages: RenderedMessageMetadata,
     tools: Vec<BatchToolSummary>,
     result: DeferredRunResult,
@@ -627,6 +631,7 @@ struct BatchCounts {
     uncovered: usize,
     not_applicable: usize,
     coverage_gaps: usize,
+    out_of_scope: usize,
     groups: usize,
 }
 
@@ -649,6 +654,17 @@ struct PlannedStateDisposition {
     handled_baseline_files: Vec<Utf8PathBuf>,
 }
 
+/// Why the run did or did not block, including the loop guard's view.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockMetadata {
+    reasons: BlockReasons,
+    stop_hook_active: bool,
+    fingerprint: String,
+    blocked: bool,
+    guard_note: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RenderedMessageMetadata {
@@ -668,17 +684,12 @@ struct BatchSummaryParts<'a> {
     status: &'static str,
     rendered_messages: RenderedMessages,
     lowering: StopLoweringMetadata,
+    block: BlockMetadata,
     source: (usize, Vec<String>),
     candidates: &'a [PathBuf],
     tools: Vec<BatchToolSummary>,
     disposition: &'a DeferredStateDisposition,
     result: DeferredRunResult,
-}
-
-struct DeferredFailureContext<'a> {
-    project_root: &'a Path,
-    candidates: &'a [PathBuf],
-    resolution: &'a ActivityResolution,
 }
 
 #[derive(Debug)]
@@ -697,8 +708,81 @@ struct DeferredStateDisposition {
     handled_files: BTreeSet<Utf8PathBuf>,
 }
 
+/// Loop-guard state file in the runner family's session scope.
+const LOOP_GUARD_FILE: &str = "loop-guard.json";
+/// Committed run bundles kept per session family; older ones are removed.
+const RETAINED_RUN_BUNDLES: usize = 20;
+/// Session state directories idle for longer than this are removed.
+const STALE_SESSION_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Settings that decide blocking and lowering for one deferred run.
+#[derive(Debug, Clone, Copy)]
+struct CommitPolicy {
+    lowering: pkl::LoweringPolicy,
+    missing_tool: pkl::MissingToolPolicy,
+    block_on_operational_errors: bool,
+    max_consecutive_blocks: u32,
+    coverage: pkl::CoverageGapPolicy,
+}
+
+impl CommitPolicy {
+    fn new(settings: &pkl::Settings, coverage: pkl::CoverageGapPolicy) -> Self {
+        Self {
+            lowering: settings.lowering_policy,
+            missing_tool: settings.missing_tool_policy,
+            block_on_operational_errors: settings.deferred_reporting.block_on_operational_errors,
+            max_consecutive_blocks: settings.deferred_reporting.max_consecutive_blocks,
+            coverage,
+        }
+    }
+
+    /// Manual issues always block. Missing executables block only under the
+    /// `harness-block` missing-tool policy, other operational problems only
+    /// when configured, and coverage gaps only under the strict policy.
+    fn block_reasons(&self, result: &DeferredRunResult) -> BlockReasons {
+        BlockReasons {
+            manual: result.has_manual_fixes(),
+            operational: result.operational_problems.values().any(|problem| {
+                if problem.missing_tool {
+                    self.missing_tool == pkl::MissingToolPolicy::HarnessBlock
+                } else {
+                    self.block_on_operational_errors
+                }
+            }),
+            coverage: self.coverage == pkl::CoverageGapPolicy::Strict
+                && !result.coverage_gaps.is_empty(),
+        }
+    }
+}
+
+/// Per-Stop session handles shared by every exit path.
+struct DeferredSession<'a, 'c> {
+    ctx: &'a RuntimeContext<'c>,
+    activity_store: &'a FileActivityStore,
+    runner_family: &'a StateFamily,
+    stop_hook_active: bool,
+}
+
+/// A sealed pending window with its resolved candidates, ready to commit.
+struct DeferredCommit<'a, 'c> {
+    session: DeferredSession<'a, 'c>,
+    source: (usize, Vec<String>),
+    candidates: Vec<PathBuf>,
+    resolution: ActivityResolution,
+}
+
+/// The result of one run, ready for block decision and commit.
+struct FinishedRun<'a> {
+    project_root: &'a Path,
+    display_roots: &'a [PathBuf],
+    policy: CommitPolicy,
+    result: DeferredRunResult,
+    tools: Vec<BatchToolSummary>,
+    rendered: RenderedMessages,
+}
+
 fn run_turn_completion_input(
-    _turn_completion: TurnCompletionInput,
+    turn_completion: TurnCompletionInput,
     _environment: &TurnCompletionCommandEnvironment,
     ctx: &RuntimeContext<'_>,
     config_path: Option<&Path>,
@@ -744,15 +828,19 @@ fn run_turn_completion_input(
         .cloned()
         .collect();
     reconcile(&activity_store, reconciliation).map_err(activity_error)?;
+    let stop_hook_active = stop_hook_active(&turn_completion);
     activity_store
         .pending()
         .try_with_entity(|view| {
             run_turn_completion_view(
-                ctx,
+                DeferredSession {
+                    ctx,
+                    activity_store: &activity_store,
+                    runner_family: &runner_family,
+                    stop_hook_active,
+                },
                 loaded,
                 &activity_settings,
-                &activity_store,
-                &runner_family,
                 view,
             )
         })
@@ -762,14 +850,23 @@ fn run_turn_completion_input(
         })
 }
 
+/// Whether the harness reports that this Stop follows a Stop-hook block.
+fn stop_hook_active(input: &TurnCompletionInput) -> bool {
+    let field = match input {
+        TurnCompletionInput::Claude(input) => input.field("stop_hook_active"),
+        TurnCompletionInput::Codex(input) => input.field("stop_hook_active"),
+        _ => None,
+    };
+    field.and_then(serde_json::Value::as_bool).unwrap_or(false)
+}
+
 fn run_turn_completion_view(
-    ctx: &RuntimeContext<'_>,
+    session: DeferredSession<'_, '_>,
     loaded: Result<hookkit_pkl_config::Loaded, hookkit_pkl_config::PklConfigError>,
     activity_settings: &pkl::FileActivitySettings,
-    activity_store: &FileActivityStore,
-    runner_family: &StateFamily,
     view: &EntityView<'_, PendingFileActivity>,
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+    let ctx = session.ctx;
     if view.events().is_empty() {
         let lowering = plan_stop_lowering(
             ctx.harness(),
@@ -780,11 +877,12 @@ fn run_turn_completion_view(
         )?;
         return Ok(EntityOutcome::retain(lowering.finish()?));
     }
-    let fallback_project_root = ctx
+    let workspace_root = ctx
         .workspace_roots()
         .first()
-        .map(|root| normalize_path(root.as_std_path()))
+        .map(|root| root.as_std_path().to_path_buf())
         .ok_or_else(|| invalid_data("turn-completion input has no workspace root".into()))?;
+    let fallback_project_root = normalize_path(&workspace_root);
 
     let mut resolve_options = ResolveOptions::new(ctx.workspace_roots().to_vec());
     resolve_options.max_entries = activity_settings.max_entries;
@@ -794,12 +892,12 @@ fn run_turn_completion_view(
         .cloned()
         .collect();
     if let Ok(state_directory) =
-        Utf8PathBuf::from_path_buf(activity_store.state().directory().into())
+        Utf8PathBuf::from_path_buf(session.activity_store.state().directory().into())
     {
         resolve_options.excluded_roots.insert(state_directory);
     }
     let resolved = resolve_files(view.state(), &resolve_options).map_err(activity_error)?;
-    let resolution = ActivityResolution {
+    let mut resolution = ActivityResolution {
         not_applicable_files: resolved
             .not_applicable_files
             .into_iter()
@@ -815,264 +913,310 @@ fn run_turn_completion_view(
         .map(|path| normalize_path(path.as_std_path()))
         .collect::<Vec<_>>();
     candidates.sort();
-    let source_entry_count = view.events().len();
-    let source_entry_ids = view
-        .events()
-        .iter()
-        .map(|entry| entry.id().to_string())
-        .collect::<Vec<_>>();
-    let mut run = Some(
-        runner_family
-            .start_run("turn-completion")
-            .map_err(state_error)?,
+    // Build outputs and other Git-ignored paths are never lint candidates.
+    let ignored = vcs::git_ignored_paths(&fallback_project_root, &candidates);
+    if !ignored.is_empty() {
+        candidates.retain(|path| !ignored.contains(path));
+        resolution.not_applicable_files.extend(ignored);
+    }
+    let source = (
+        view.events().len(),
+        view.events()
+            .iter()
+            .map(|entry| entry.id().to_string())
+            .collect::<Vec<_>>(),
     );
+    let run = session
+        .runner_family
+        .start_run("turn-completion")
+        .map_err(state_error)?;
+    let commit = DeferredCommit {
+        session,
+        source,
+        candidates,
+        resolution,
+    };
+    let coverage = activity_settings.coverage_gap_policy;
 
     let loaded = match loaded {
         Ok(loaded) => loaded,
         Err(error) => {
-            let run = run.take().expect("run bundle is available");
-            let contents = error.to_string();
-            let artifact_path = run
-                .write_text("config-error.log", &contents)
-                .map_err(state_error)?;
-            let mut result = DeferredRunResult::default();
-            result.record_artifact(RunArtifact {
-                id: "configuration".into(),
-                absolute_path: artifact_path,
-                run_relative_path: "config-error.log".into(),
-                media_type: "text/plain; charset=utf-8".into(),
-                tool_id: None,
-                workflow_id: None,
-                job_id: None,
-                report_id: None,
-                phase: CommandPhase::Configuration,
-                classification: ArtifactClassification::ConfigurationError,
-                exit_code: None,
-                program: None,
-                arguments: Vec::new(),
-                working_directory: None,
-                files: candidates.clone(),
-                candidate_files: candidates.clone(),
-                changed_files: Vec::new(),
-                contents: contents.clone(),
-            });
-            result.record_operational_problem(OperationalProblem {
-                id: "configuration".into(),
-                tool_id: None,
-                phase: Some("configuration".into()),
-                affected_files: candidates.clone(),
-                message: contents.clone(),
-                artifact_ids: vec!["configuration".into()],
-            });
-            record_activity_resolution(&mut result, &resolution);
-            let disposition = plan_deferred_state_disposition(&result, &resolution)?;
-            let rendered_messages =
-                failure_rendered_messages(&run.directory().join("summary.json"), &contents);
-            let lowering = plan_stop_lowering(
-                ctx.harness(),
-                true,
-                rendered_messages.user.as_deref(),
-                rendered_messages.agent.as_deref(),
-                pkl::LoweringPolicy::BestEffortWithWarnings,
-            )?;
-            let summary = build_batch_summary(BatchSummaryParts {
-                run: &run,
-                project_root: &fallback_project_root,
-                state_directory: activity_store.state().directory(),
-                harness: ctx.harness(),
-                status: "operational-failure",
-                rendered_messages,
-                lowering: lowering.metadata.clone(),
-                source: (source_entry_count, source_entry_ids.clone()),
-                candidates: &candidates,
-                tools: Vec::new(),
-                disposition: &disposition,
-                result,
-            })?;
-            let run_id = summary.run.id.clone();
-            run.commit(&summary).map_err(state_error)?;
-            let output = lowering.finish()?;
-            apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-            return Ok(EntityOutcome::acknowledge(output));
+            let display_roots = display_roots(&fallback_project_root, &workspace_root);
+            return commit.config_failure(
+                run,
+                FailureContext {
+                    project_root: &fallback_project_root,
+                    display_roots: &display_roots,
+                    policy: CommitPolicy::new(&pkl::Settings::default(), coverage),
+                },
+                "configuration failed to load; checks were skipped",
+                &error.to_string(),
+            );
         }
     };
-
+    let settings = &loaded.config.settings;
     let project_root = normalize_path(&loaded.project_root);
-    let lowering_policy = loaded.config.settings.lowering_policy;
-    let reporter = match DeferredReporter::new(&loaded.config.settings.deferred_reporting) {
+    let display_roots = display_roots(&project_root, &loaded.project_root);
+    let failure = FailureContext {
+        project_root: &project_root,
+        display_roots: &display_roots,
+        policy: CommitPolicy::new(settings, coverage),
+    };
+    let reporter = match DeferredReporter::new(&settings.deferred_reporting) {
         Ok(reporter) => reporter,
         Err(error) => {
-            let run = run.take().expect("run bundle is available");
-            return commit_deferred_config_failure(
-                ctx,
-                activity_store,
+            return commit.config_failure(
                 run,
-                DeferredFailureContext {
-                    project_root: &project_root,
-                    candidates: &candidates,
-                    resolution: &resolution,
-                },
-                (source_entry_count, source_entry_ids),
-                lowering_policy,
-                error.to_string(),
+                failure,
+                "reporting configuration is invalid; checks were skipped",
+                &error.to_string(),
             );
         }
     };
-    let tools = match resolve_run_order(&loaded.config) {
-        Ok(tools) => tools,
+    let planned = resolve_run_order(&loaded.config).and_then(|tools| {
+        build_deferred_plan(&tools, &commit.candidates, &project_root, &settings.exclude)
+    });
+    let (plan, planned_tools) = match planned {
+        Ok(planned) => planned,
         Err(error) => {
-            let run = run.take().expect("run bundle is available");
-            let contents = error.to_string();
-            let artifact_path = run
-                .write_text("config-error.log", &contents)
-                .map_err(state_error)?;
-            let mut result = DeferredRunResult::default();
-            result.record_artifact(RunArtifact {
-                id: "configuration".into(),
-                absolute_path: artifact_path,
-                run_relative_path: "config-error.log".into(),
-                media_type: "text/plain; charset=utf-8".into(),
-                tool_id: None,
-                workflow_id: None,
-                job_id: None,
-                report_id: None,
-                phase: CommandPhase::Configuration,
-                classification: ArtifactClassification::ConfigurationError,
-                exit_code: None,
-                program: None,
-                arguments: Vec::new(),
-                working_directory: None,
-                files: candidates.clone(),
-                candidate_files: candidates.clone(),
-                changed_files: Vec::new(),
-                contents: contents.clone(),
-            });
-            result.record_operational_problem(OperationalProblem {
-                id: "configuration".into(),
-                tool_id: None,
-                phase: Some("configuration".into()),
-                affected_files: candidates.clone(),
-                message: contents.clone(),
-                artifact_ids: vec!["configuration".into()],
-            });
-            record_activity_resolution(&mut result, &resolution);
-            let disposition = plan_deferred_state_disposition(&result, &resolution)?;
-            let rendered_messages =
-                failure_rendered_messages(&run.directory().join("summary.json"), &contents);
-            let lowering = plan_stop_lowering(
-                ctx.harness(),
-                true,
-                rendered_messages.user.as_deref(),
-                rendered_messages.agent.as_deref(),
-                lowering_policy,
-            )?;
-            let summary = build_batch_summary(BatchSummaryParts {
-                run: &run,
-                project_root: &project_root,
-                state_directory: activity_store.state().directory(),
-                harness: ctx.harness(),
-                status: "operational-failure",
-                rendered_messages,
-                lowering: lowering.metadata.clone(),
-                source: (source_entry_count, source_entry_ids.clone()),
-                candidates: &candidates,
-                tools: Vec::new(),
-                disposition: &disposition,
-                result,
-            })?;
-            let run_id = summary.run.id.clone();
-            run.commit(&summary).map_err(state_error)?;
-            let output = lowering.finish()?;
-            apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-            return Ok(EntityOutcome::acknowledge(output));
-        }
-    };
-
-    let (plan, planned_tools) = match build_deferred_plan(
-        &tools,
-        &candidates,
-        &project_root,
-        &loaded.config.settings.exclude,
-    ) {
-        Ok(plan) => plan,
-        Err(error) => {
-            let run = run.take().expect("run bundle is available");
-            return commit_deferred_config_failure(
-                ctx,
-                activity_store,
+            return commit.config_failure(
                 run,
-                DeferredFailureContext {
-                    project_root: &project_root,
-                    candidates: &candidates,
-                    resolution: &resolution,
-                },
-                (source_entry_count, source_entry_ids),
-                lowering_policy,
-                error.to_string(),
+                failure,
+                "tool configuration is invalid; checks were skipped",
+                &error.to_string(),
             );
         }
     };
-    let mut execution = execute_deferred_workflows(
-        &plan,
-        loaded.config.settings.jobs,
-        loaded.config.settings.fail_fast,
-    );
-    let summaries = write_deferred_artifacts(
-        run.as_ref().expect("run bundle is available"),
+    let mut execution = execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast);
+    let tools = write_deferred_artifacts(
+        &run,
         &plan,
         &planned_tools,
         &execution.logs,
         &mut execution.result,
     )?;
     let mut result = execution.result;
-    record_activity_resolution(&mut result, &resolution);
+    record_activity_resolution(&mut result, &commit.resolution);
 
     let operational_files = result
         .operational_problems
         .values()
         .flat_map(|problem| problem.affected_files.iter().cloned())
         .collect::<BTreeSet<_>>();
-    for candidate in &candidates {
+    for candidate in &commit.candidates {
         if !result.files.contains_key(candidate) && !operational_files.contains(candidate) {
             result.record_uncovered(candidate.clone());
         }
     }
 
     reporter.apply_groups(&mut result, &project_root);
-    let rendered_messages = {
-        let active_run = run.as_ref().expect("run bundle is available");
-        let template_run_id = run_id(active_run.directory())?;
-        let summary_path = active_run.directory().join("summary.json");
-        match reporter.render(
-            &result,
-            TemplateRun {
-                id: &template_run_id,
-                project_root: &project_root,
-                summary_path: &summary_path,
-                state_directory: activity_store.state().directory(),
-            },
-        ) {
-            Ok(messages) => messages,
-            Err(error) => record_reporting_failure(
-                active_run,
-                &mut result,
-                &candidates,
-                &summary_path,
-                error.to_string(),
-            )?,
-        }
+    let template_run_id = run_id(run.directory())?;
+    let summary_path = run.directory().join("summary.json");
+    let rendered = match reporter.render(
+        &result,
+        TemplateRun {
+            id: &template_run_id,
+            project_root: &project_root,
+            summary_path: &summary_path,
+            state_directory: commit.session.activity_store.state().directory(),
+            directory: run.directory(),
+            display_roots: &display_roots,
+            blocks: failure.policy.block_reasons(&result),
+        },
+    ) {
+        Ok(messages) => messages,
+        Err(error) => record_reporting_failure(
+            &run,
+            &mut result,
+            &commit.candidates,
+            &error.to_string(),
+            failure.policy,
+        )?,
     };
+    commit.finish(
+        run,
+        FinishedRun {
+            project_root: &project_root,
+            display_roots: &display_roots,
+            policy: failure.policy,
+            result,
+            tools,
+            rendered,
+        },
+    )
+}
 
-    let should_block = deferred_should_block(&result, activity_settings.coverage_gap_policy);
-    let lowering = plan_stop_lowering(
-        ctx.harness(),
-        should_block,
-        rendered_messages.user.as_deref(),
-        rendered_messages.agent.as_deref(),
-        lowering_policy,
-    )?;
-    let disposition = plan_deferred_state_disposition(&result, &resolution)?;
-    let status = if result.has_operational_problems() {
+/// Where and how a configuration failure is reported.
+#[derive(Clone, Copy)]
+struct FailureContext<'a> {
+    project_root: &'a Path,
+    display_roots: &'a [PathBuf],
+    policy: CommitPolicy,
+}
+
+/// Absolute prefixes that excerpts rewrite to project-relative paths: the
+/// canonical project root and the spelling the harness or config used.
+fn display_roots(canonical: &Path, spelled: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![canonical.to_path_buf()];
+    if spelled != canonical {
+        roots.push(spelled.to_path_buf());
+    }
+    roots
+}
+
+impl DeferredCommit<'_, '_> {
+    /// Commit an operational configuration failure without running tools.
+    fn config_failure(
+        self,
+        run: RunBundle,
+        failure: FailureContext<'_>,
+        headline: &str,
+        detail: &str,
+    ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+        let mut result = DeferredRunResult::default();
+        let log_path = record_configuration_problem(
+            &run,
+            &mut result,
+            &self.candidates,
+            ("configuration", "config-error.log"),
+            detail,
+        )?;
+        record_activity_resolution(&mut result, &self.resolution);
+        let rendered = failure_messages(
+            headline,
+            detail,
+            &log_path,
+            failure.policy.block_on_operational_errors,
+        );
+        self.finish(
+            run,
+            FinishedRun {
+                project_root: failure.project_root,
+                display_roots: failure.display_roots,
+                policy: failure.policy,
+                result,
+                tools: Vec::new(),
+                rendered,
+            },
+        )
+    }
+
+    /// Decide whether to block (applying the loop guard), commit the run
+    /// summary, then update pending state, the guard, and retained runs.
+    fn finish(
+        self,
+        run: RunBundle,
+        finished: FinishedRun<'_>,
+    ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+        let FinishedRun {
+            project_root,
+            display_roots,
+            policy,
+            result,
+            tools,
+            mut rendered,
+        } = finished;
+        let ctx = self.session.ctx;
+        let blocks = policy.block_reasons(&result);
+        let roots = display_roots
+            .iter()
+            .map(PathBuf::as_path)
+            .collect::<Vec<_>>();
+        let fingerprint = issue_fingerprint(&result, blocks, &roots);
+        let guard_path = self
+            .session
+            .runner_family
+            .session_scope()
+            .map_err(state_error)?
+            .directory()
+            .join(LOOP_GUARD_FILE);
+        let decision = decide_loop_guard(
+            &LoopGuardState::load(&guard_path),
+            self.session.stop_hook_active,
+            blocks.any(),
+            &fingerprint,
+            policy.max_consecutive_blocks,
+        );
+        if let Some(note) = &decision.note {
+            rendered.agent = None;
+            rendered.user = Some(match rendered.user.take() {
+                Some(user) => format!("{user}\n{note}"),
+                None => note.clone(),
+            });
+        }
+        if decision.block && rendered.agent.is_none() {
+            rendered.agent = Some(format!(
+                "{DEFAULT_BLOCK_REASON} Details: {}",
+                run.directory().display()
+            ));
+        }
+        let lowering = plan_stop_lowering(
+            ctx.harness(),
+            decision.block,
+            rendered.user.as_deref(),
+            rendered.agent.as_deref(),
+            policy.lowering,
+        )?;
+        let disposition =
+            plan_deferred_state_disposition(&result, &self.resolution, policy.missing_tool)?;
+        let hard_failure = (policy.missing_tool == pkl::MissingToolPolicy::HardFailure)
+            .then(|| missing_tool_messages(&result))
+            .filter(|missing| !missing.is_empty());
+        let summary = build_batch_summary(BatchSummaryParts {
+            run: &run,
+            project_root,
+            state_directory: self.session.activity_store.state().directory(),
+            harness: ctx.harness(),
+            status: run_status(&result),
+            rendered_messages: rendered,
+            lowering: lowering.metadata.clone(),
+            block: BlockMetadata {
+                reasons: blocks,
+                stop_hook_active: self.session.stop_hook_active,
+                fingerprint,
+                blocked: decision.block,
+                guard_note: decision.note.clone(),
+            },
+            source: self.source,
+            candidates: &self.candidates,
+            tools,
+            disposition: &disposition,
+            result,
+        })?;
+        let run_id = summary.run.id.clone();
+        let runs_directory = run.directory().parent().map(Path::to_path_buf);
+        run.commit(&summary).map_err(state_error)?;
+        if let Some(missing) = hard_failure {
+            return Err(invalid_data(format!(
+                "missingToolPolicy is hard-failure and a configured tool is missing: {missing}"
+            )));
+        }
+        let output = lowering.finish()?;
+        apply_deferred_state_disposition(self.session.activity_store, disposition, run_id)?;
+        decision.next.save(&guard_path);
+        if let Some(runs) = runs_directory {
+            prune_run_bundles(&runs, RETAINED_RUN_BUNDLES);
+        }
+        let state_root = StateRoot::new(self.session.activity_store.state().state_root());
+        let _ = SessionState::gc(&state_root, STALE_SESSION_AGE);
+        Ok(EntityOutcome::acknowledge(output))
+    }
+}
+
+fn missing_tool_messages(result: &DeferredRunResult) -> String {
+    result
+        .operational_problems
+        .values()
+        .filter(|problem| problem.missing_tool)
+        .map(|problem| problem.message.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn run_status(result: &DeferredRunResult) -> &'static str {
+    if result.has_operational_problems() {
         "operational-failure"
     } else if result.has_manual_fixes() {
         "issues"
@@ -1080,27 +1224,32 @@ fn run_turn_completion_view(
         "not-applicable"
     } else {
         "clean"
+    }
+}
+
+/// Keep the newest `keep` run bundles (named `<millis>-...`) in `runs`.
+fn prune_run_bundles(runs: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(runs) else {
+        return;
     };
-    let run = run.take().expect("run bundle is available");
-    let summary = build_batch_summary(BatchSummaryParts {
-        run: &run,
-        project_root: &project_root,
-        state_directory: activity_store.state().directory(),
-        harness: ctx.harness(),
-        status,
-        rendered_messages,
-        lowering: lowering.metadata.clone(),
-        source: (source_entry_count, source_entry_ids),
-        candidates: &candidates,
-        tools: summaries,
-        disposition: &disposition,
-        result,
-    })?;
-    let run_id = summary.run.id.clone();
-    run.commit(&summary).map_err(state_error)?;
-    let output = lowering.finish()?;
-    apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-    Ok(EntityOutcome::acknowledge(output))
+    let mut bundles = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| {
+            let millis = entry
+                .file_name()
+                .to_str()?
+                .split('-')
+                .next()?
+                .parse::<u128>()
+                .ok()?;
+            Some((millis, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    bundles.sort_by(|left, right| right.cmp(left));
+    for (_, stale) in bundles.into_iter().skip(keep) {
+        let _ = std::fs::remove_dir_all(stale);
+    }
 }
 
 #[derive(Debug)]
@@ -1185,7 +1334,6 @@ fn build_deferred_plan(
                     check: workflow.check.clone(),
                     remedy: workflow.remedy.clone(),
                     check_scope: workflow.check_scope,
-                    invocation: workflow.invocation,
                     compatibility_translation: workflow.compatibility_translation,
                     job,
                     project_root: project_root.to_path_buf(),
@@ -1278,6 +1426,7 @@ fn write_deferred_artifacts(
             candidate_files,
             changed_files,
             contents,
+            output: combined_output(&log.log),
         });
         tool_artifacts
             .entry(scheduled.tool_index)
@@ -1360,6 +1509,7 @@ fn artifact_classification(log: &PhaseLog) -> ArtifactClassification {
 fn command_phase_name(phase: CommandPhase) -> &'static str {
     match phase {
         CommandPhase::InitialCheck => "initial-check",
+        CommandPhase::Recheck => "recheck",
         CommandPhase::Remedy => "remedy",
         CommandPhase::FinalCheck => "final-check",
         CommandPhase::Combined => "combined",
@@ -1433,12 +1583,6 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let artifact_contents = parts
-        .result
-        .artifacts
-        .values()
-        .map(|artifact| (artifact.absolute_path.clone(), artifact.contents.clone()))
-        .collect();
     let counts = BatchCounts {
         clean: clean_files.len(),
         auto_fixed: auto_fixed_files.len(),
@@ -1447,6 +1591,7 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         uncovered: parts.result.uncovered_files.len(),
         not_applicable: parts.result.not_applicable_files.len(),
         coverage_gaps: parts.result.coverage_gaps.len(),
+        out_of_scope: parts.result.out_of_scope_reports().count(),
         groups: groups.len(),
     };
     let state_disposition = PlannedStateDisposition {
@@ -1458,7 +1603,7 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
     };
     let (source_entry_count, source_entry_ids) = parts.source;
     Ok(BatchRunSummary {
-        schema_version: 1,
+        schema_version: 2,
         run: BatchRunIdentity {
             id: run_id,
             project_root: parts.project_root.to_path_buf(),
@@ -1475,8 +1620,8 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         manual_fix_files,
         groups,
         artifact_paths,
-        artifact_contents,
         state_disposition,
+        block: parts.block,
         rendered_messages: RenderedMessageMetadata {
             harness: parts.harness.to_string(),
             lowering: parts.lowering,
@@ -1499,20 +1644,6 @@ fn files_with_status(result: &DeferredRunResult, status: FileStatus) -> Vec<Path
         .collect()
 }
 
-fn failure_rendered_messages(summary: &Path, detail: &str) -> RenderedMessages {
-    RenderedMessages {
-        buckets: RenderedBuckets::default(),
-        user: Some(format!(
-            "Deferred formatter/linter reporting failed. Details: {}",
-            summary.display()
-        )),
-        agent: Some(format!(
-            "Deferred reporting configuration failed: {detail}. Inspect {} before retrying completion.",
-            summary.display()
-        )),
-    }
-}
-
 fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<String> {
     view.events()
         .iter()
@@ -1522,15 +1653,6 @@ fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<S
             FileActivityEvent::Evidence(_) | FileActivityEvent::Retry(_) => None,
         })
         .collect()
-}
-
-fn deferred_should_block(
-    result: &DeferredRunResult,
-    coverage_policy: pkl::CoverageGapPolicy,
-) -> bool {
-    result.has_manual_fixes()
-        || result.has_operational_problems()
-        || (coverage_policy == pkl::CoverageGapPolicy::Strict && !result.coverage_gaps.is_empty())
 }
 
 fn record_activity_resolution(result: &mut DeferredRunResult, resolution: &ActivityResolution) {
@@ -1568,6 +1690,7 @@ fn record_activity_resolution(result: &mut DeferredRunResult, resolution: &Activ
 fn plan_deferred_state_disposition(
     result: &DeferredRunResult,
     resolution: &ActivityResolution,
+    missing_tool_policy: pkl::MissingToolPolicy,
 ) -> hookkit_core::Result<DeferredStateDisposition> {
     let mut retry_files = BTreeSet::new();
     for file in result.files.values() {
@@ -1576,6 +1699,11 @@ fn plan_deferred_state_disposition(
         }
     }
     for problem in result.operational_problems.values() {
+        // Retrying cannot conjure a missing executable; under the default
+        // notice-only policy the next edit of these files checks them again.
+        if problem.missing_tool && missing_tool_policy == pkl::MissingToolPolicy::UserNotice {
+            continue;
+        }
         for path in &problem.affected_files {
             retry_files.insert(utf8_activity_path(path)?);
         }
@@ -1670,16 +1798,38 @@ fn record_reporting_failure(
     run: &RunBundle,
     result: &mut DeferredRunResult,
     candidates: &[PathBuf],
-    summary_path: &Path,
-    contents: String,
+    detail: &str,
+    policy: CommitPolicy,
 ) -> hookkit_core::Result<RenderedMessages> {
-    let artifact_path = run
-        .write_text("reporting-error.log", &contents)
-        .map_err(state_error)?;
+    let log_path = record_configuration_problem(
+        run,
+        result,
+        candidates,
+        ("reporting-configuration", "reporting-error.log"),
+        detail,
+    )?;
+    Ok(failure_messages(
+        "could not render its report",
+        detail,
+        &log_path,
+        policy.block_on_operational_errors,
+    ))
+}
+
+/// Write a configuration log and record it as an operational problem that
+/// affects every candidate. `(id, file)` names the problem and its log.
+fn record_configuration_problem(
+    run: &RunBundle,
+    result: &mut DeferredRunResult,
+    candidates: &[PathBuf],
+    (id, file): (&str, &str),
+    detail: &str,
+) -> hookkit_core::Result<PathBuf> {
+    let log_path = run.write_text(file, detail).map_err(state_error)?;
     result.record_artifact(RunArtifact {
-        id: "reporting-configuration".into(),
-        absolute_path: artifact_path,
-        run_relative_path: "reporting-error.log".into(),
+        id: id.into(),
+        absolute_path: log_path.clone(),
+        run_relative_path: file.into(),
         media_type: "text/plain; charset=utf-8".into(),
         tool_id: None,
         workflow_id: None,
@@ -1694,91 +1844,42 @@ fn record_reporting_failure(
         files: candidates.to_vec(),
         candidate_files: candidates.to_vec(),
         changed_files: Vec::new(),
-        contents: contents.clone(),
+        contents: detail.into(),
+        output: String::new(),
     });
     result.record_operational_problem(OperationalProblem {
-        id: "reporting-configuration".into(),
+        id: id.into(),
         tool_id: None,
+        tool_name: None,
+        missing_tool: false,
+        install_hint: None,
         phase: Some("configuration".into()),
         affected_files: candidates.to_vec(),
-        message: contents.clone(),
-        artifact_ids: vec!["reporting-configuration".into()],
+        message: detail.into(),
+        artifact_ids: vec![id.into()],
     });
-    Ok(failure_rendered_messages(summary_path, &contents))
+    Ok(log_path)
 }
 
-fn commit_deferred_config_failure(
-    ctx: &RuntimeContext<'_>,
-    activity_store: &FileActivityStore,
-    run: RunBundle,
-    failure: DeferredFailureContext<'_>,
-    source: (usize, Vec<String>),
-    lowering_policy: pkl::LoweringPolicy,
-    contents: String,
-) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
-    let (source_entry_count, source_entry_ids) = source;
-    let artifact_path = run
-        .write_text("config-error.log", &contents)
-        .map_err(state_error)?;
-    let mut result = DeferredRunResult::default();
-    result.record_artifact(RunArtifact {
-        id: "configuration".into(),
-        absolute_path: artifact_path,
-        run_relative_path: "config-error.log".into(),
-        media_type: "text/plain; charset=utf-8".into(),
-        tool_id: None,
-        workflow_id: None,
-        job_id: None,
-        report_id: None,
-        phase: CommandPhase::Configuration,
-        classification: ArtifactClassification::ConfigurationError,
-        exit_code: None,
-        program: None,
-        arguments: Vec::new(),
-        working_directory: None,
-        files: failure.candidates.to_vec(),
-        candidate_files: failure.candidates.to_vec(),
-        changed_files: Vec::new(),
-        contents: contents.clone(),
-    });
-    result.record_operational_problem(OperationalProblem {
-        id: "configuration".into(),
-        tool_id: None,
-        phase: Some("configuration".into()),
-        affected_files: failure.candidates.to_vec(),
-        message: contents.clone(),
-        artifact_ids: vec!["configuration".into()],
-    });
-    record_activity_resolution(&mut result, failure.resolution);
-    let disposition = plan_deferred_state_disposition(&result, failure.resolution)?;
-    let rendered_messages =
-        failure_rendered_messages(&run.directory().join("summary.json"), &contents);
-    let lowering = plan_stop_lowering(
-        ctx.harness(),
-        true,
-        rendered_messages.user.as_deref(),
-        rendered_messages.agent.as_deref(),
-        lowering_policy,
-    )?;
-    let summary = build_batch_summary(BatchSummaryParts {
-        run: &run,
-        project_root: failure.project_root,
-        state_directory: activity_store.state().directory(),
-        harness: ctx.harness(),
-        status: "operational-failure",
-        rendered_messages,
-        lowering: lowering.metadata.clone(),
-        source: (source_entry_count, source_entry_ids),
-        candidates: failure.candidates,
-        tools: Vec::new(),
-        disposition: &disposition,
-        result,
-    })?;
-    let run_id = summary.run.id.clone();
-    run.commit(&summary).map_err(state_error)?;
-    let output = lowering.finish()?;
-    apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-    Ok(EntityOutcome::acknowledge(output))
+/// Terse user notice for a configuration or reporting failure. The agent
+/// hears about it only when operational errors are configured to block.
+fn failure_messages(headline: &str, detail: &str, log: &Path, blocking: bool) -> RenderedMessages {
+    let first_line = detail
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .trim_end_matches(':');
+    let first_line = excerpt::clip(first_line, 1, 200).text;
+    let message = format!(
+        "velvet-glove {headline} ({first_line}). Details: {}",
+        log.display()
+    );
+    RenderedMessages {
+        buckets: RenderedBuckets::default(),
+        agent: blocking.then(|| message.clone()),
+        user: Some(message),
+    }
 }
 
 fn state_error(error: hookkit_session_state::StateError) -> HookkitError {
@@ -2677,7 +2778,7 @@ enum PhaseStatus {
     Failure,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PhaseLog {
     phase: String,
     command: String,
@@ -3671,18 +3772,27 @@ mod tests {
         let manual = root.join("manual.rs");
         let operational = root.join("operational.rs");
         let deleted = root.join("deleted.rs");
+        let unchecked = root.join("unchecked.rs");
         let mut result = DeferredRunResult::default();
         result.record_file(FileAssessment::new(&clean, FileStatus::Clean));
         result.record_file(FileAssessment::new(&auto_fixed, FileStatus::AutoFixed));
         result.record_file(FileAssessment::new(&manual, FileStatus::ManualFixesNeeded));
-        result.record_operational_problem(OperationalProblem {
-            id: "tool-failure".into(),
-            tool_id: Some("tool".into()),
-            phase: Some("initial-check".into()),
-            affected_files: vec![operational.clone()],
-            message: "tool crashed".into(),
-            artifact_ids: Vec::new(),
-        });
+        for (id, path, missing_tool) in [
+            ("tool-failure", &operational, false),
+            ("tool-missing", &unchecked, true),
+        ] {
+            result.record_operational_problem(OperationalProblem {
+                id: id.into(),
+                tool_id: Some(id.into()),
+                tool_name: None,
+                missing_tool,
+                install_hint: None,
+                phase: Some("initial-check".into()),
+                affected_files: vec![path.clone()],
+                message: "tool crashed".into(),
+                artifact_ids: Vec::new(),
+            });
+        }
         let unresolved = FileActivityTarget::Workspace {
             root: Some(Utf8PathBuf::from("/tmp/hookkit-selective-disposition")),
         };
@@ -3693,7 +3803,24 @@ mod tests {
             truncated: false,
         };
 
-        let disposition = plan_deferred_state_disposition(&result, &resolution).unwrap();
+        let blocking = plan_deferred_state_disposition(
+            &result,
+            &resolution,
+            pkl::MissingToolPolicy::HarnessBlock,
+        )
+        .unwrap();
+        assert!(
+            blocking
+                .retry_files
+                .contains(&Utf8PathBuf::from_path_buf(unchecked).unwrap()),
+            "a blocking missing tool keeps its files pending"
+        );
+        let disposition = plan_deferred_state_disposition(
+            &result,
+            &resolution,
+            pkl::MissingToolPolicy::UserNotice,
+        )
+        .unwrap();
         assert_eq!(
             disposition.retry_files,
             BTreeSet::from([
@@ -3727,14 +3854,85 @@ mod tests {
             retained: true,
         });
 
-        assert!(!deferred_should_block(
-            &result,
-            pkl::CoverageGapPolicy::BestEffort
-        ));
-        assert!(deferred_should_block(
-            &result,
-            pkl::CoverageGapPolicy::Strict
-        ));
+        let settings = pkl::Settings::default();
+        let best_effort = CommitPolicy::new(&settings, pkl::CoverageGapPolicy::BestEffort);
+        assert!(!best_effort.block_reasons(&result).any());
+        let strict = CommitPolicy::new(&settings, pkl::CoverageGapPolicy::Strict);
+        assert!(strict.block_reasons(&result).coverage);
+    }
+
+    #[test]
+    fn operational_problems_block_only_by_policy() {
+        let mut result = DeferredRunResult::default();
+        for (id, missing_tool) in [("crashed", false), ("missing", true)] {
+            result.record_operational_problem(OperationalProblem {
+                id: id.into(),
+                tool_id: Some(id.into()),
+                tool_name: None,
+                missing_tool,
+                install_hint: None,
+                phase: None,
+                affected_files: Vec::new(),
+                message: id.into(),
+                artifact_ids: Vec::new(),
+            });
+        }
+        let mut settings = pkl::Settings::default();
+        let coverage = pkl::CoverageGapPolicy::BestEffort;
+        assert!(
+            !CommitPolicy::new(&settings, coverage)
+                .block_reasons(&result)
+                .any(),
+            "operational problems notify without blocking by default"
+        );
+        settings.missing_tool_policy = pkl::MissingToolPolicy::HarnessBlock;
+        assert!(
+            CommitPolicy::new(&settings, coverage)
+                .block_reasons(&result)
+                .operational
+        );
+        settings.missing_tool_policy = pkl::MissingToolPolicy::UserNotice;
+        settings.deferred_reporting.block_on_operational_errors = true;
+        assert!(
+            CommitPolicy::new(&settings, coverage)
+                .block_reasons(&result)
+                .operational
+        );
+        result.operational_problems.remove("crashed");
+        assert!(
+            !CommitPolicy::new(&settings, coverage)
+                .block_reasons(&result)
+                .any(),
+            "missing tools follow missingToolPolicy, not blockOnOperationalErrors"
+        );
+    }
+
+    #[test]
+    fn run_bundle_pruning_keeps_the_newest_bundles() {
+        let runs = unique_test_directory("prune-runs");
+        for name in [
+            "1000-1-0-turn-completion",
+            "3000-1-0-turn-completion",
+            "2000-1-0-turn-completion",
+            "not-a-run",
+        ] {
+            std::fs::create_dir_all(runs.join(name)).unwrap();
+        }
+        prune_run_bundles(&runs, 2);
+        let mut remaining = std::fs::read_dir(&runs)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                "2000-1-0-turn-completion",
+                "3000-1-0-turn-completion",
+                "not-a-run"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(runs);
     }
 
     #[test]
