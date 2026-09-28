@@ -1810,13 +1810,43 @@ fn run_post_tool_input(
 ) -> hookkit_core::Result<PostToolUseOutput> {
     let harness = ctx.harness();
     let lowering_warning_artifact = lowering_warning_artifact(&post_tool, ctx);
+
+    // Most tool calls (Read, Grep, ...) touch no files: skip every other cost,
+    // including Pkl evaluation, for them.
+    let candidates = discover_modified_files(&post_tool, ctx)
+        .into_iter()
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return lower_domain_outcome(
+            harness,
+            RunnerDomainOutcome::Clean,
+            lowering_warning_artifact.as_ref(),
+        );
+    }
+
     let cwd = ctx
         .workspace_roots()
         .first()
         .map(|root| PathBuf::from(root.as_str()))
         .ok_or_else(|| invalid_data("post-tool-use input has no workspace root".into()))?;
-    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path)
-        .map_err(|e| invalid_data(e.to_string()))?;
+    let loaded = match hookkit_pkl_config::discover_and_load(&cwd, config_path) {
+        Ok(loaded) => loaded,
+        // A broken policy is an operational problem: tell the user, never the
+        // agent, and never fail or block the tool call.
+        Err(error) => {
+            let output = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::default())
+                .with_user_notice(UserNotice::error(format!(
+                    "velvet-glove: configuration error; no tools ran: {}",
+                    truncate_chars(error.to_string().trim(), CONFIG_ERROR_NOTICE_CHARS)
+                )));
+            return lower_domain_outcome(
+                harness,
+                RunnerDomainOutcome::Report(output),
+                lowering_warning_artifact.as_ref(),
+            );
+        }
+    };
 
     let project_root = normalize_path(&loaded.project_root);
     let lowering = loaded.config.settings.lowering_policy;
@@ -1850,12 +1880,11 @@ fn run_post_tool_input(
             global_diagnostics_dir: global_diagnostics_dir.as_deref(),
         };
 
-        let candidates = discover_modified_files(&post_tool, ctx);
         let matcher = FileMatcher::new(&spec.file_selection)?;
         let runnable_paths = candidates
-            .into_iter()
-            .filter(|p| p.is_file())
+            .iter()
             .filter(|p| matcher.matches(p, &project_root))
+            .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
@@ -1914,8 +1943,54 @@ pub struct RunnerPostToolUseOutput {
     notices: Vec<UserNotice>,
     agent_feedback: Vec<String>,
     diagnostics: Vec<DiagnosticReport>,
+    auto_fixed: Vec<AutoFixed>,
     harness_block: Option<String>,
     lowering: pkl::LoweringPolicy,
+}
+
+/// Files one tool changed and left clean.
+#[derive(Debug)]
+struct AutoFixed {
+    tool: String,
+    files: Vec<String>,
+    /// Whether the agent learns about it through the shared auto-fix line
+    /// (the tool keeps the default `cleanChangedAgent` template).
+    in_agent_line: bool,
+}
+
+/// Longest configuration error echoed in a user notice.
+const CONFIG_ERROR_NOTICE_CHARS: usize = 1_500;
+
+fn truncate_chars(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+/// One terse line naming every auto-fixed file and the tools that changed it:
+/// `velvet-glove auto-fixed a.py (Ruff), b.ts (Prettier); re-read before editing.`
+fn auto_fixed_line<'a>(entries: impl IntoIterator<Item = &'a AutoFixed>) -> Option<String> {
+    let mut files = Vec::<(&str, Vec<&str>)>::new();
+    for entry in entries {
+        for file in &entry.files {
+            match files.iter_mut().find(|(known, _)| known == file) {
+                Some((_, tools)) if !tools.contains(&entry.tool.as_str()) => {
+                    tools.push(&entry.tool);
+                }
+                Some(_) => {}
+                None => files.push((file, vec![&entry.tool])),
+            }
+        }
+    }
+    (!files.is_empty()).then(|| {
+        let listed = files
+            .iter()
+            .map(|(file, tools)| format!("{file} ({})", tools.join(", ")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("velvet-glove auto-fixed {listed}; re-read before editing.")
+    })
 }
 
 impl RunnerPostToolUseOutput {
@@ -1943,6 +2018,11 @@ impl RunnerPostToolUseOutput {
 
     fn with_harness_block(mut self, message: impl Into<String>) -> Self {
         self.harness_block = Some(message.into());
+        self
+    }
+
+    fn with_auto_fixed(mut self, auto_fixed: AutoFixed) -> Self {
+        self.auto_fixed.push(auto_fixed);
         self
     }
 }
@@ -2147,27 +2227,20 @@ fn lower_report(
         };
     }
 
-    let rendered_user = output
-        .notices
+    // User: one terse auto-fix line plus one line per notice, through the
+    // native user-only `systemMessage`. Full diagnostics stay in their files.
+    let auto_fixed = auto_fixed_line(&output.auto_fixed);
+    let user_lines = auto_fixed
         .iter()
-        .map(format_notice)
-        .chain(output.diagnostics.iter().map(format_diagnostic))
+        .cloned()
+        .chain(output.notices.iter().map(format_notice))
         .collect::<Vec<_>>();
-    let mut stderr = rendered_user.clone();
-    if !stderr.is_empty() {
-        match output.lowering {
-            pkl::LoweringPolicy::Strict => {
-                return Err(invalid_data(format!(
-                    "{harness} PostToolUse has no structured user-only message channel"
-                )));
-            }
-            pkl::LoweringPolicy::BestEffort => {}
-            pkl::LoweringPolicy::BestEffortWithWarnings => stderr
-                .push("hookkit: redirected user notices and diagnostics to protocol stderr".into()),
-        }
-    }
-    let stderr = (!stderr.is_empty()).then(|| stderr.join("\n"));
-    let context = output.agent_feedback.join("\n");
+    let user_message = user_lines.join("\n");
+    let context = auto_fixed_line(output.auto_fixed.iter().filter(|entry| entry.in_agent_line))
+        .into_iter()
+        .chain(output.agent_feedback.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     match harness.as_str() {
         "claude-code" => {
@@ -2176,9 +2249,10 @@ fn lower_report(
             } else {
                 hookkit_claude::protocol::PostToolUseOutput::with_context(context)
             };
-            Ok(PostToolUseOutput::Claude(match stderr {
-                Some(stderr) => native.with_protocol_stderr(stderr)?,
-                None => native,
+            Ok(PostToolUseOutput::Claude(if user_message.is_empty() {
+                native
+            } else {
+                native.with_system_message(user_message)?
             }))
         }
         "codex" => {
@@ -2187,12 +2261,17 @@ fn lower_report(
             } else {
                 hookkit_codex::protocol::PostToolUseOutput::with_context(context)
             };
-            Ok(PostToolUseOutput::Codex(match stderr {
-                Some(stderr) => native.with_protocol_stderr(stderr)?,
-                None => native,
+            Ok(PostToolUseOutput::Codex(if user_message.is_empty() {
+                native
+            } else {
+                native.with_system_message(user_message)?
             }))
         }
         "antigravity" => {
+            let rendered_user = user_lines
+                .into_iter()
+                .chain(output.diagnostics.iter().map(format_diagnostic))
+                .collect::<Vec<_>>();
             if !context.is_empty() && output.lowering == pkl::LoweringPolicy::Strict {
                 return Err(invalid_data(
                     "antigravity PostToolUse has no structured agent-only message channel".into(),
@@ -2241,6 +2320,7 @@ fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
     output.notices.is_empty()
         && output.agent_feedback.is_empty()
         && output.diagnostics.is_empty()
+        && output.auto_fixed.is_empty()
         && output.harness_block.is_none()
 }
 
@@ -3370,8 +3450,9 @@ fn accumulate_outcomes(
         let artifact = write_diagnostics("tool-issues", &diagnostics, context, ctx)?;
         *output = std::mem::take(output)
             .with_user_notice(UserNotice::warning(format!(
-                "{}: issues remain; diagnostics: {}",
+                "{}: issues remain in {}; diagnostics: {}",
                 context.spec.display_name,
+                issue_paths.join(", "),
                 artifact.display()
             )))
             .with_diagnostic_report(report_with_artifact(
@@ -3396,15 +3477,20 @@ fn accumulate_outcomes(
         )?;
         *output = std::mem::take(output).with_agent_feedback(rendered);
     } else if !changed_paths.is_empty() {
-        *output = std::mem::take(output).with_user_notice(UserNotice::info(format!(
-            "{}: changed {}",
-            context.spec.display_name,
-            changed_paths.join(", ")
-        )));
-        let template = context.spec.messages.clean_changed_agent.clone();
-        let rendered =
-            render_template(&template, context, &changed_paths, &issue_paths, None, None)?;
-        *output = std::mem::take(output).with_agent_feedback(rendered);
+        // Tools on the default template share one consolidated agent line;
+        // a customised `cleanChangedAgent` is rendered as configured.
+        let template = &context.spec.messages.clean_changed_agent;
+        let in_agent_line = template == DEFAULT_CLEAN_CHANGED_AGENT;
+        if !in_agent_line {
+            let rendered =
+                render_template(template, context, &changed_paths, &issue_paths, None, None)?;
+            *output = std::mem::take(output).with_agent_feedback(rendered);
+        }
+        *output = std::mem::take(output).with_auto_fixed(AutoFixed {
+            tool: context.spec.display_name.clone(),
+            files: changed_paths,
+            in_agent_line,
+        });
     }
 
     status.operational_failure = status.operational_failure || *had_hard_failure;
@@ -3668,6 +3754,63 @@ mod tests {
             ".git/hooks/x.py",
         ] {
             assert!(!matcher.matches(&root.join(excluded), root), "{excluded}");
+        }
+    }
+
+    fn emitted_json(output: PostToolUseOutput) -> (serde_json::Value, Vec<u8>) {
+        let emission = match output {
+            PostToolUseOutput::Claude(native) => {
+                hookkit_claude::protocol::PostToolUse::emit(native).unwrap()
+            }
+            PostToolUseOutput::Codex(native) => {
+                hookkit_codex::protocol::PostToolUse::emit(native).unwrap()
+            }
+            _ => panic!("expected Claude or Codex output"),
+        };
+        assert_eq!(emission.exit_code(), 0);
+        (
+            serde_json::from_slice(emission.stdout()).unwrap(),
+            emission.stderr().to_vec(),
+        )
+    }
+
+    #[test]
+    fn immediate_user_notices_use_system_message_and_auto_fixes_share_one_line() {
+        let fixed = |tool: &str, files: &[&str], in_agent_line| AutoFixed {
+            tool: tool.into(),
+            files: files.iter().map(|file| file.to_string()).collect(),
+            in_agent_line,
+        };
+        for harness in [HarnessId::CLAUDE_CODE, HarnessId::CODEX] {
+            let output = RunnerPostToolUseOutput::default()
+                .with_auto_fixed(fixed("Ruff", &["src/a.py", "src/b.py"], true))
+                .with_auto_fixed(fixed("Black", &["src/a.py"], true))
+                .with_auto_fixed(fixed("Custom", &["web/c.ts"], false))
+                .with_agent_feedback("Custom rewrote web/c.ts")
+                .with_user_notice(UserNotice::warning("Lint: `lint` is unavailable"))
+                .with_diagnostic_report(DiagnosticReport::new("Lint diagnostics", "full log"));
+            let (json, stderr) = emitted_json(lower_report(&harness, output, None).unwrap());
+
+            assert!(
+                stderr.is_empty(),
+                "{harness}: user notices must not use stderr"
+            );
+            assert_eq!(
+                json["systemMessage"],
+                "velvet-glove auto-fixed src/a.py (Ruff, Black), src/b.py (Ruff), web/c.ts (Custom); re-read before editing.\nwarning: Lint: `lint` is unavailable",
+                "{harness}"
+            );
+            assert_eq!(
+                json["hookSpecificOutput"]["additionalContext"],
+                "velvet-glove auto-fixed src/a.py (Ruff, Black), src/b.py (Ruff); re-read before editing.\nCustom rewrote web/c.ts",
+                "{harness}"
+            );
+
+            let (json, stderr) = emitted_json(
+                lower_report(&harness, RunnerPostToolUseOutput::default(), None).unwrap(),
+            );
+            assert_eq!(json, serde_json::json!({}), "{harness}: clean is silent");
+            assert!(stderr.is_empty());
         }
     }
 
