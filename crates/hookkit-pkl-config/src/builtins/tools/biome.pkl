@@ -1,8 +1,8 @@
 /// Biome — Rust-based formatter and linter for JS/TS/JSON.
 ///
-/// A malformed `biome.json` and a real lint finding both exit 1 (verified on
-/// 2.5.14), so an operational failure is not distinguishable from "issues"
-/// here; no `operational-failure` fixture is claimed.
+/// Biome reports configuration errors (e.g. an invalid rule level in
+/// `biome.json`) with exit 1, the same code as lint findings (verified on
+/// 2.5.14), so no `operational-failure` fixture is claimed.
 
 module velvet_glove.builtins.tools.Biome
 

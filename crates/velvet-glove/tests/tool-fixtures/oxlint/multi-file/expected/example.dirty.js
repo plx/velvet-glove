@@ -1,4 +1,2 @@
-function foo(x, y) {
-  return (x <= y);
-}
-console.log(foo);
+const re = /a/;
+console.log(re);
