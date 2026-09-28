@@ -1,5 +1,9 @@
 /// ktlint — Kotlin linter and formatter.
-
+///
+/// Verified at 1.8.0: lint issues, an unresolvable path, an unknown flag, and
+/// a malformed `.editorconfig` all exit 1 — no distinguishable operational
+/// exit code exists, so no `operational-failure` fixture case is possible;
+/// see the fixture README note in this tool's directory.
 module velvet_glove.builtins.tools.Ktlint
 
 import "../Config.pkl" as Config

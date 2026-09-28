@@ -1,0 +1,17 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["cmake-format"] = (Builtins.cmakeFormat) {
+    phases {
+      ["format"] {
+        // Exercise cmake-format's argparse failure (exit 2) through a
+        // supported extra arg, distinct from a formatting issue (exit 1).
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+      ["verify"] {
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}

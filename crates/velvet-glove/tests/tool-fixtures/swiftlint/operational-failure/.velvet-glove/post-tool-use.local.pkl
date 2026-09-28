@@ -1,0 +1,19 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["swiftlint"] = (Builtins.swiftlint) {
+    phases {
+      // A malformed `.swiftlint.yml` is not a reliable trigger: SwiftLint
+      // sometimes falls back to its default configuration with a warning
+      // instead of the documented crash, so we force its unambiguous
+      // argument-parsing failure (exit 64) instead.
+      ["fix"] {
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+      ["verify"] {
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}

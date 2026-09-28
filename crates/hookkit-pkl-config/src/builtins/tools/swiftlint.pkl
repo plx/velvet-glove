@@ -1,5 +1,19 @@
 /// SwiftLint — Swift style and conventions linter.
-
+///
+/// Real exit codes (verified against 0.65.1): plain violations (including
+/// rules configured to `severity: error`) exit 2, not 1. Exit 1 is a usage
+/// error (no lintable files at the given paths) and 64 is an argv parsing
+/// error (unknown flag) — neither is a lint issue. Without `--strict`,
+/// warning-severity violations exit 0, which would read as silently clean,
+/// so verify passes `--strict` to promote them to the issue-signaling exit
+/// code. `--fix` always exits 0 once it runs (unfixed violations, syntax
+/// errors it can't correct, and `--strict` are all silently ignored under
+/// `--fix`), so the fix phase cannot signal issues itself; the following
+/// verify phase catches residue. A malformed `.swiftlint.yml` is NOT a
+/// reliable operational trigger: it sometimes crashes (SIGABRT, 134) and
+/// sometimes only warns and falls back to the default configuration
+/// (exit 0), observed with byte-identical config content, so the fixture's
+/// `operational-failure` case instead forces the deterministic argv error.
 module velvet_glove.builtins.tools.Swiftlint
 
 import "../Config.pkl" as Config
@@ -27,7 +41,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1; 2 }
+        failure = new Listing<Int> { 1; 64 }
       }
       writes = "target-files"
     }
@@ -35,13 +49,15 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "lint"
+        "--strict"
         "--quiet"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1; 2 }
+        issues = new Listing<Int> { 2 }
+        failure = new Listing<Int> { 1; 64 }
       }
     }
   }

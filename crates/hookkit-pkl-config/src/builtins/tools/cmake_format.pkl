@@ -1,5 +1,9 @@
 /// cmake-format — formatter for CMake listfiles.
-
+///
+/// Verified at 0.6.13 (cmakelang): `--check` exits 1 for a formatting issue,
+/// reporting every dirty file in a batch, not just the first. Argument
+/// parsing errors (e.g. an unrecognized flag) exit 2 for both `--check` and
+/// `--in-place`, which is a genuine operational signal distinct from issues.
 module velvet_glove.builtins.tools.CmakeFormat
 
 import "../Config.pkl" as Config
@@ -8,7 +12,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "cmake-format"
   displayName = "cmake-format"
   executable = "cmake-format"
-  installHint = "install cmake-format with `pipx install cmake-format --include-deps`"
+  // The PyPI distribution is `cmakelang`; it provides the `cmake-format`
+  // console script. Without its `YAML` extra (pyyaml), a `.cmake-format.yaml`
+  // config (a detect indicator) crashes with ModuleNotFoundError, exit 1.
+  installHint = "install cmake-format with `pipx install 'cmakelang[YAML]'`"
 
   files = new Config.FileSelection {
     include = new Listing<String> {
@@ -27,6 +34,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
       }
       writes = "target-files"
     }
@@ -40,6 +48,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
         issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 2 }
       }
     }
   }
