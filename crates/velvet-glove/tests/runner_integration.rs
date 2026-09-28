@@ -2303,6 +2303,14 @@ fn turn_completion_loop_guard_presumes_continuation_without_a_native_flag() {
         second["decision"], "stop",
         "identical issues right after a block must not loop: {second}"
     );
+    // The allowed Stop ended the agent's turn, so the next Stop starts a new
+    // chain instead of being presumed a continuation forever.
+    let later = run_deferred_case("antigravity", &project, &state_arg);
+    let later: serde_json::Value = serde_json::from_slice(&later.stdout).unwrap();
+    assert_eq!(
+        later["decision"], "continue",
+        "a later turn must block again: {later}"
+    );
 }
 
 #[test]

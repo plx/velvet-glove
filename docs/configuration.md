@@ -446,7 +446,10 @@ remedies; other tools still fix their files.
 A Stop that follows a block (Claude and Codex `stop_hook_active`; for
 Antigravity, the Stop right after a block) is not blocked again for an
 identical set of issues; the user is told instead, and the unfixed files stay
-pending for the next turn.
+pending for the next turn. Antigravity has no such flag, so any allowed Stop
+ends the chain there: the Stop after it starts a new one and can block again.
+Numbers on output lines that name no blamed file (timings, random seeds,
+counters) are ignored when deciding whether the issues are identical.
 
 Native Stop events have different output capacity:
 

@@ -881,6 +881,12 @@ fn run_turn_completion_view(
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
     let ctx = session.ctx;
     if view.events().is_empty() {
+        // Nothing to check, so this Stop is allowed. Without a native
+        // `stop_hook_active` flag that ends any chain of continuations, so the
+        // next Stop is not mistaken for one.
+        if session.stop_hook_active.is_none() {
+            end_inferred_block_chain(session.runner_family);
+        }
         let lowering = plan_stop_lowering(
             ctx.harness(),
             false,
@@ -1048,6 +1054,19 @@ fn run_turn_completion_view(
     )
 }
 
+/// Clear the loop guard's chain count, keeping its fingerprint.
+fn end_inferred_block_chain(runner_family: &StateFamily) {
+    let Ok(scope) = runner_family.session_scope() else {
+        return;
+    };
+    let path = scope.directory().join(LOOP_GUARD_FILE);
+    let mut guard = LoopGuardState::load(&path);
+    if guard.consecutive_blocks > 0 {
+        guard.consecutive_blocks = 0;
+        guard.save(&path);
+    }
+}
+
 /// Where and how a configuration failure is reported.
 #[derive(Clone, Copy)]
 struct FailureContext<'a> {
@@ -1135,17 +1154,14 @@ impl DeferredCommit<'_, '_> {
         let previous = LoopGuardState::load(&guard_path);
         // Without a native flag, a Stop right after a block is presumed to be
         // the agent's continuation, so the guard still bounds the chain.
-        let stop_hook_active = self
-            .session
-            .stop_hook_active
-            .unwrap_or(previous.consecutive_blocks > 0);
         let decision = decide_loop_guard(
             &previous,
-            stop_hook_active,
+            self.session.stop_hook_active,
             blocks.any(),
             &fingerprint,
             policy.max_consecutive_blocks,
         );
+        let stop_hook_active = decision.stop_hook_active;
         if let Some(note) = &decision.note {
             rendered.agent = None;
             rendered.user = Some(match rendered.user.take() {
