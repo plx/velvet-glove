@@ -1,4 +1,9 @@
 /// ShellCheck — shell script analyzer.
+///
+/// Known limitation: file selection is glob-based (`*.sh`/`*.bash`), so an
+/// extensionless script identified only by its shebang (a common shell
+/// convention) is never matched and never linted automatically. ShellCheck
+/// itself has no trouble with such a file if it is named explicitly.
 
 module velvet_glove.builtins.tools.Shellcheck
 
