@@ -32,12 +32,12 @@ stylua = "latest"
 buf = "latest"
 terraform = "latest"
 
-[env]
-# Selection: every fixture tool (see the workflow's "Select fixture tools"
-# step). Required: only the CORE tools declared above, by their fixture ID.
 # `rust` backs four fixture IDs (cargo-check, cargo-clippy, cargo-fmt,
 # rustfmt); `go` backs three (go-fmt, go-vet, gomod-tidy); `buf` backs two
 # (buf-format, buf-lint); `taplo` backs two (taplo, taplo-format); `pkl`
-# backs two (pkl, pkl-format). Everything else installs best-effort from
-# the broad tier and is allowed to report a structured skip.
-VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS = "actionlint,buf-format,buf-lint,cargo-check,cargo-clippy,cargo-fmt,go-fmt,go-vet,golangci-lint,gofumpt,gomod-tidy,hadolint,jq,pkl,pkl-format,ruff,ruff-format,rustfmt,shellcheck,shfmt,staticcheck,stylua,taplo,taplo-format,terraform,typos,yq"
+# backs two (pkl, pkl-format).
+#
+# Fixture selection and VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS are computed by
+# the workflow's "Select fixture tools" step, not declared here: a couple
+# of these fixture IDs need an OS-conditional exclusion (documented there)
+# that a single checked-in [env] value can't express.
