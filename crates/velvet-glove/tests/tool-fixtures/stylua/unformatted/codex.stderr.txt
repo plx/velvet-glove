@@ -1,2 +1,0 @@
-StyLua: changed example.lua
-hookkit: redirected user notices and diagnostics to protocol stderr

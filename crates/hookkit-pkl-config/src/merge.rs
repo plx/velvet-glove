@@ -3,7 +3,11 @@
 //! Configs are loaded as a chain (home → project → local), with later configs
 //! merged over earlier ones. A config may opt out of earlier state with
 //! [`Merge::reset_all`] (drop everything), [`Merge::reset`] (drop specific
-//! top-level fields), or [`Merge::reset_tools`] (drop specific tool entries).
+//! top-level fields), [`Merge::reset_tools`] (drop specific tool entries), or
+//! [`Merge::reset_exclude`] (replace rather than extend `settings.exclude`).
+//!
+//! Settings patch field by field: a present scalar replaces the inherited
+//! value, while `settings.exclude` patterns append to the inherited list.
 
 use crate::schema::{Merge, MergeResetKey, RunnerConfig, RunnerConfigPatch};
 
@@ -71,6 +75,9 @@ pub fn merge_patch(acc: &mut RunnerConfig, incoming: RunnerConfigPatch) {
     }
     if incoming.merge.reset_deferred_reporting {
         acc.settings.deferred_reporting = Default::default();
+    }
+    if incoming.merge.reset_exclude {
+        acc.settings.exclude.clear();
     }
 
     incoming.settings.apply_to(&mut acc.settings);
@@ -286,7 +293,7 @@ mod tests {
             reset_all in any::<bool>(),
         ) {
             let config = RunnerConfig {
-                merge: Merge { reset_all, reset: vec![MergeResetKey::Run], reset_tools: ids.clone(), reset_deferred_reporting: false },
+                merge: Merge { reset_all, reset: vec![MergeResetKey::Run], reset_tools: ids.clone(), ..Merge::default() },
                 tools: tool_map(ids),
                 run: vec!["final".into()],
                 ..RunnerConfig::default()

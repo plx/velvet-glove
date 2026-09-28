@@ -1,2 +1,0 @@
-mix format: changed example.ex
-hookkit: redirected user notices and diagnostics to protocol stderr

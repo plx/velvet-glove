@@ -51,4 +51,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "biome.json"; "biome.jsonc" }
+    contains = new Mapping<String, String> { ["package.json"] = "\"@biomejs/biome\"" }
+    role = "js-format"
+  }
 }

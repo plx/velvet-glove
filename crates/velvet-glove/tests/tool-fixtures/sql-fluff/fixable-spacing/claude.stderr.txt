@@ -1,2 +1,0 @@
-sqlfluff: changed example.sql
-hookkit: redirected user notices and diagnostics to protocol stderr

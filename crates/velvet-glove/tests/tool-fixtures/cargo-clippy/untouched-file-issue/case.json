@@ -1,0 +1,5 @@
+{
+  "outcome": "clean",
+  "immediate": false,
+  "note": "The only lint is pre-existing in member/tests/persistent.rs, which the agent did not touch: the deferred runner treats it as out of scope, so the cited example.rs stays clean and Stop does not block. post-tool-immediate has no out-of-scope attribution and still reports the workspace diagnostic against example.rs. edited-file-issue is the same workspace with that file cited."
+}
