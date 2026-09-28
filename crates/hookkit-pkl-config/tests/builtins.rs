@@ -619,6 +619,8 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     );
 
     let yq = spec(&specs, "yq");
+    // Batched `yq -iP a.yaml b.yaml` rewrites a.yaml with both documents.
+    assert_eq!(yq.phase_invocation, InvocationGranularity::PerFile);
     let yq = yq.workflows.get("format").expect("yq workflow");
     let yq_check = yq.check.as_ref().expect("yq check");
     assert_eq!(yq_check.program.as_deref(), Some("sh"));
