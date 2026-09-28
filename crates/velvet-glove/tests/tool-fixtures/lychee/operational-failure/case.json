@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "lychee.toml is malformed TOML, which lychee exits 3 for (distinct from clean 0 and issues 2)."}
