@@ -87,7 +87,10 @@ generated example policy is
 [`crates/velvet-glove/config/velvet-glove.pkl`](crates/velvet-glove/config/velvet-glove.pkl).
 
 The embedded catalog contains immediate phases and deferred workflows for a
-broad set of formatters and linters. See the generated
+broad set of formatters and linters, but nothing runs until a policy lists
+tools in `run`. Policies can add hook-only arguments, environment variables,
+and timeouts per tool; project-local `node_modules/.bin` and `.venv/bin`
+executables are preferred over `PATH`. See the generated
 [built-in workflow audit](docs/builtin-deferred-workflow-audit.md) and the
 [configuration reference](docs/configuration.md).
 
