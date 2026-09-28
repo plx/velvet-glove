@@ -72,4 +72,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    role = "js-format"
+    note = "opt-in only: vp-check already formats"
+  }
 }

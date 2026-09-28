@@ -1,2 +1,0 @@
-Prettier: changed example.js
-hookkit: redirected user notices and diagnostics to protocol stderr

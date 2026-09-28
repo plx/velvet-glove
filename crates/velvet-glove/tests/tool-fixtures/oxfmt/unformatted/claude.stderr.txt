@@ -1,2 +1,0 @@
-oxfmt: changed example.ts
-hookkit: redirected user notices and diagnostics to protocol stderr

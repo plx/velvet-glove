@@ -33,11 +33,11 @@ hookkit-tool-runner = { version = "0.1.0", path = "crates/hookkit-tool-runner" }
 
 # HookKit is not published yet, so the remaining framework crates are pinned
 # to the exact public Git revision used to generate this project.
-hookkit-antigravity = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-claude = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-codex = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-common = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-core = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-file-activity = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-runtime = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
-hookkit-session-state = { git = "https://github.com/plx/agent-hook-kit", rev = "83c49d46970602e8fb40a8afaeea521dfb7e9b61" }
+hookkit-antigravity = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-claude = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-codex = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-common = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-core = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-file-activity = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-runtime = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }
+hookkit-session-state = { git = "https://github.com/plx/agent-hook-kit", rev = "828d8d6feacf60015ae325d798b2bc3f32b2bf3b" }

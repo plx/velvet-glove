@@ -1,2 +1,0 @@
-dprint: changed example.json
-hookkit: redirected user notices and diagnostics to protocol stderr

@@ -3,6 +3,10 @@ use hookkit_core::{HarnessId, HookkitError};
 use hookkit_pkl_config::schema as pkl;
 use serde::Serialize;
 
+/// Reason used when a blocked completion has no rendered agent message.
+pub(crate) const DEFAULT_BLOCK_REASON: &str =
+    "velvet-glove: formatter/linter problems remain; fix them before stopping.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HarnessCapabilities {
     allowed_user: Option<&'static str>,
@@ -21,7 +25,7 @@ fn capabilities(harness: &HarnessId) -> Option<HarnessCapabilities> {
             allowed_user: Some("systemMessage"),
             allowed_agent: Some("hookSpecificOutput.additionalContext"),
             blocked_user: Some("systemMessage"),
-            blocked_agent: Some("reason+hookSpecificOutput.additionalContext"),
+            blocked_agent: Some("reason"),
             warning_fallback: None,
         }),
         "codex" => Some(HarnessCapabilities {
@@ -97,6 +101,10 @@ pub(crate) fn plan_stop_lowering(
     } else {
         capabilities.allowed_agent
     };
+    // A block always needs a reason for the agent to act on.
+    let agent = agent
+        .filter(|message| !message.trim().is_empty())
+        .or(blocked.then_some(DEFAULT_BLOCK_REASON));
     let mut native_user = None;
     let mut native_agent = None;
     let mut unsupported = Vec::new();
@@ -112,6 +120,7 @@ pub(crate) fn plan_stop_lowering(
         &mut unsupported,
         &mut warnings,
     );
+    let warnings_before_agent = warnings.len();
     let agent_lowering = lower_audience(
         "agent",
         agent,
@@ -123,6 +132,11 @@ pub(crate) fn plan_stop_lowering(
         &mut unsupported,
         &mut warnings,
     );
+    // Omitting an agent line that the user channel already carries verbatim
+    // (the default auto-fix notice) loses nothing worth a warning.
+    if agent.is_some() && agent == native_user.as_deref() {
+        warnings.truncate(warnings_before_agent);
+    }
     let strict_error = (!unsupported.is_empty()).then(|| {
         format!(
             "strict deferred Stop lowering cannot represent {} for {harness} while completion is {}",
@@ -233,13 +247,9 @@ fn build_native_output(
     match harness.as_str() {
         "claude-code" => {
             let native = if blocked {
-                match agent {
-                    Some(agent) => hookkit_claude::catalog::StopOutput::block_with_context(
-                        agent.clone(),
-                        agent,
-                    ),
-                    None => hookkit_claude::catalog::StopOutput::block(""),
-                }
+                hookkit_claude::catalog::StopOutput::block(
+                    agent.unwrap_or_else(|| DEFAULT_BLOCK_REASON.into()),
+                )
             } else {
                 match agent {
                     Some(agent) => hookkit_claude::catalog::StopOutput::with_context(agent),
@@ -253,7 +263,9 @@ fn build_native_output(
         }
         "codex" => {
             let native = if blocked {
-                hookkit_codex::catalog::StopOutput::block(agent.unwrap_or_default())
+                hookkit_codex::catalog::StopOutput::block(
+                    agent.unwrap_or_else(|| DEFAULT_BLOCK_REASON.into()),
+                )
             } else {
                 hookkit_codex::catalog::StopOutput::no_op()
             };
@@ -355,10 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_agent_message_needs_no_capability() {
+    fn empty_agent_message_needs_no_capability_when_allowed() {
         let plan = plan_stop_lowering(
             &HarnessId::CODEX,
-            true,
+            false,
             Some("user"),
             None,
             pkl::LoweringPolicy::Strict,
@@ -366,5 +378,74 @@ mod tests {
         .unwrap();
         assert_eq!(plan.metadata.agent.status, "empty");
         assert!(plan.finish().is_ok());
+    }
+
+    fn native_json(output: TurnCompletionOutput) -> serde_json::Value {
+        let bytes = match output {
+            TurnCompletionOutput::Claude(native) => {
+                <hookkit_claude::catalog::Stop as hookkit_core::EventSpec>::emit(native)
+                    .unwrap()
+                    .stdout()
+                    .to_vec()
+            }
+            TurnCompletionOutput::Codex(native) => {
+                <hookkit_codex::catalog::Stop as hookkit_core::EventSpec>::emit(native)
+                    .unwrap()
+                    .stdout()
+                    .to_vec()
+            }
+            _ => panic!("unexpected harness"),
+        };
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[test]
+    fn blocked_completion_never_emits_an_empty_reason() {
+        for harness in [HarnessId::CLAUDE_CODE, HarnessId::CODEX] {
+            let plan = plan_stop_lowering(
+                &harness,
+                true,
+                Some("user"),
+                Some("  "),
+                pkl::LoweringPolicy::Strict,
+            )
+            .unwrap();
+            assert_eq!(plan.metadata.agent.status, "emitted");
+            let native = native_json(plan.finish().unwrap());
+            assert_eq!(native["reason"], DEFAULT_BLOCK_REASON, "{harness}");
+        }
+    }
+
+    #[test]
+    fn claude_block_carries_the_agent_message_only_in_reason() {
+        let plan = plan_stop_lowering(
+            &HarnessId::CLAUDE_CODE,
+            true,
+            Some("user"),
+            Some("fix src/a.py"),
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )
+        .unwrap();
+        let native = native_json(plan.finish().unwrap());
+        assert_eq!(native["decision"], "block");
+        assert_eq!(native["reason"], "fix src/a.py");
+        assert_eq!(native["systemMessage"], "user");
+        assert!(native.get("hookSpecificOutput").is_none(), "{native}");
+    }
+
+    #[test]
+    fn omitting_an_agent_line_the_user_already_sees_is_not_warned() {
+        let plan = plan_stop_lowering(
+            &HarnessId::CODEX,
+            false,
+            Some("auto-fixed a.py"),
+            Some("auto-fixed a.py"),
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )
+        .unwrap();
+        assert_eq!(plan.metadata.agent.status, "omitted");
+        assert!(plan.metadata.warnings.is_empty());
+        let native = native_json(plan.finish().unwrap());
+        assert_eq!(native["systemMessage"], "auto-fixed a.py");
     }
 }

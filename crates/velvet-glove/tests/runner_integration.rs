@@ -289,7 +289,8 @@ if [[ "$mode" == "check" ]]; then
 
   if grep -q "unused_import" "$file"; then
     if [[ "$fix" == "1" && "$unfixable_f401" == "0" ]]; then
-      perl -0pi -e 's/^.*unused_import.*\n?//mg' "$file"
+      # Like real import removal, this fix can leave formatting behind.
+      perl -0pi -e 's/^.*unused_import.*\n?//mg; s/dirties_format/needs_format/g' "$file"
       echo "Found 1 error (1 fixed)"
       exit 0
     fi
@@ -433,10 +434,13 @@ fn write_selective_operational_hook_config(project: &Path, fake_ruff: &Path) {
     let config_dir = project.join(".velvet-glove");
     std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
     let clean_executable = fake_ruff.to_string_lossy().replace('\\', "\\\\");
-    let missing_executable = project
-        .join("bin/definitely-missing-checker")
-        .to_string_lossy()
-        .replace('\\', "\\\\");
+    let crashing_executable = write_executable(
+        project,
+        "crashing-checker",
+        "#!/bin/sh\necho 'checker crashed' >&2\nexit 2\n",
+    )
+    .to_string_lossy()
+    .replace('\\', "\\\\");
     let config = format!(
         r#"amends "Config.pkl"
 
@@ -461,10 +465,10 @@ tools {{
     }}
     workflowOrder = new Listing {{ "lint" }}
   }}
-  ["missing-rust"] = new ToolSpec {{
-    id = "missing-rust"
-    displayName = "Missing Rust"
-    executable = "{missing_executable}"
+  ["crashing-rust"] = new ToolSpec {{
+    id = "crashing-rust"
+    displayName = "Crashing Rust"
+    executable = "{crashing_executable}"
     files {{ include = new Listing {{ "**/*.rs" }} }}
     workflows {{
       ["lint"] = new Workflow {{
@@ -478,7 +482,49 @@ tools {{
     workflowOrder = new Listing {{ "lint" }}
   }}
 }}
-run = new Listing {{ "clean-python"; "missing-rust" }}
+run = new Listing {{ "clean-python"; "crashing-rust" }}
+"#
+    );
+    std::fs::write(config_dir.join("post-tool-use.pkl"), config)
+        .expect("failed to write post-tool-use.pkl");
+}
+
+/// A missing checker listed before the builtin Ruff spec (backed by the fake
+/// ruff), under the given `missingToolPolicy`.
+fn write_missing_tool_with_ruff_config(project: &Path, fake_ruff: &Path, policy: &str) {
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
+    let ruff = fake_ruff.to_string_lossy().replace('\\', "\\\\");
+    let missing = project
+        .join("bin/definitely-missing-checker")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let config = format!(
+        r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {{
+  fileActivity {{ filesystemMtime = false }}
+  missingToolPolicy = "{policy}"
+}}
+
+tools {{
+  ["ghost"] = new ToolSpec {{
+    id = "ghost"
+    displayName = "Ghost"
+    executable = "{missing}"
+    installHint = "install ghost first"
+    files {{ include = new Listing {{ "**/*.py" }} }}
+    workflows {{
+      ["lint"] = new Workflow {{
+        check = new WorkflowCommand {{ argv = new Listing {{ "check"; new Files {{}} }} }}
+      }}
+    }}
+    workflowOrder = new Listing {{ "lint" }}
+  }}
+  ["ruff"] = (Builtins.ruff) {{ executable = "{ruff}" }}
+}}
+run = new Listing {{ "ghost"; "ruff" }}
 "#
     );
     std::fs::write(config_dir.join("post-tool-use.pkl"), config)
@@ -556,6 +602,41 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
         .into_bytes()
 }
 
+/// Parse an immediate-mode response: the JSON stdout plus its user-only
+/// `systemMessage` (empty when absent). Immediate mode never writes stderr.
+fn immediate_response(output: &std::process::Output) -> (serde_json::Value, String) {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "immediate mode must keep stderr empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("immediate output should be JSON");
+    let user = json["systemMessage"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    (json, user)
+}
+
+/// Contents of the single diagnostics file in `project/<directory>` whose name
+/// ends with `suffix`.
+fn read_diagnostics(project: &Path, directory: &str, suffix: &str) -> String {
+    let directory = project.join(directory);
+    let matches = std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("read {directory:?}: {error}"))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(suffix))
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "{suffix} in {directory:?}: {matches:?}");
+    std::fs::read_to_string(&matches[0]).unwrap()
+}
+
 fn codex_post_tool_case(
     project: &Path,
     tool_name: &str,
@@ -571,13 +652,18 @@ fn codex_post_tool_case(
 }
 
 fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {
+    stop_fixture(harness, project, false)
+}
+
+/// A Stop event; `stop_hook_active` marks a Stop that follows a hook block.
+fn stop_fixture(harness: &str, project: &Path, stop_hook_active: bool) -> Vec<u8> {
     let fixture = match harness {
         "claude" => serde_json::json!({
             "session_id": "claude-ruff-test",
             "transcript_path": "/tmp/claude-ruff-test.jsonl",
             "cwd": project.to_string_lossy(),
             "hook_event_name": "Stop",
-            "stop_hook_active": false,
+            "stop_hook_active": stop_hook_active,
             "last_assistant_message": "done"
         }),
         "codex" => serde_json::json!({
@@ -588,7 +674,7 @@ fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {
             "model": "gpt-test",
             "turn_id": "codex-ruff-turn",
             "permission_mode": "default",
-            "stop_hook_active": false,
+            "stop_hook_active": stop_hook_active,
             "last_assistant_message": "done"
         }),
         "antigravity" => serde_json::json!({
@@ -963,17 +1049,13 @@ fn bundled_start_observer_and_turn_runner_share_one_explicit_state_root() {
     );
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-    assert!(
-        response["systemMessage"]
-            .as_str()
-            .unwrap()
-            .contains("Checked 1 clean file")
-    );
+    assert_eq!(response, serde_json::json!({}), "clean runs are silent");
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),
         0
     );
     let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["clean"], 1);
     assert!(Path::new(summary["run"]["stateDirectory"].as_str().unwrap()).starts_with(&state_dir));
 }
 
@@ -1032,36 +1114,43 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
                 String::from_utf8_lossy(&output.stderr)
             );
             let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            if harness == "antigravity" {
-                assert_eq!(response["decision"], "stop");
-                assert!(
-                    response["reason"]
-                        .as_str()
-                        .unwrap()
-                        .contains("omitted user deferred Stop message")
-                );
-            } else {
-                assert!(response.get("decision").is_none());
-                let user = response["systemMessage"].as_str().unwrap();
-                if expected_clean == 1 {
+            let notice = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
+            match (harness, expected_auto) {
+                ("antigravity", 0) => {
+                    assert_eq!(response, serde_json::json!({"decision": "stop"}));
+                }
+                ("antigravity", _) => {
+                    assert_eq!(response["decision"], "stop");
                     assert!(
-                        user.contains("Checked 1 clean file"),
-                        "{harness}/{case}: {user:?}"
+                        response["reason"]
+                            .as_str()
+                            .unwrap()
+                            .contains("omitted user deferred Stop message")
                     );
                 }
-                if expected_auto == 1 {
-                    assert!(user.contains("Auto-fixed 1 file"));
-                    if harness == "claude" {
-                        assert!(
-                            response["hookSpecificOutput"]["additionalContext"]
-                                .as_str()
-                                .unwrap()
-                                .contains("re-read changed files")
-                        );
-                    } else {
-                        assert!(user.contains("omitted agent deferred Stop message"));
-                    }
+                (_, 0) => assert_eq!(
+                    response,
+                    serde_json::json!({}),
+                    "{harness}/{case}: clean runs are silent"
+                ),
+                ("claude", _) => {
+                    assert_eq!(
+                        response,
+                        serde_json::json!({
+                            "systemMessage": notice,
+                            "hookSpecificOutput": {
+                                "hookEventName": "Stop",
+                                "additionalContext": notice,
+                            },
+                        }),
+                        "{case}"
+                    );
                 }
+                _ => assert_eq!(
+                    response,
+                    serde_json::json!({"systemMessage": notice}),
+                    "{harness}/{case}: an omitted agent copy of the user notice needs no warning"
+                ),
             }
             let summary = only_summary(&state_dir);
             assert_eq!(summary["status"], "clean");
@@ -1101,9 +1190,13 @@ fn turn_completion_one_window_contains_clean_auto_fixed_and_manual_files() {
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     assert_eq!(response["decision"], "block");
     let user = response["systemMessage"].as_str().unwrap();
-    assert!(user.contains("Checked 1 clean file: src/clean.py"));
-    assert!(user.contains("Auto-fixed 1 file: src/auto.py"));
-    assert!(user.contains("1 file needs manual fixes"));
+    assert!(!user.contains("clean.py"), "{user}");
+    assert!(user.contains("velvet-glove auto-fixed src/auto.py (Ruff)"));
+    assert!(user.contains("1 file needs manual fixes (src/manual.py). Details: "));
+    let reason = response["reason"].as_str().unwrap();
+    assert!(reason.contains("velvet-glove auto-fixed src/auto.py (Ruff)"));
+    assert!(reason.contains("Ruff: src/manual.py\nsrc/manual.py:1:1: F821 undefined name"));
+    assert!(!reason.contains("clean.py"), "{reason}");
     let summary = only_summary(&state_dir);
     assert_eq!(summary["counts"]["clean"], 1);
     assert_eq!(summary["counts"]["autoFixed"], 1);
@@ -1124,12 +1217,13 @@ fn turn_completion_one_window_contains_clean_auto_fixed_and_manual_files() {
 fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
     require_pkl!();
     for harness in ["claude", "codex", "antigravity"] {
-        for (case, contents, expected_status) in [
-            ("manual", "print(manual_issue)\n", "issues"),
+        for (case, contents, expected_status, blocking_operational) in [
+            ("manual", "print(manual_issue)\n", "issues", false),
             (
                 "operational",
                 "print('check_crash')\n",
                 "operational-failure",
+                true,
             ),
         ] {
             let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
@@ -1137,6 +1231,9 @@ fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
                 &format!("turn-completion-blocked-{case}"),
                 &[("src/result.py", contents)],
             );
+            if blocking_operational {
+                add_deferred_reporting_config(&project, "    blockOnOperationalErrors = true");
+            }
             let output = run_deferred_case(harness, &project, &state_arg);
             assert!(
                 output.status.success(),
@@ -1150,6 +1247,10 @@ fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
                 _ => unreachable!(),
             }
             assert!(!response["reason"].as_str().unwrap().is_empty());
+            assert!(
+                response.get("hookSpecificOutput").is_none(),
+                "{harness}/{case}: blocks carry the agent message only in reason"
+            );
             if harness != "antigravity" {
                 assert!(!response["systemMessage"].as_str().unwrap().is_empty());
             }
@@ -1161,6 +1262,36 @@ fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
                 "emitted"
             );
         }
+    }
+}
+
+#[test]
+fn turn_completion_operational_errors_notify_the_user_without_blocking() {
+    require_pkl!();
+    for harness in ["claude", "codex"] {
+        let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+            harness,
+            "turn-completion-operational-notice",
+            &[("src/result.py", "print('check_crash')\n")],
+        );
+        let output = run_deferred_case(harness, &project, &state_arg);
+        assert!(output.status.success(), "{harness}");
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let user = response["systemMessage"].as_str().unwrap();
+        assert!(
+            user.starts_with(
+                "velvet-glove could not run Ruff (lint.check failed with exit code 2; log: "
+            ),
+            "{harness}: {user}"
+        );
+        assert_eq!(
+            response.as_object().unwrap().len(),
+            1,
+            "{harness}: only the user hears about operational errors: {response}"
+        );
+        let summary = only_summary(&state_dir);
+        assert_eq!(summary["status"], "operational-failure");
+        assert_eq!(summary["block"]["blocked"], false);
     }
 }
 
@@ -1201,7 +1332,7 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
         response["systemMessage"]
             .as_str()
             .unwrap()
-            .contains("Auto-fixed")
+            .contains("velvet-glove auto-fixed")
     );
     assert!(
         !response["systemMessage"]
@@ -1239,11 +1370,16 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
     );
     let response: serde_json::Value = serde_json::from_slice(&empty_agent.stdout).unwrap();
     assert_eq!(response["decision"], "block");
-    assert_eq!(response["reason"], "");
+    let reason = response["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with("velvet-glove: formatter/linter problems remain")
+            && reason.contains(" Details: "),
+        "a block always explains itself: {reason:?}"
+    );
     let summary = only_summary(&state_dir);
     assert_eq!(
         summary["renderedMessages"]["lowering"]["agent"]["status"],
-        "empty"
+        "emitted"
     );
 }
 
@@ -1277,16 +1413,9 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     );
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-    assert!(
-        response["systemMessage"]
-            .as_str()
-            .unwrap()
-            .contains("Auto-fixed 1 file: src/dirty.py")
-    );
-    assert_eq!(
-        response["hookSpecificOutput"]["additionalContext"],
-        "Auto-fixed 1 file; re-read changed files before editing further."
-    );
+    let notice = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
+    assert_eq!(response["systemMessage"], notice);
+    assert_eq!(response["hookSpecificOutput"]["additionalContext"], notice);
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
@@ -1411,7 +1540,15 @@ fn invalid_deferred_template_syntax_fails_before_any_remedy_runs() {
     );
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-    assert_eq!(response["decision"], "block");
+    assert!(response.get("decision").is_none(), "{response}");
+    let user = response["systemMessage"].as_str().unwrap();
+    assert!(
+        user.starts_with(
+            "velvet-glove reporting configuration is invalid; checks were skipped (invalid deferred reporting template `clean.user`"
+        ),
+        "{user}"
+    );
+    assert!(user.ends_with("config-error.log"), "{user}");
     assert!(
         std::fs::read_to_string(file)
             .unwrap()
@@ -1423,6 +1560,41 @@ fn invalid_deferred_template_syntax_fails_before_any_remedy_runs() {
         serde_json::from_slice(&std::fs::read(summary_path).unwrap()).unwrap();
     assert_eq!(summary["status"], "operational-failure");
     assert_eq!(summary["result"]["artifacts"].as_object().unwrap().len(), 1);
+    assert!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1,
+        "configuration failures keep the work pending"
+    );
+}
+
+#[test]
+fn broken_pkl_config_is_a_user_notice_without_blocking() {
+    require_pkl!();
+    let project = temp_project("turn-completion-broken-pkl");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    std::fs::create_dir_all(project.join(".velvet-glove")).unwrap();
+    std::fs::write(
+        project.join(".velvet-glove/post-tool-use.pkl"),
+        "amends \"Config.pkl\"\nsettings { jobs = \"not a number\" }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/a.py");
+    std::fs::write(&file, "print('a')\n").unwrap();
+    seed_pending_file(&state_dir, "claude", &file);
+
+    let stopped = run_deferred_case("claude", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    let user = response["systemMessage"].as_str().unwrap();
+    assert!(
+        user.starts_with("velvet-glove configuration failed to load; checks were skipped ("),
+        "{user}"
+    );
+    assert!(!user.contains("Deferred reporting"), "{user}");
+    assert_eq!(response.as_object().unwrap().len(), 1, "{response}");
+    assert_eq!(only_summary(&state_dir)["status"], "operational-failure");
 }
 
 #[test]
@@ -1453,7 +1625,13 @@ fn deferred_template_render_failure_is_a_durable_operational_error() {
     );
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-    assert_eq!(response["decision"], "block");
+    assert!(response.get("decision").is_none(), "{response}");
+    assert!(
+        response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .starts_with("velvet-glove could not render its report (")
+    );
     let reporting_logs = files_named(&state_dir, "reporting-error.log");
     assert_eq!(reporting_logs.len(), 1);
     assert!(
@@ -1555,13 +1733,13 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
         response["systemMessage"]
             .as_str()
             .unwrap()
-            .contains("manual fixes")
+            .starts_with("velvet-glove: 1 file needs manual fixes (src/broken.py). Details: ")
     );
-    assert!(
-        response["reason"]
-            .as_str()
-            .unwrap()
-            .contains("Python: src/broken.py")
+    let reason = response["reason"].as_str().unwrap();
+    assert_eq!(
+        reason,
+        "velvet-glove found issues to fix before stopping:\n\nRuff: src/broken.py\nsrc/broken.py:1:1: F821 undefined name manual_issue",
+        "the agent gets the final check's relativized output, not log paths"
     );
     assert!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1,
@@ -1572,7 +1750,9 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
     assert_eq!(summary["status"], "issues");
+    assert_eq!(summary["schemaVersion"], 2);
     assert!(summary.get("acknowledged").is_none());
+    assert!(summary.get("artifactContents").is_none());
     assert_eq!(
         summary["stateDisposition"]["source"],
         "acknowledge-sealed-window"
@@ -1595,27 +1775,22 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
             .unwrap()
             .contains("manual fixes")
     );
-    assert!(
-        summary["renderedMessages"]["agent"]
-            .as_str()
-            .unwrap()
-            .contains("Python: src/broken.py")
-    );
+    assert_eq!(summary["renderedMessages"]["agent"], reason);
+    assert_eq!(summary["block"]["blocked"], true);
+    assert_eq!(summary["block"]["reasons"]["manual"], true);
     let artifacts = summary["result"]["artifacts"].as_object().unwrap();
     assert!(artifacts.len() >= 4);
+    for artifact in artifacts.values() {
+        assert!(
+            artifact.get("contents").is_none(),
+            "log contents live only in the log files"
+        );
+    }
     assert!(artifacts.values().any(|artifact| {
-        artifact["contents"]
-            .as_str()
+        std::fs::read_to_string(artifact["absolutePath"].as_str().unwrap())
             .unwrap()
             .contains("F821 undefined name manual_issue")
     }));
-    for artifact in artifacts.values() {
-        let path = artifact["absolutePath"].as_str().unwrap();
-        assert_eq!(
-            std::fs::read_to_string(path).unwrap(),
-            artifact["contents"].as_str().unwrap()
-        );
-    }
 
     std::fs::write(&file, "print('fixed')\n").unwrap();
     let retried = run_example(
@@ -1625,12 +1800,11 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     );
     assert!(retried.status.success());
     let retried_response: serde_json::Value = serde_json::from_slice(&retried.stdout).unwrap();
-    assert!(
-        retried_response["systemMessage"]
-            .as_str()
-            .unwrap()
-            .contains("Checked 1 clean file: src/broken.py")
-    );
+    assert_eq!(retried_response, serde_json::json!({}));
+    let summaries = files_named(&state_dir, "summary.json");
+    let retried_summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[1]).unwrap()).unwrap();
+    assert_eq!(retried_summary["counts"]["clean"], 1);
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),
         0
@@ -1714,12 +1888,7 @@ fn turn_completion_selectively_discharges_clean_and_retries_manual_files() {
     );
     assert!(retried.status.success());
     let retried_response: serde_json::Value = serde_json::from_slice(&retried.stdout).unwrap();
-    assert!(
-        retried_response["systemMessage"]
-            .as_str()
-            .unwrap()
-            .contains("Checked 1 clean file: src/manual.py")
-    );
+    assert_eq!(retried_response, serde_json::json!({}));
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),
         0
@@ -1836,7 +2005,13 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
     );
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-    assert_eq!(response["decision"], "block");
+    assert!(response.get("decision").is_none(), "{response}");
+    assert!(
+        response["systemMessage"].as_str().unwrap().starts_with(
+            "velvet-glove could not run Crashing Rust (lint.check failed with exit code 2; log: "
+        ),
+        "{response}"
+    );
 
     let state = hookkit_session_state::SessionState::open(
         hookkit_core::HarnessId::CODEX,
@@ -1883,17 +2058,309 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
             .values()
             .any(|artifact| artifact["classification"] == "clean")
     );
+    let failure = artifacts
+        .values()
+        .find(|artifact| artifact["classification"] == "failure")
+        .expect("failure artifact");
     assert!(
-        artifacts
-            .values()
-            .any(|artifact| artifact["classification"] == "spawn-error")
+        std::fs::read_to_string(failure["absolutePath"].as_str().unwrap())
+            .unwrap()
+            .contains("checker crashed")
     );
-    for artifact in artifacts.values() {
-        assert_eq!(
-            std::fs::read_to_string(artifact["absolutePath"].as_str().unwrap()).unwrap(),
-            artifact["contents"].as_str().unwrap()
+}
+
+#[test]
+fn turn_completion_missing_tool_follows_missing_tool_policy() {
+    require_pkl!();
+    for policy in ["user-notice", "harness-block", "hard-failure"] {
+        let project = temp_project(&format!("turn-completion-missing-tool-{policy}"));
+        let state_dir = project.join("state");
+        let state_arg = state_dir.to_string_lossy().into_owned();
+        let fake_ruff = write_fake_ruff(&project);
+        write_missing_tool_with_ruff_config(&project, &fake_ruff, policy);
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let file = project.join("src/dirty.py");
+        std::fs::write(&file, "import os  # unused_import\n").unwrap();
+        seed_pending_file(&state_dir, "claude", &file);
+
+        let stopped = run_deferred_case("claude", &project, &state_arg);
+
+        assert!(
+            !std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("unused_import"),
+            "{policy}: a missing tool must not stop another tool's autofix"
         );
+        let summary = only_summary(&state_dir);
+        assert_eq!(summary["counts"]["autoFixed"], 1, "{policy}");
+        let problem = summary["result"]["operationalProblems"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(problem["missingTool"], true);
+        assert_eq!(problem["installHint"], "install ghost first");
+        let pending = session_journal_len(&state_dir, "claude-code", "claude-ruff-test");
+        if policy == "hard-failure" {
+            assert!(!stopped.status.success());
+            assert!(stopped.stdout.is_empty());
+            continue;
+        }
+        assert!(stopped.status.success(), "{policy}");
+        let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+        let user = response["systemMessage"].as_str().unwrap();
+        assert!(
+            user.contains("velvet-glove auto-fixed src/dirty.py (Ruff)"),
+            "{policy}: {user}"
+        );
+        assert!(
+            user.contains("velvet-glove could not run Ghost (")
+                && user.contains("definitely-missing-checker not found; install ghost first)."),
+            "{policy}: {user}"
+        );
+        if policy == "user-notice" {
+            assert!(response.get("decision").is_none(), "{response}");
+            assert_eq!(pending, 0, "a missing tool does not keep files pending");
+        } else {
+            assert_eq!(response["decision"], "block");
+            assert!(
+                response["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("velvet-glove could not run Ghost"),
+                "{response}"
+            );
+            assert!(pending >= 1);
+        }
     }
+}
+
+#[test]
+fn turn_completion_loop_guard_stops_reblocking_unchanged_issues() {
+    require_pkl!();
+    let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+        "claude",
+        "turn-completion-loop-guard",
+        &[("src/manual.py", "print(manual_issue)\n")],
+    );
+    let stop = |active: bool| {
+        let output = run_example(
+            "turn-completion",
+            &stop_fixture("claude", &project, active),
+            &["--claude", "--state-dir", state_arg.as_str()],
+        );
+        assert!(output.status.success());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+
+    let first = stop(false);
+    assert_eq!(first["decision"], "block");
+    let repeated = stop(true);
+    assert!(repeated.get("decision").is_none(), "{repeated}");
+    assert!(repeated.get("hookSpecificOutput").is_none(), "{repeated}");
+    let user = repeated["systemMessage"].as_str().unwrap();
+    assert!(user.contains("1 file needs manual fixes"), "{user}");
+    assert!(
+        user.ends_with(
+            "velvet-glove: not blocking again; the same issues remain after the agent's last attempt."
+        ),
+        "{user}"
+    );
+    assert!(
+        session_journal_len(&state_dir, "claude-code", "claude-ruff-test") >= 1,
+        "unfixed files stay pending"
+    );
+    let next_turn = stop(false);
+    assert_eq!(
+        next_turn["decision"], "block",
+        "a new turn starts a new chain"
+    );
+
+    // Changing issues keep blocking until the consecutive-block cap.
+    add_deferred_reporting_config(&project, "    maxConsecutiveBlocks = 2");
+    let mut responses = Vec::new();
+    for index in 0..3 {
+        let path = project.join(format!("src/more-{index}.py"));
+        std::fs::write(&path, "print(manual_issue)\n").unwrap();
+        seed_pending_file(&state_dir, "claude", &path);
+        responses.push(stop(index > 0));
+    }
+    assert_eq!(responses[0]["decision"], "block");
+    assert_eq!(responses[1]["decision"], "block");
+    assert!(responses[2].get("decision").is_none(), "{}", responses[2]);
+    assert!(
+        responses[2]["systemMessage"]
+            .as_str()
+            .unwrap()
+            .ends_with("velvet-glove: not blocking again after 2 consecutive blocks.")
+    );
+}
+
+#[test]
+fn turn_completion_loop_guard_presumes_continuation_without_a_native_flag() {
+    require_pkl!();
+    let (project, _state_dir, state_arg) = prepare_deferred_ruff_case(
+        "antigravity",
+        "turn-completion-loop-guard-antigravity",
+        &[("src/manual.py", "print(manual_issue)\n")],
+    );
+    let first = run_deferred_case("antigravity", &project, &state_arg);
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first["decision"], "continue");
+    let second = run_deferred_case("antigravity", &project, &state_arg);
+    let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(
+        second["decision"], "stop",
+        "identical issues right after a block must not loop: {second}"
+    );
+}
+
+#[test]
+fn turn_completion_reruns_format_after_a_lint_fix_dirties_it() {
+    require_pkl!();
+    let project = temp_project("turn-completion-lint-dirties-format");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/lint.py");
+    std::fs::write(
+        &file,
+        "import os  # unused_import\nprint('dirties_format')\n",
+    )
+    .unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(
+        response,
+        serde_json::json!({
+            "systemMessage": "velvet-glove auto-fixed src/lint.py (Ruff); re-read before editing."
+        }),
+        "a lint fix that dirties formatting must not be reported as a manual fix"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "print('formatted')\n"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["autoFixed"], 1);
+    assert!(
+        !files_named(&state_dir, "recheck.log").is_empty(),
+        "the format check reruns before its remedy decision"
+    );
+}
+
+#[test]
+fn turn_completion_batch_blames_only_the_files_the_output_names() {
+    require_pkl!();
+    let project = temp_project("turn-completion-batch-attribution");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_artifact_linking_hook_config(&project, &fake_ruff, &["batch-check"], "batch");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    // The fake checker inspects the last file of a batch.
+    for (name, contents) in [
+        ("src/first.py", "print('first')\n"),
+        ("src/second.py", "print(manual_issue)\n"),
+    ] {
+        std::fs::write(project.join(name), contents).unwrap();
+        seed_pending_file(&state_dir, "codex", &project.join(name));
+    }
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+    assert!(
+        !response["reason"].as_str().unwrap().contains("first.py"),
+        "{response}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["clean"], 1);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    assert!(
+        summary["manualFixFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("src/second.py")
+    );
+}
+
+#[test]
+fn turn_completion_skips_git_ignored_candidates() {
+    require_pkl!();
+    let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+        "codex",
+        "turn-completion-git-ignored",
+        &[
+            ("dist/generated.py", "print(manual_issue)\n"),
+            ("src/kept.py", "print('kept')\n"),
+        ],
+    );
+    run_git(&project, &["init", "-q"]);
+    std::fs::write(project.join(".gitignore"), "dist/\n").unwrap();
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&stopped.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    let summary = only_summary(&state_dir);
+    let candidates = summary["candidateFiles"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert!(candidates[0].as_str().unwrap().ends_with("src/kept.py"));
+    assert!(
+        summary["result"]["notApplicableFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("dist/generated.py")
+    );
+}
+
+#[test]
+fn turn_completion_prunes_old_run_bundles() {
+    require_pkl!();
+    let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+        "codex",
+        "turn-completion-run-retention",
+        &[("src/a.py", "print('a')\n")],
+    );
+    assert!(
+        run_deferred_case("codex", &project, &state_arg)
+            .status
+            .success()
+    );
+    let first = files_named(&state_dir, "summary.json").pop().unwrap();
+    let runs = first.parent().unwrap().parent().unwrap().to_path_buf();
+    for index in 0..25 {
+        std::fs::create_dir_all(runs.join(format!("{}-1-{index}-turn-completion", 1000 + index)))
+            .unwrap();
+    }
+    let file = project.join("src/b.py");
+    std::fs::write(&file, "print('b')\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    assert!(
+        run_deferred_case("codex", &project, &state_arg)
+            .status
+            .success()
+    );
+
+    let remaining = std::fs::read_dir(&runs).unwrap().count();
+    assert_eq!(remaining, 20);
+    assert!(first.exists(), "the newest runs are kept");
+    assert_eq!(files_named(&state_dir, "summary.json").len(), 2);
 }
 
 #[test]
@@ -2110,7 +2577,6 @@ fn turn_completion_links_distinct_tool_artifacts_to_one_file() {
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(artifact_ids.len(), 2);
     assert_eq!(summary["artifactPaths"].as_array().unwrap().len(), 2);
-    assert_eq!(summary["artifactContents"].as_object().unwrap().len(), 2);
 }
 
 #[test]
@@ -2185,16 +2651,29 @@ fn turn_completion_keeps_large_diagnostics_in_artifacts_not_native_context() {
     );
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     assert!(!response["systemMessage"].as_str().unwrap().contains("xxxx"));
-    assert!(!response["reason"].as_str().unwrap().contains("xxxx"));
+    let reason = response["reason"].as_str().unwrap();
+    assert!(reason.len() < 2_000, "agent excerpt is bounded: {reason}");
+    assert!(reason.contains("…truncated; full log: "), "{reason}");
+    assert!(reason.contains("src/large.py:1:1: F821 undefined name manual_issue"));
     let summary = only_summary(&state_dir);
+    assert!(
+        std::fs::metadata(files_named(&state_dir, "summary.json").pop().unwrap())
+            .unwrap()
+            .len()
+            < 100_000,
+        "the summary does not repeat log contents"
+    );
     assert!(
         summary["result"]["artifacts"]
             .as_object()
             .unwrap()
             .values()
-            .any(|artifact| artifact["contents"]
-                .as_str()
-                .is_some_and(|text| text.len() > 100_000))
+            .any(
+                |artifact| std::fs::metadata(artifact["absolutePath"].as_str().unwrap())
+                    .unwrap()
+                    .len()
+                    > 100_000
+            )
     );
 }
 
@@ -2326,15 +2805,10 @@ fn post_tool_use_autofix_sends_concise_agent_feedback_when_supported() {
         &["--claude"],
     );
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
-    assert!(
-        json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .contains("Ruff changed src/dirty.py")
-    );
+    let (json, user) = immediate_response(&output);
+    let line = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
+    assert_eq!(json["hookSpecificOutput"]["additionalContext"], line);
+    assert_eq!(user, line);
     let rewritten = std::fs::read_to_string(src.join("dirty.py")).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
@@ -2357,22 +2831,23 @@ fn post_tool_use_manual_issues_write_diagnostics_and_render_template() {
         &["--codex"],
     );
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    let (json, user) = immediate_response(&output);
     let context = json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
     assert!(context.contains("fix src/broken.py"));
     assert!(context.contains(".velvet-glove/ruff-agent-hook"));
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("F821 undefined name manual_issue"));
+    assert!(user.contains("Ruff: issues remain in src/broken.py; diagnostics: "));
     assert!(
-        project
-            .join(".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-issues.txt")
-            .is_file()
+        !user.contains("F821"),
+        "full diagnostics stay out of the notice"
     );
+
+    let diagnostics = std::fs::read_to_string(project.join(
+        ".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-issues.txt",
+    ))
+    .unwrap();
+    assert!(diagnostics.contains("F821 undefined name manual_issue"));
 }
 
 #[test]
@@ -2416,7 +2891,15 @@ fn post_tool_use_can_pass_phase_extra_args_for_unfixable_rules() {
             .unwrap()
             .contains("unused_import")
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("F401 unused import"));
+    assert!(output.stderr.is_empty());
+    assert!(
+        read_diagnostics(
+            &project,
+            ".velvet-glove/ruff-agent-hook",
+            "ruff-tool-issues.txt"
+        )
+        .contains("F401 unused import")
+    );
 }
 
 #[test]
@@ -2475,13 +2958,13 @@ fn post_tool_use_reports_missing_tool_to_user_without_failing_hook() {
         &["--claude"],
     );
 
-    assert!(output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
-    assert_eq!(stdout, serde_json::json!({}));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unavailable"));
-    assert!(stderr.contains("definitely-missing-ruff"));
+    let (json, user) = immediate_response(&output);
+    assert!(
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
+    );
+    assert!(user.contains("unavailable"));
+    assert!(user.contains("definitely-missing-ruff"));
 }
 
 #[test]
@@ -2501,18 +2984,17 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
         &["--codex"],
     );
 
-    assert!(output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
-    assert_eq!(stdout, serde_json::json!({}));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("phase `format` failed"));
-    assert!(stderr.contains("format crashed"));
+    let (json, user) = immediate_response(&output);
     assert!(
-        project
-            .join(".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt")
-            .is_file()
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
     );
+    assert!(user.contains("phase `format` failed"));
+    let diagnostics = std::fs::read_to_string(project.join(
+        ".velvet-glove/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt",
+    ))
+    .unwrap();
+    assert!(diagnostics.contains("format crashed"));
 }
 
 #[test]
@@ -2595,17 +3077,22 @@ run = new Listing<String> {{ "combo" }}
             .unwrap()
             .contains("changed")
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    let (json, user) = immediate_response(&output);
     assert!(
         json["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap()
-            .contains("Combo changed src/a.py")
+            .contains("velvet-glove auto-fixed src/a.py (Combo)")
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Combo: phase `verify` failed"));
-    assert!(stderr.contains("verify crashed"));
+    assert!(user.contains("Combo: phase `verify` failed"));
+    assert!(
+        read_diagnostics(
+            &project,
+            ".velvet-glove/post-tool-use",
+            "combo-tool-failure.txt"
+        )
+        .contains("verify crashed")
+    );
 }
 
 #[test]
@@ -2693,9 +3180,80 @@ run = new Listing<String> {{ "failer"; "changer" }}
         std::fs::read_to_string(src.join("a.py")).unwrap(),
         "original\n"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Failer: phase `verify` failed"));
-    assert!(!stderr.contains("Changer: changed"));
+    let (_, user) = immediate_response(&output);
+    assert!(user.contains("Failer: phase `verify` failed"));
+    assert!(!user.contains("Changer"));
+}
+
+#[cfg(unix)]
+#[test]
+fn post_tool_use_kills_timed_out_local_tools_and_keeps_diagnostics_out_of_the_project() {
+    require_pkl!();
+    let project = temp_project("timeout-local-bin");
+    write_executable(
+        &project,
+        "hang",
+        "#!/bin/sh\nprintf 'started %s\\n' \"$HANG_LABEL\"\nexec sleep 30\n",
+    );
+    let config_dir = project.join(".velvet-glove");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        r#"amends "Config.pkl"
+
+settings {
+  commandTimeoutSeconds = 1
+  localBinDirs { "bin" }
+}
+
+tools {
+  ["hang"] = new ToolSpec {
+    id = "hang"
+    displayName = "Hang"
+    executable = "hang"
+    env { ["HANG_LABEL"] = "from-env" }
+    files { include { "**/*.py" } }
+    phases {
+      ["verify"] = new Phase { mode = "verify"; argv { new Files {} } }
+    }
+  }
+}
+run { "hang" }
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/a.py"), "print('ok')\n").unwrap();
+
+    let started = std::time::Instant::now();
+    let output = run_example(
+        "post-tool-immediate",
+        &post_tool_use_fixture("claude", &project, "src/a.py"),
+        &["--claude"],
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+
+    let (json, user) = immediate_response(&output);
+    assert!(
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
+    );
+    assert!(
+        user.contains("Hang: phase `verify` failed (timed out after 1s"),
+        "{user}"
+    );
+    let diagnostics_path = user.rsplit("diagnostics: ").next().unwrap();
+    assert!(
+        diagnostics_path.contains("velvet-glove/state/post-tool-immediate"),
+        "{diagnostics_path}"
+    );
+    let diagnostics = std::fs::read_to_string(diagnostics_path).unwrap();
+    assert!(diagnostics.contains("started from-env"), "{diagnostics}");
+    assert!(diagnostics.contains(&project.join("bin/hang").to_string_lossy().into_owned()));
+    assert!(
+        !project.join(".velvet-glove/post-tool-use").exists(),
+        "diagnostics must not be written inside the project by default"
+    );
 }
 
 #[test]
@@ -2783,13 +3341,13 @@ run = new Listing<String> {{ "issuer"; "changer" }}
         std::fs::read_to_string(src.join("a.py")).unwrap(),
         "original\n"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Issuer: issues remain"));
-    assert!(!stderr.contains("Changer: changed"));
+    let (_, user) = immediate_response(&output);
+    assert!(user.contains("Issuer: issues remain in src/a.py"));
+    assert!(!user.contains("Changer"));
 }
 
 #[test]
-fn post_tool_use_unknown_run_entry_fails_hook() {
+fn post_tool_use_config_error_is_a_user_notice_and_skipped_for_read_only_calls() {
     require_pkl!();
     let project = temp_project("unknown-run-entry");
     let config_dir = project.join(".velvet-glove");
@@ -2812,12 +3370,29 @@ run = new Listing<String> { "rff" }
         &["--claude"],
     );
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    let (json, user) = immediate_response(&output);
     assert!(
-        output.stderr.is_empty(),
-        "runtime diagnostics are disabled unless a sink is configured"
+        json.get("hookSpecificOutput").is_none(),
+        "agent hears nothing"
     );
+    assert!(user.starts_with("error: velvet-glove: configuration error; no tools ran:"));
+    assert!(user.contains("run names unknown tool `rff`"), "{user}");
+
+    // A call that touches no files returns before the (broken) policy is
+    // even evaluated.
+    let read = PostToolUseBuilder::new(ProtocolSurface::Claude, &project, "src/a.py")
+        .identity("claude-ruff-test", "claude-ruff-turn", "claude-ruff-read")
+        .tool(
+            "Read",
+            serde_json::json!({"file_path": project.join("src/a.py")}),
+            serde_json::json!({"type": "text"}),
+        )
+        .build()
+        .unwrap()
+        .into_bytes();
+    let output = run_example("post-tool-immediate", &read, &["--claude"]);
+    let (json, _) = immediate_response(&output);
+    assert_eq!(json, serde_json::json!({}));
 }
 
 #[test]
@@ -2837,17 +3412,11 @@ fn post_tool_use_codex_emits_posttool_agent_context() {
         &["--codex"],
     );
 
-    assert!(output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("should emit structured JSON");
+    let (stdout, user) = immediate_response(&output);
     assert_eq!(stdout["hookSpecificOutput"]["hookEventName"], "PostToolUse");
-    assert!(
-        stdout["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .contains("Ruff changed src/dirty.py")
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Ruff: changed src/dirty.py"));
+    let line = "velvet-glove auto-fixed src/dirty.py (Ruff); re-read before editing.";
+    assert_eq!(stdout["hookSpecificOutput"]["additionalContext"], line);
+    assert_eq!(user, line);
 }
 
 #[test]
@@ -2890,9 +3459,10 @@ run = new Listing { "ruff" }
         "hard-failure should fail the hook"
     );
     assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stderr.is_empty(),
-        "operational failures use the runtime diagnostics sink"
+        stderr.contains("failed"),
+        "a hook failure must explain itself on stderr: {stderr}"
     );
 }
 

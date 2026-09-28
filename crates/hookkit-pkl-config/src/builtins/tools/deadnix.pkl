@@ -46,4 +46,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    note = "opt-in only: its fix deletes unused bindings mid-edit"
+  }
 }

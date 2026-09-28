@@ -1,2 +1,0 @@
-sort-package-json: changed package.json
-hookkit: redirected user notices and diagnostics to protocol stderr
