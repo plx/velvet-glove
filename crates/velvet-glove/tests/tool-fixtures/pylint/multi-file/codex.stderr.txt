@@ -1,0 +1,11 @@
+warning: pylint: issues remain; diagnostics: <workspace>/.velvet-glove/pylint-agent-hook/test-session_test-turn_pylint-tool_pylint-tool-issues.txt
+pylint diagnostics:
+[verify] command: pylint --score=no <workspace>/example.a_clean.py <workspace>/example.b_issue.py
+status: Some(16)
+classification: Some(Issues)
+stdout:
+************* Module example.b_issue
+example.b_issue.py:1:0: C0114: Missing module docstring (missing-module-docstring)
+example.b_issue.py:1:0: C0103: Constant name "x" doesn't conform to UPPER_CASE naming style (invalid-name)
+artifact: <workspace>/.velvet-glove/pylint-agent-hook/test-session_test-turn_pylint-tool_pylint-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

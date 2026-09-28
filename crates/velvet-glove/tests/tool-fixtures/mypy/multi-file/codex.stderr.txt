@@ -1,0 +1,10 @@
+warning: mypy: issues remain; diagnostics: <workspace>/.velvet-glove/mypy-agent-hook/test-session_test-turn_mypy-tool_mypy-tool-issues.txt
+mypy diagnostics:
+[verify] command: mypy <workspace>/example.1-clean.py <workspace>/example.2-issue.py
+status: Some(1)
+classification: Some(Issues)
+stdout:
+example.2-issue.py:2: error: Incompatible return value type (got "int", expected "str")  [return-value]
+Found 1 error in 1 file (checked 2 source files)
+artifact: <workspace>/.velvet-glove/mypy-agent-hook/test-session_test-turn_mypy-tool_mypy-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr
