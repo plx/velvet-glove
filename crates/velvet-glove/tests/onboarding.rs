@@ -144,7 +144,14 @@ fn assert_polyglot_policy(sandbox: &Sandbox) {
     );
     assert!(text.contains("// cargo fmt: found Cargo.toml;"), "{text}");
     assert!(text.contains("// Prettier: found .prettierrc;"), "{text}");
-    // Installed alternatives and wanted-but-missing tools stay commented out.
+    // Installed alternatives and wanted-but-missing tools stay commented out,
+    // under separate, correctly-labeled headings (flake8 *is* installed here;
+    // only hadolint is actually missing).
+    assert!(text.contains("Wanted but not installed"), "{text}");
+    assert!(
+        text.contains("Installed alternatives not enabled"),
+        "{text}"
+    );
     assert!(text.contains("// [\"flake8\"] = Builtins.flake8  // alternative to ruff"));
     assert!(text.contains("// [\"hadolint\"] = Builtins.hadolint  // hadolint not found on PATH"));
     // Ignored Go files never make gofmt a candidate.
@@ -358,6 +365,80 @@ fn project_local_executables_are_selected_and_reported_as_runnable() {
     };
     assert_eq!(status("prettier"), "project-local");
     assert_eq!(status("ruff"), "not-in-local-bin-dirs");
+}
+
+/// A backend+frontend split where the only JS/TS evidence (`package.json`,
+/// `eslint.config.mjs`, `node_modules/.bin/eslint`) lives a directory below
+/// the project root. `init`/`doctor`/`tools` must still find it: bare
+/// indicator globs match in any directory, `contains` is checked in every
+/// `package.json`, and a project-local executable is searched for from the
+/// matching files' own directory up to the project root, the way the runner
+/// itself resolves it.
+#[test]
+fn init_doctor_and_tools_find_a_nested_frontend_workspace() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(sandbox) = Sandbox::new(&["ruff"]) else {
+        eprintln!("skipping: pkl is not on PATH");
+        return;
+    };
+    sandbox.write("backend/app.py", "print('hi')\n");
+    sandbox.write(
+        "frontend/package.json",
+        "{\"devDependencies\": {\"eslint\": \"^9\"}}\n",
+    );
+    sandbox.write("frontend/eslint.config.mjs", "export default [];\n");
+    sandbox.write("frontend/src/index.tsx", "export const answer = 42;\n");
+    sandbox.write("frontend/node_modules/.bin/eslint", "#!/bin/sh\nexit 0\n");
+    fs::set_permissions(
+        sandbox.project().join("frontend/node_modules/.bin/eslint"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+
+    let init = sandbox.run(&["init"]);
+    assert!(init.status.success(), "{}", describe(&init));
+    assert!(
+        stdout(&init).contains("Enabled:") && stdout(&init).contains("eslint"),
+        "{}",
+        describe(&init)
+    );
+    let policy = sandbox.project().join(".velvet-glove/post-tool-use.pkl");
+    let loaded = hookkit_pkl_config::load_explicit(&policy, &sandbox.project())
+        .expect("generated policy evaluates with pkl");
+    assert!(loaded.config.run.contains(&"eslint".to_string()));
+
+    let text = fs::read_to_string(&policy).unwrap();
+    // Evidence one directory below the root is still reported, not missed.
+    assert!(
+        text.contains("// ESLint: found frontend/eslint.config.mjs;"),
+        "{text}"
+    );
+
+    let doctor = sandbox.run(&["doctor"]);
+    assert!(doctor.status.success(), "{}", describe(&doctor));
+    let doctor_text = stdout(&doctor);
+    assert!(
+        doctor_text.contains("eslint")
+            && doctor_text.contains("frontend/node_modules/.bin/eslint")
+            && doctor_text.contains("(project-local)"),
+        "{doctor_text}"
+    );
+    assert!(doctor_text.contains("OK: 0 warning(s)."), "{doctor_text}");
+
+    let tools = sandbox.run(&["tools", "--json"]);
+    assert!(tools.status.success(), "{}", describe(&tools));
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&tools.stdout).unwrap();
+    let eslint = entries
+        .iter()
+        .find(|entry| entry["key"] == "eslint")
+        .unwrap();
+    assert_eq!(eslint["resolution"]["status"], "project-local");
+    assert!(
+        eslint["resolution"]["path"]
+            .as_str()
+            .unwrap()
+            .contains("frontend/node_modules/.bin/eslint")
+    );
 }
 
 #[test]

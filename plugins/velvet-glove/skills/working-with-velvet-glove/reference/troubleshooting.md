@@ -28,3 +28,21 @@ the state directory, and exits nonzero when the hooks cannot work.
   `VELVET_GLOVE_HARNESS=claude|codex` to override.
 - **Codex hooks never run:** newly installed or changed hooks must be reviewed
   under `/hooks` in the Codex CLI.
+- **"Stop hook error occurred · ctrl+o to see":** Claude Code shows this
+  generic toast for any non-empty Stop decision, including a normal, working
+  "manual fixes needed" block. It does not mean the hook crashed; ctrl+o (or
+  the run directory the block message names) shows the actual reason.
+- **First run reformats a lot of the codebase:** with no tool config,
+  formatters use their own defaults across every matching file, not just
+  what an agent just touched. Expect one large diff the first time `check` or
+  a Stop hook runs on a never-formatted project, then small, incremental
+  diffs after.
+- **A project-local tool is version-mismatched or still reported missing:**
+  run the project's own install step (`uv sync`, `npm install`, …) before
+  `velvet-glove init`/`doctor`; without it, resolution falls back to whatever
+  same-named binary is on `PATH`, silently, with no version warning.
+- **Monorepo / multiple workspaces:** tools resolve per workspace, searched
+  from the directory of the files they'd run on up to the project root (so
+  `frontend/node_modules/.bin/eslint` is found for `frontend/` files even
+  though it is not at the project root). Run `velvet-glove doctor` to see
+  where each tool in `run` actually resolved.

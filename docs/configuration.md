@@ -189,7 +189,14 @@ beats `.venv/bin/eslint` or `PATH`. Names found in none of those directories
 are run through `PATH`; a path with a `/` is run as given, relative to the
 command's working directory (the project root without a
 `workspaceIndicator`). `doctor`, `tools`, and `init` resolve programs the same
-way from the project root.
+way, searching from the directories of the tool's own matching project files
+up to the project root — so a tool that only a nested workspace uses (e.g.
+`frontend/node_modules/.bin/eslint` in a backend+frontend repo) is found the
+same way the hooks would find it, not just at the project root. In a
+monorepo, run `velvet-glove doctor` from the project root: it prints where
+each tool in `run` actually resolved (`project-local` and the path, or
+`missing`), so a workspace's tool showing up as `project-local` under its own
+`node_modules/.bin` (rather than `missing`) confirms it was found.
 
 ## Recipes
 
@@ -358,17 +365,19 @@ patterns) and selects an enabled builtin when all of these hold:
 
 - its `files` globs match at least one project file;
 - every program it runs resolves as the hooks would resolve it (the default
-  `localBinDirs` at the project root, then `PATH`); and
-- one of its detection indicators is present, or it is the default tool for
-  its role and no tool sharing that role has an indicator.
+  `localBinDirs`, searched from the directories of its own matching files up
+  to the project root, then `PATH`); and
+- one of its detection indicators is present anywhere in the project, or it is
+  the default tool for its role and no tool sharing that role has an
+  indicator.
 
 Detection metadata lives in each builtin's optional `detect` block and never
 affects hook execution:
 
 | Field | Meaning |
 | --- | --- |
-| `indicators` | Project-relative globs, typically config files (`ruff.toml`, `.prettierrc.*`, `**/Cargo.toml`). |
-| `contains` | File → text, e.g. `["package.json"] = "\"eslint\""` or `["pyproject.toml"] = "[tool.ruff"`. |
+| `indicators` | Project-relative globs, typically config files (`ruff.toml`, `.prettierrc.*`, `**/Cargo.toml`). A bare glob (no `/`, e.g. `eslint.config.*`) also matches in any directory, so a nested `frontend/eslint.config.mjs` counts. |
+| `contains` | File → text, e.g. `["package.json"] = "\"eslint\""` or `["pyproject.toml"] = "[tool.ruff"`. Checked in every project file with that name, not just the one at the root. |
 | `role` | Mutually exclusive slot such as `python-lint`, `js-format`, or `go-lint`. |
 | `default` | Chosen for its role when no role member has an indicator. |
 | `note` | Why the tool is opt-in or config-only; shown by `init`. |
@@ -379,9 +388,15 @@ fmt, nixfmt, and xmllint). Tools that reach the network, apply disruptive
 automatic fixes, or are drafts — lychee, govulncheck, pinact, typos, knip,
 gitleaks, deadnix, gomod-tidy, and similar — are only selected when their own
 configuration file is present, or never. The generated file names the reason
-for each choice and lists installed alternatives and wanted-but-missing tools
-as commented-out entries. `init` evaluates the file with Pkl before writing it
-and refuses to overwrite an existing policy without `--force`.
+for each choice (quoting any `contains` needle, since it may look like a
+truncated bracket, e.g. `found "[tool.ruff" in pyproject.toml`) and lists
+unselected tools as commented-out entries in three groups: tools the project
+wants but that (or a program they need) are not installed; tools already
+installed that are an alternative to a tool selected for the same role; and
+tools that are installed and match project files but are opt-in, with the
+reason naming what would turn them on. `init` evaluates the file with Pkl
+before writing it and refuses to overwrite an existing policy without
+`--force`.
 
 `velvet-glove doctor [--dir DIR]` prints the discovered policy files in merge
 order, the evaluated `run` list with each tool's resolved executable (marked
