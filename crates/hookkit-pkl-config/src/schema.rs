@@ -64,7 +64,9 @@ pub struct Settings {
     pub exclude: Vec<String>,
     /// Handling for common output that the native harness cannot represent.
     pub lowering_policy: LoweringPolicy,
-    /// Directory used for full tool diagnostics, or `None` to disable files.
+    /// Directory for immediate-mode diagnostic files. Relative paths resolve
+    /// from the project root; `None` (the default) keeps them out of the
+    /// project, under `$TMPDIR/velvet-glove/state/post-tool-immediate`.
     pub diagnostics_directory: Option<String>,
     /// Behavior when a configured executable cannot be found.
     pub missing_tool_policy: MissingToolPolicy,
@@ -72,6 +74,20 @@ pub struct Settings {
     pub file_activity: Option<FileActivitySettings>,
     /// Templates and file groups used to render deferred results.
     pub deferred_reporting: DeferredReporting,
+    /// Per-command wall-clock limit in seconds; zero disables the limit. A
+    /// tool's `timeoutSeconds` overrides it.
+    pub command_timeout_seconds: u64,
+    /// Project-local executable directories searched, nearest first from the
+    /// job's workspace up to the project root, before `PATH`.
+    pub local_bin_dirs: Vec<String>,
+}
+
+/// Default per-command timeout in seconds.
+pub const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 120;
+
+/// Default project-local executable directories, in search order.
+pub fn default_local_bin_dirs() -> Vec<String> {
+    vec!["node_modules/.bin".into(), ".venv/bin".into()]
 }
 
 impl Default for Settings {
@@ -80,14 +96,38 @@ impl Default for Settings {
             jobs: 0,
             fail_fast: true,
             continue_after_issues: true,
-            exclude: vec![".git/**".into(), "node_modules/**".into()],
+            exclude: default_excludes(),
             lowering_policy: LoweringPolicy::default(),
-            diagnostics_directory: Some(".velvet-glove/post-tool-use".into()),
+            diagnostics_directory: None,
             missing_tool_policy: MissingToolPolicy::default(),
             file_activity: None,
             deferred_reporting: DeferredReporting::default(),
+            command_timeout_seconds: DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            local_bin_dirs: default_local_bin_dirs(),
         }
     }
+}
+
+/// Global exclusions that apply unless a layer sets `merge.resetExclude`.
+///
+/// Every pattern is unanchored so nested copies are excluded too:
+///
+/// - `**/.git/**`: version-control internals, never source;
+/// - `**/node_modules/**`: installed JavaScript dependencies;
+/// - `**/.venv/**`: the conventional Python virtual environment;
+/// - `**/__pycache__/**`: Python bytecode caches;
+/// - `**/target/**`: Cargo (and Maven) build output.
+pub fn default_excludes() -> Vec<String> {
+    [
+        "**/.git/**",
+        "**/node_modules/**",
+        "**/.venv/**",
+        "**/__pycache__/**",
+        "**/target/**",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 /// Field-preserving settings overlay for one Pkl file.
@@ -109,7 +149,9 @@ pub struct SettingsPatch {
     pub fail_fast: Option<bool>,
     /// Optional `continue_after_issues` override.
     pub continue_after_issues: Option<bool>,
-    /// Optional replacement for the global exclusion list.
+    /// Optional additions to the global exclusion list. Patterns append to
+    /// the inherited list (which starts from [`default_excludes`]); a layer
+    /// replaces the list only together with `merge.resetExclude`.
     pub exclude: Option<Vec<String>>,
     /// Optional lowering-policy override.
     pub lowering_policy: Option<LoweringPolicy>,
@@ -124,6 +166,10 @@ pub struct SettingsPatch {
     pub file_activity: Option<FileActivitySettings>,
     /// Optional deferred-reporting settings overlay.
     pub deferred_reporting: Option<DeferredReportingPatch>,
+    /// Optional per-command timeout override.
+    pub command_timeout_seconds: Option<u64>,
+    /// Optional replacement for the project-local executable directories.
+    pub local_bin_dirs: Option<Vec<String>>,
 }
 
 impl SettingsPatch {
@@ -138,8 +184,10 @@ impl SettingsPatch {
         if let Some(continue_after_issues) = self.continue_after_issues {
             settings.continue_after_issues = continue_after_issues;
         }
-        if let Some(exclude) = self.exclude {
-            settings.exclude = exclude;
+        for pattern in self.exclude.into_iter().flatten() {
+            if !settings.exclude.contains(&pattern) {
+                settings.exclude.push(pattern);
+            }
         }
         if let Some(lowering_policy) = self.lowering_policy {
             settings.lowering_policy = lowering_policy;
@@ -155,6 +203,12 @@ impl SettingsPatch {
         }
         if let Some(deferred_reporting) = self.deferred_reporting {
             deferred_reporting.apply_to(&mut settings.deferred_reporting);
+        }
+        if let Some(seconds) = self.command_timeout_seconds {
+            settings.command_timeout_seconds = seconds;
+        }
+        if let Some(dirs) = self.local_bin_dirs {
+            settings.local_bin_dirs = dirs;
         }
     }
 }
@@ -201,31 +255,48 @@ pub struct DeferredReporting {
     pub master_agent: String,
     /// Whether categories with no files are included in rendered output.
     pub render_empty_buckets: bool,
+    /// Whether tool crashes and configuration errors block turn completion.
+    /// Missing executables follow [`Settings::missing_tool_policy`] instead.
+    pub block_on_operational_errors: bool,
+    /// Consecutive blocks allowed while the harness reports an active stop
+    /// hook; zero disables the cap.
+    pub max_consecutive_blocks: u32,
+    /// Total final-check output lines quoted to the agent across all issues.
+    pub excerpt_max_lines: u32,
+    /// Total final-check output characters quoted to the agent across all
+    /// issues.
+    pub excerpt_max_chars: u32,
 }
+
+const OPERATIONAL_PROBLEMS_TEMPLATE: &str = "velvet-glove could not run {% for problem in problems %}{{ problem.tool }} ({{ problem.reason }}{% if problem.missing_tool and problem.install_hint %}; {{ problem.install_hint }}{% elif problem.log_path %}; log: {{ problem.log_path }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}.";
 
 impl Default for DeferredReporting {
     fn default() -> Self {
+        let auto_fixed = "velvet-glove auto-fixed {% for file in auto_fixed_files[:10] %}{{ file.displayPath }}{% if file.fixedBy %} ({{ file.fixedBy | join(\", \") }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% if counts.auto_fixed > 10 %} and {{ counts.auto_fixed - 10 }} more{% endif %}; re-read before editing.";
         Self {
             groups: default_file_groups(),
-            clean: TemplatePair {
-                user: "Checked {{ counts.clean }} clean file{% if counts.clean != 1 %}s{% endif %}: {% for file in clean_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
-                agent: String::new(),
-            },
+            clean: TemplatePair::default(),
             auto_fixed: TemplatePair {
-                user: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}: {% for file in auto_fixed_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
-                agent: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}; re-read changed files before editing further.".into(),
+                user: auto_fixed.into(),
+                agent: auto_fixed.into(),
             },
             manual_fixes_needed: TemplatePair {
-                user: "{{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes across {{ counts.manual_groups }} group{% if counts.manual_groups != 1 %}s{% endif %}: {% for file in manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
-                agent: "{% for group in groups %}{% if group.manual_fix_files | length %}{{ group.display_name }}: {% for file in group.manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}. Reports: {% for path in group.artifact_paths %}{{ path }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not loop.last %}\n{% endif %}{% endif %}{% endfor %}".into(),
+                user: "velvet-glove: {{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes ({% for file in manual_fix_files[:10] %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}{% if counts.manual_fixes_needed > 10 %}, …{% endif %}). Details: {{ run.directory }}".into(),
+                agent: "velvet-glove found issues to fix before stopping:{% for issue in issues %}\n\n{{ issue.tool }}: {{ issue.files | join(\", \") }}\n{{ issue.excerpt }}{% endfor %}".into(),
             },
             operational_error: TemplatePair {
-                user: "{{ counts.operational_errors }} operational formatter/linter error{% if counts.operational_errors != 1 %}s{% endif %}. Details: {{ artifact_paths | join(\", \") }}".into(),
-                agent: "Operational formatter/linter failures remain. Inspect {{ artifact_paths | join(\", \") }} before retrying Stop.".into(),
+                user: OPERATIONAL_PROBLEMS_TEMPLATE.into(),
+                agent: format!(
+                    "{{% if blocks.operational %}}{OPERATIONAL_PROBLEMS_TEMPLATE} Fix the tool setup or ask the user.{{% endif %}}"
+                ),
             },
-            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} retained gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
-            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect retained gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
+            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if out_of_scope %}\nvelvet-glove: not blocking on issues outside the files changed this turn: {% for entry in out_of_scope %}{{ entry.tool }} ({{ entry.files[:5] | join(\", \") }}{% if entry.files | length > 5 %}, …{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}.{% endif %}{% if blocks.coverage %}\nvelvet-glove: file-activity coverage is incomplete ({{ counts.coverage_gaps }} gap{% if counts.coverage_gaps != 1 %}s{% endif %}); see {{ run.summary_path }}.{% endif %}".into(),
+            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\n\") }}{% if blocks.coverage %}\n\nvelvet-glove: file-activity coverage is incomplete; inspect the retained gaps in {{ run.summary_path }} before treating this run as exhaustive.{% endif %}".into(),
             render_empty_buckets: false,
+            block_on_operational_errors: false,
+            max_consecutive_blocks: 3,
+            excerpt_max_lines: 60,
+            excerpt_max_chars: 6_000,
         }
     }
 }
@@ -324,6 +395,14 @@ pub struct DeferredReportingPatch {
     pub master_agent: Option<String>,
     /// Optional empty-category rendering override.
     pub render_empty_buckets: Option<bool>,
+    /// Optional operational-error blocking override.
+    pub block_on_operational_errors: Option<bool>,
+    /// Optional consecutive-block cap override.
+    pub max_consecutive_blocks: Option<u32>,
+    /// Optional agent excerpt line budget override.
+    pub excerpt_max_lines: Option<u32>,
+    /// Optional agent excerpt character budget override.
+    pub excerpt_max_chars: Option<u32>,
 }
 
 impl DeferredReportingPatch {
@@ -352,6 +431,18 @@ impl DeferredReportingPatch {
         }
         if let Some(render_empty_buckets) = self.render_empty_buckets {
             reporting.render_empty_buckets = render_empty_buckets;
+        }
+        if let Some(block) = self.block_on_operational_errors {
+            reporting.block_on_operational_errors = block;
+        }
+        if let Some(max) = self.max_consecutive_blocks {
+            reporting.max_consecutive_blocks = max;
+        }
+        if let Some(lines) = self.excerpt_max_lines {
+            reporting.excerpt_max_lines = lines;
+        }
+        if let Some(chars) = self.excerpt_max_chars {
+            reporting.excerpt_max_chars = chars;
         }
     }
 }
@@ -454,6 +545,9 @@ pub struct Merge {
     pub reset_tools: Vec<String>,
     /// Restore deferred reporting configuration to its defaults before merging.
     pub reset_deferred_reporting: bool,
+    /// Clear the inherited global exclusion list, including the defaults, so
+    /// this layer's `settings.exclude` replaces it instead of appending.
+    pub reset_exclude: bool,
 }
 
 /// Top-level configuration section that a merge layer can reset.
@@ -502,6 +596,30 @@ pub struct ToolSpec {
     pub diagnostics: Diagnostics,
     /// Whether the tool participates when referenced by the run list.
     pub enabled: bool,
+    /// Arguments prepended to every command's `ExtraArgs` expansion.
+    pub extra_args: Vec<String>,
+    /// Environment variables set for every command of this tool.
+    pub env: BTreeMap<String, String>,
+    /// Per-command timeout override in seconds; zero disables the limit.
+    pub timeout_seconds: Option<u64>,
+    /// Project-detection hints used by `velvet-glove init`; never read by hooks.
+    pub detect: Option<Detect>,
+}
+
+/// Project-detection hints for one tool, used only when generating a policy.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Detect {
+    /// Project-relative globs whose presence suggests the project uses the tool.
+    pub indicators: Vec<String>,
+    /// Project-relative file paths mapped to text that suggests the tool.
+    pub contains: BTreeMap<String, String>,
+    /// Mutually exclusive slot such as `python-format`.
+    pub role: Option<String>,
+    /// Whether to pick this tool for its role when no indicator decides.
+    pub default: bool,
+    /// Short reason shown by `init`, e.g. why the tool is opt-in only.
+    pub note: Option<String>,
 }
 
 impl Default for ToolSpec {
@@ -522,6 +640,10 @@ impl Default for ToolSpec {
             messages: Messages::default(),
             diagnostics: Diagnostics::default(),
             enabled: true,
+            extra_args: Vec::new(),
+            env: BTreeMap::new(),
+            timeout_seconds: None,
+            detect: None,
         }
     }
 }
@@ -540,6 +662,9 @@ pub struct Workflow {
     pub invocation: InvocationGranularity,
     /// Whether this workflow participates in deferred execution.
     pub enabled: bool,
+    /// Arguments added to the `ExtraArgs` expansion of both check and remedy,
+    /// after the tool's and before the command's own.
+    pub extra_args: Vec<String>,
 }
 
 impl Default for Workflow {
@@ -550,6 +675,7 @@ impl Default for Workflow {
             check_scope: CheckScope::default(),
             invocation: InvocationGranularity::default(),
             enabled: true,
+            extra_args: Vec::new(),
         }
     }
 }
@@ -694,7 +820,8 @@ pub enum ArgToken {
     ProjectRoot,
     /// Executable selected for the current tool command.
     ToolExecutable,
-    /// Literal extra arguments configured on the phase.
+    /// Extra arguments: the tool's, then the workflow's, then the command's
+    /// or phase's own `extraArgs`.
     ExtraArgs,
 }
 

@@ -35,4 +35,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     issuesAgent =
       "errcheck reports unchecked errors; inspect diagnostics at {{ diagnostics_path }}."
   }
+
+  detect = new Config.Detect {
+    role = "go-lint"
+    note = "opt-in only: golangci-lint or go vet is the usual choice"
+  }
 }

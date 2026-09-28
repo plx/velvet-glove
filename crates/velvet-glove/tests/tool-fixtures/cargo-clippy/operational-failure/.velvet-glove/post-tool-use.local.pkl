@@ -3,13 +3,9 @@ import "Builtins.pkl"
 
 tools {
   ["cargo-clippy"] = (Builtins.cargoClippy) {
-    phases {
-      ["fix"] {
-        // Exercise cargo's own usage-error exit (1) through an unrecognized
-        // flag — genuinely operational, unlike the 101 that compile errors,
-        // lint violations, and bad clippy.toml/Cargo.toml all share.
-        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
-      }
-    }
+    // A toolchain that is not installed: the rustup proxy exits 1 before
+    // cargo runs, an environment problem rather than a source issue. cargo
+    // itself reports every error, including a bad clippy.toml, as 101.
+    env { ["RUSTUP_TOOLCHAIN"] = "velvet-glove-missing-toolchain" }
   }
 }

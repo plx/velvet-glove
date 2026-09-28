@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 
 pub use catalog::{
     CatalogValidationError, render_builtin_catalog_markdown, validate_builtin_catalog,
+    validate_run_config,
 };
 pub use error::PklConfigError;
 pub use eval::{
@@ -45,19 +46,27 @@ pub use schema::{
 pub struct Loaded {
     /// The merged configuration after the discovery chain.
     pub config: RunnerConfig,
-    /// Project root inferred from the inner-most project config (or the cwd
-    /// if none was found).
+    /// Nearest ancestor of `cwd` holding a project or local config, or `cwd`
+    /// itself (the harness workspace root) when none exists.
     pub project_root: PathBuf,
 }
 
 /// Discover and load Pkl configs around `cwd`.
 ///
 /// When `override_path` is provided, the discovery chain is bypassed and only
-/// that file is loaded.
+/// that file is loaded. The merged configuration is validated with
+/// [`validate_run_config`] before it is returned.
 pub fn discover_and_load(
     cwd: &Path,
     override_path: Option<&Path>,
 ) -> Result<Loaded, PklConfigError> {
+    let loaded = load_unvalidated(cwd, override_path)?;
+    validate_run_config(&loaded.config)
+        .map_err(|error| PklConfigError::ConfigValidation(error.to_string()))?;
+    Ok(loaded)
+}
+
+fn load_unvalidated(cwd: &Path, override_path: Option<&Path>) -> Result<Loaded, PklConfigError> {
     if let Some(path) = override_path {
         let config = merge::merge_patch_chain(std::iter::once(evaluate_pkl_file_patch(path)?));
         // `--config PATH` accepts arbitrary locations (e.g. `/tmp/custom.pkl`),
@@ -70,18 +79,11 @@ pub fn discover_and_load(
     }
 
     let chain = discovery::discover(cwd);
+    let project_root = discovery::project_root(&chain, cwd);
 
     let mut configs = Vec::with_capacity(chain.len());
-    let mut project_root = cwd.to_path_buf();
     for discovered in &chain {
-        let config = evaluate_pkl_file_patch(&discovered.path)?;
-        if matches!(
-            discovered.kind,
-            discovery::DiscoveredKind::Project | discovery::DiscoveredKind::Local
-        ) {
-            project_root = discovery::project_root_for(discovered, cwd);
-        }
-        configs.push(config);
+        configs.push(evaluate_pkl_file_patch(&discovered.path)?);
     }
 
     let config = if configs.is_empty() {

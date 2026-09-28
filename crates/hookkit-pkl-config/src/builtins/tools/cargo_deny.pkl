@@ -1,22 +1,17 @@
 /// cargo-deny — Rust dependency linter (licenses, bans, advisories, sources).
 ///
-/// `advisories` fetches/reads the RustSec advisory database, so this needs
-/// network access (or a warm local cache) the first time it runs in an
-/// environment — unlike the rest of this catalog, which never talks to the
-/// network. `workspaceIndicator = "deny.toml"` makes that opt-in structural
-/// rather than a policy flag: a project only gets `cargo-deny` jobs from
-/// files whose nearest ancestor (up to the project root) actually has a
-/// `deny.toml`, so a Rust repo that never added one never triggers this
-/// tool, matching how `bundle-audit`/`govulncheck` (also network-dependent)
-/// are already handled in this catalog. `check` runs from the directory
-/// containing that `deny.toml` (the runner's workspace-indicator cwd), so no
-/// `--manifest-path` is needed.
+/// The advisories check fetches the RustSec advisory database, so this tool
+/// needs network access (or a warm cache). It is opt-in twice over: `init`
+/// only suggests it when `deny.toml` exists, and `workspaceIndicator` means a
+/// project without a `deny.toml` (up to the project root) gets no job at all.
+/// `check` runs from the directory holding that `deny.toml`. `--locked` keeps
+/// `cargo metadata` from rewriting Cargo.lock.
 ///
-/// `cargo-deny check` has no autofix; a rejected license/ban/advisory/source
-/// exits 4 (confirmed empirically), while a malformed `deny.toml` or a
-/// network/IO problem exits 1 — genuinely distinguishable, so the latter
-/// falls through to `unexpected = "failure"` rather than being misread as a
-/// source issue.
+/// The exit code is a bitmask of the failed checks: advisories 1, bans 2,
+/// licenses 4, sources 8 (so 1-15 are all findings). A malformed `deny.toml`,
+/// a stale Cargo.lock, a failed advisory fetch and a usage error also exit 1
+/// or 2, indistinguishable from findings, so they surface as issues too; the
+/// diagnostics say which it was.
 
 module velvet_glove.builtins.tools.CargoDeny
 
@@ -26,7 +21,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "cargo-deny"
   displayName = "cargo deny"
   executable = "cargo-deny"
-  installHint = "install cargo-deny with `cargo install cargo-deny`"
+  installHint = "install cargo-deny with `cargo install --locked cargo-deny`"
   workspaceIndicator = "deny.toml"
 
   files = new Config.FileSelection {
@@ -34,7 +29,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       "Cargo.toml"; "**/Cargo.toml"
       "Cargo.lock"; "**/Cargo.lock"
       "deny.toml"; "**/deny.toml"
-      ".deny.toml"; "**/.deny.toml"
     }
   }
 
@@ -49,7 +43,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 4 }
+        issues = new Listing<Int> { 1; 2; 3; 4; 5; 6; 7; 8; 9; 10; 11; 12; 13; 14; 15 }
         unexpected = "failure"
       }
     }
@@ -59,5 +53,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   messages = new Config.Messages {
     issuesAgent =
       "cargo deny reports issues; inspect diagnostics at {{ diagnostics_path }}."
+  }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "**/deny.toml" }
+    note = "config-only: fetches the RustSec advisory database over the network"
   }
 }

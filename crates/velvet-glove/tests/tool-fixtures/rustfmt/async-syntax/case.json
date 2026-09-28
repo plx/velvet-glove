@@ -1,0 +1,1 @@
+{"outcome": "clean", "note": "Formatted edition-2018+ syntax with no rustfmt.toml: without an explicit edition, standalone rustfmt parses as 2015 and fails on async fn."}

@@ -1,19 +1,17 @@
 /// cargo clippy — Rust linter with auto-fix.
 ///
-/// `cargo`/`rustc` use exit 101 as a generic failure code for *everything*:
-/// an ordinary compile error in the code being edited, a lint violation, a
-/// malformed `clippy.toml`, and a malformed `Cargo.toml` all exit 101 alike
-/// (confirmed empirically). The `fix` phase used to list 101 as `failure`,
-/// so an in-progress compile error mid-edit — the common case while an agent
-/// is still editing — aborted the run as an "operational failure" instead of
-/// surfacing as an ordinary source issue the agent must fix. There is no
-/// exit-code-level way to tell a compile error apart from a broken
-/// `clippy.toml` here, so `fix` now classifies 101 as `issues`, the same as
-/// `verify` already did; both phases agree, and the diagnostics text (shown
-/// either way) still tells a reader which kind of problem it was. A
-/// genuinely distinguishable operational failure remains reachable through
-/// `cargo`'s own usage errors (e.g. an unrecognized flag), which exit 1 and
-/// fall through to `unexpected = "failure"` below.
+/// Both commands end with `--` followed by ExtraArgs, so extraArgs are lint
+/// flags for clippy-driver (e.g. `-A unused_imports`) and apply identically to
+/// the fix and the verify pass. Verify puts `-D warnings` first so a later
+/// `-A <lint>` still silences that lint.
+///
+/// cargo exits 101 for every error it reports: a compile error in the code
+/// being edited, a denied lint, and a malformed `clippy.toml` or `Cargo.toml`
+/// alike. Both phases therefore classify 101 as `issues`, so a mid-edit
+/// compile error surfaces as a source issue rather than aborting `fix` as an
+/// operational failure (see the `compile-error` fixture); the diagnostics
+/// still show which kind of error it was. Other non-zero exits, such as
+/// rustup failing to resolve the toolchain (exit 1), remain `failure`.
 
 module velvet_glove.builtins.tools.CargoClippy
 
@@ -44,6 +42,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--allow-staged"
         "--allow-no-vcs"
         "--quiet"
+        "--"
         new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {
@@ -62,10 +61,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--workspace"
         "--all-targets"
         "--quiet"
-        new Config.ExtraArgs {}
         "--"
         "-D"
         "warnings"
+        new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
@@ -81,5 +80,10 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       "cargo clippy reports issues; inspect diagnostics at {{ diagnostics_path }}."
     issuesChangedAgent =
       "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
+  }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "**/Cargo.toml" }
+    role = "rust-lint"
   }
 }

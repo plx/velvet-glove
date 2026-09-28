@@ -57,4 +57,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    role = "js-deadcode"
+    note = "opt-in only: stricter knip"
+  }
 }

@@ -3,13 +3,9 @@ import "Builtins.pkl"
 
 tools {
   ["taplo-format"] = (Builtins.taploFormat) {
-    phases {
-      ["format"] {
-        // Exercise taplo's own usage-error exit (2) through an unrecognized
-        // flag — genuinely operational; the format phase has no issues
-        // bucket, so any non-clean, non-zero exit is a failure here.
-        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
-      }
-    }
+    // An unrecognized flag on every command: taplo exits 2 (usage error),
+    // which neither phase maps, so it is an operational failure. Tool-level
+    // extraArgs also reach the deferred check, which runs verify first.
+    extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
   }
 }

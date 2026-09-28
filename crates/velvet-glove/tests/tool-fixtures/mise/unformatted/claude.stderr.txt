@@ -1,2 +1,0 @@
-mise fmt: changed mise.toml
-hookkit: redirected user notices and diagnostics to protocol stderr

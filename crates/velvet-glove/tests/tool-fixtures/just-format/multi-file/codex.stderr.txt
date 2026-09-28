@@ -1,2 +1,0 @@
-just --fmt: changed example.dirty.just
-hookkit: redirected user notices and diagnostics to protocol stderr

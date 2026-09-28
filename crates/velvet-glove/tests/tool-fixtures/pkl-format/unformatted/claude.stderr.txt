@@ -1,2 +1,0 @@
-pkl format: changed example.pkl
-hookkit: redirected user notices and diagnostics to protocol stderr

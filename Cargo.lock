@@ -349,7 +349,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hookkit-antigravity"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "camino",
  "hookkit-core",
@@ -360,7 +360,7 @@ dependencies = [
 [[package]]
 name = "hookkit-claude"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "camino",
  "hookkit-core",
@@ -371,7 +371,7 @@ dependencies = [
 [[package]]
 name = "hookkit-codex"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "camino",
  "hookkit-core",
@@ -382,7 +382,7 @@ dependencies = [
 [[package]]
 name = "hookkit-common"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "hookkit-antigravity",
  "hookkit-claude",
@@ -395,7 +395,7 @@ dependencies = [
 [[package]]
 name = "hookkit-core"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "camino",
  "serde",
@@ -406,7 +406,7 @@ dependencies = [
 [[package]]
 name = "hookkit-file-activity"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "globset",
  "hookkit-common",
@@ -436,7 +436,7 @@ dependencies = [
 [[package]]
 name = "hookkit-runtime"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "camino",
  "hookkit-antigravity",
@@ -451,7 +451,7 @@ dependencies = [
 [[package]]
 name = "hookkit-session-state"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "fs2",
  "hookkit-core",
@@ -465,7 +465,7 @@ dependencies = [
 [[package]]
 name = "hookkit-shell"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "hookkit-antigravity",
  "hookkit-claude",
@@ -479,7 +479,7 @@ dependencies = [
 [[package]]
 name = "hookkit-tool-access"
 version = "0.1.0"
-source = "git+https://github.com/plx/agent-hook-kit?rev=83c49d46970602e8fb40a8afaeea521dfb7e9b61#83c49d46970602e8fb40a8afaeea521dfb7e9b61"
+source = "git+https://github.com/plx/agent-hook-kit?rev=828d8d6feacf60015ae325d798b2bc3f32b2bf3b#828d8d6feacf60015ae325d798b2bc3f32b2bf3b"
 dependencies = [
  "globset",
  "hookkit-common",
@@ -504,6 +504,7 @@ dependencies = [
  "hookkit-pkl-config",
  "hookkit-runtime",
  "hookkit-session-state",
+ "libc",
  "minijinja",
  "proptest",
  "serde",
@@ -1044,6 +1045,7 @@ name = "velvet-glove"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "globset",
  "hookkit-antigravity",
  "hookkit-claude",
  "hookkit-codex",
@@ -1056,6 +1058,7 @@ dependencies = [
  "hookkit-tool-runner",
  "serde_json",
  "wait-timeout",
+ "walkdir",
 ]
 
 [[package]]

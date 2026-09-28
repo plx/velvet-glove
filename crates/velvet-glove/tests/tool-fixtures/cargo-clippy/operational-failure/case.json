@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "Needs rustup-managed cargo (as installed by rustup or mise): an uninstalled RUSTUP_TOOLCHAIN makes the proxy exit 1."}

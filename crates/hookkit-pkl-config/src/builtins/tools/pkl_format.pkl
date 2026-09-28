@@ -12,12 +12,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*.pkl"; "**/*.pkl" }
-    // See pkl.pkl: these policy files `amends`/`import` embedded modules
-    // that don't exist on disk, so `pkl format` can't parse them either.
-    exclude = new Listing<String> {
-      "**/.velvet-glove/*.pkl"
-      "**/.agent-hook-kit/*.pkl"
-    }
   }
 
   phases = new Mapping<String, Config.Phase> {
@@ -52,4 +46,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "PklProject" }
+    role = "pkl-format"
+  }
 }

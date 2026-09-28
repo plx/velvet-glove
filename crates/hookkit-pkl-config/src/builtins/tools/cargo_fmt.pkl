@@ -47,4 +47,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "format"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { "**/Cargo.toml" }
+    role = "rust-format"
+  }
 }

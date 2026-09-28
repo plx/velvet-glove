@@ -46,4 +46,9 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
   phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> { ".golangci.yml"; ".golangci.yaml"; ".golangci.toml"; ".golangci.json" }
+    role = "go-lint"
+  }
 }

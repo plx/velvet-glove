@@ -1,5 +1,5 @@
 {
-  "description": "Track changed files and run Velvet Glove before the coding agent stops.",
+  "description": "Run Velvet Glove's formatters and linters before the coding agent stops, or after each edit when VELVET_GLOVE_MODE=immediate.",
   "hooks": {
     "SessionStart": [
       {
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-velvet-glove.sh\" post-tool",
-            "timeout": 30
+            "timeout": 300
           }
         ]
       }

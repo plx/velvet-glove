@@ -1,2 +1,0 @@
-tombi format: changed example.toml
-hookkit: redirected user notices and diagnostics to protocol stderr

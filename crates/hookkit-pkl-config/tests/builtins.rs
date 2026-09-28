@@ -150,7 +150,7 @@ fn ruff_builtin_matches_rust_spec() {
     assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
     assert_eq!(verify.writes, WriteBehavior::None);
 
-    assert_eq!(ruff.phase_order, vec!["format", "fix", "verify"]);
+    assert_eq!(ruff.phase_order, vec!["fix", "format", "verify"]);
 }
 
 #[test]
@@ -477,6 +477,7 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("--allow-staged"),
             literal("--allow-no-vcs"),
             literal("--quiet"),
+            literal("--"),
             token(ArgToken::ExtraArgs),
         ],
     );
@@ -499,10 +500,10 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
             literal("--workspace"),
             literal("--all-targets"),
             literal("--quiet"),
-            token(ArgToken::ExtraArgs),
             literal("--"),
             literal("-D"),
             literal("warnings"),
+            token(ArgToken::ExtraArgs),
         ],
     );
     assert_exit_codes(&verify.exit_codes, &[0], &[101], &[]);
