@@ -45,8 +45,8 @@ pub use schema::{
 pub struct Loaded {
     /// The merged configuration after the discovery chain.
     pub config: RunnerConfig,
-    /// Project root inferred from the inner-most project config (or the cwd
-    /// if none was found).
+    /// Nearest ancestor of `cwd` holding a project or local config, or `cwd`
+    /// itself (the harness workspace root) when none exists.
     pub project_root: PathBuf,
 }
 
@@ -70,18 +70,11 @@ pub fn discover_and_load(
     }
 
     let chain = discovery::discover(cwd);
+    let project_root = discovery::project_root(&chain, cwd);
 
     let mut configs = Vec::with_capacity(chain.len());
-    let mut project_root = cwd.to_path_buf();
     for discovered in &chain {
-        let config = evaluate_pkl_file_patch(&discovered.path)?;
-        if matches!(
-            discovered.kind,
-            discovery::DiscoveredKind::Project | discovery::DiscoveredKind::Local
-        ) {
-            project_root = discovery::project_root_for(discovered, cwd);
-        }
-        configs.push(config);
+        configs.push(evaluate_pkl_file_patch(&discovered.path)?);
     }
 
     let config = if configs.is_empty() {
