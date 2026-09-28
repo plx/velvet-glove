@@ -379,7 +379,7 @@ fn explicit_limitation(spec: &ToolSpec) -> String {
             "Per-file check requires POSIX `sh`, `mktemp`, and `diff`; formatting behavior depends on the installed yq version.".into()
         }
         "ruff" => {
-            "Lint remedies precede format remedies when both are initially dirty; a lint fix that dirties an initially clean format check is reported for manual follow-up after the bounded pass.".into()
+            "Lint remedies precede format remedies; a lint fix that dirties an initially clean format check makes the runner rerun that check and format before the final verification.".into()
         }
         _ => "Explicit checks are structurally validated; real-tool behavior is version-dependent.".into(),
     }

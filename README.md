@@ -103,6 +103,12 @@ override it.
 | Activity producer | `post-tool` | `post-tool` | `post-tool` |
 | Deferred consumer | `turn-completion` | `turn-completion` | `turn-completion` |
 
+At Stop, clean runs are silent and auto-fixes produce one terse line naming the
+files and tools. Only issues that need manual fixes block, and the agent then
+sees a bounded excerpt of each failing check instead of log paths. Missing or
+crashing tools and configuration errors are reported to the user without
+blocking.
+
 The consumer commits command artifacts and `summary.json` before changing the
 pending window. Clean and auto-fixed work is acknowledged; manual issues,
 operational failures, and unresolved coverage gaps are retained for retry.

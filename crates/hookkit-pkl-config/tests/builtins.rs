@@ -150,7 +150,7 @@ fn ruff_builtin_matches_rust_spec() {
     assert_exit_codes(&verify.exit_codes, &[0], &[1], &[2]);
     assert_eq!(verify.writes, WriteBehavior::None);
 
-    assert_eq!(ruff.phase_order, vec!["format", "fix", "verify"]);
+    assert_eq!(ruff.phase_order, vec!["fix", "format", "verify"]);
 }
 
 #[test]

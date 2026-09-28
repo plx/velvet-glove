@@ -201,31 +201,48 @@ pub struct DeferredReporting {
     pub master_agent: String,
     /// Whether categories with no files are included in rendered output.
     pub render_empty_buckets: bool,
+    /// Whether tool crashes and configuration errors block turn completion.
+    /// Missing executables follow [`Settings::missing_tool_policy`] instead.
+    pub block_on_operational_errors: bool,
+    /// Consecutive blocks allowed while the harness reports an active stop
+    /// hook; zero disables the cap.
+    pub max_consecutive_blocks: u32,
+    /// Total final-check output lines quoted to the agent across all issues.
+    pub excerpt_max_lines: u32,
+    /// Total final-check output characters quoted to the agent across all
+    /// issues.
+    pub excerpt_max_chars: u32,
 }
+
+const OPERATIONAL_PROBLEMS_TEMPLATE: &str = "velvet-glove could not run {% for problem in problems %}{{ problem.tool }} ({{ problem.reason }}{% if problem.missing_tool and problem.install_hint %}; {{ problem.install_hint }}{% elif problem.log_path %}; log: {{ problem.log_path }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}.";
 
 impl Default for DeferredReporting {
     fn default() -> Self {
+        let auto_fixed = "velvet-glove auto-fixed {% for file in auto_fixed_files[:10] %}{{ file.displayPath }}{% if file.fixedBy %} ({{ file.fixedBy | join(\", \") }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% if counts.auto_fixed > 10 %} and {{ counts.auto_fixed - 10 }} more{% endif %}; re-read before editing.";
         Self {
             groups: default_file_groups(),
-            clean: TemplatePair {
-                user: "Checked {{ counts.clean }} clean file{% if counts.clean != 1 %}s{% endif %}: {% for file in clean_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
-                agent: String::new(),
-            },
+            clean: TemplatePair::default(),
             auto_fixed: TemplatePair {
-                user: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}: {% for file in auto_fixed_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
-                agent: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}; re-read changed files before editing further.".into(),
+                user: auto_fixed.into(),
+                agent: auto_fixed.into(),
             },
             manual_fixes_needed: TemplatePair {
-                user: "{{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes across {{ counts.manual_groups }} group{% if counts.manual_groups != 1 %}s{% endif %}: {% for file in manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
-                agent: "{% for group in groups %}{% if group.manual_fix_files | length %}{{ group.display_name }}: {% for file in group.manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}. Reports: {% for path in group.artifact_paths %}{{ path }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not loop.last %}\n{% endif %}{% endif %}{% endfor %}".into(),
+                user: "velvet-glove: {{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes ({% for file in manual_fix_files[:10] %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}{% if counts.manual_fixes_needed > 10 %}, …{% endif %}). Details: {{ run.directory }}".into(),
+                agent: "velvet-glove found issues to fix before stopping:{% for issue in issues %}\n\n{{ issue.tool }}: {{ issue.files | join(\", \") }}\n{{ issue.excerpt }}{% endfor %}".into(),
             },
             operational_error: TemplatePair {
-                user: "{{ counts.operational_errors }} operational formatter/linter error{% if counts.operational_errors != 1 %}s{% endif %}. Details: {{ artifact_paths | join(\", \") }}".into(),
-                agent: "Operational formatter/linter failures remain. Inspect {{ artifact_paths | join(\", \") }} before retrying Stop.".into(),
+                user: OPERATIONAL_PROBLEMS_TEMPLATE.into(),
+                agent: format!(
+                    "{{% if blocks.operational %}}{OPERATIONAL_PROBLEMS_TEMPLATE} Fix the tool setup or ask the user.{{% endif %}}"
+                ),
             },
-            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} retained gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
-            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect retained gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
+            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if out_of_scope %}\nvelvet-glove: not blocking on issues outside the files changed this turn: {% for entry in out_of_scope %}{{ entry.tool }} ({{ entry.files[:5] | join(\", \") }}{% if entry.files | length > 5 %}, …{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}.{% endif %}{% if blocks.coverage %}\nvelvet-glove: file-activity coverage is incomplete ({{ counts.coverage_gaps }} gap{% if counts.coverage_gaps != 1 %}s{% endif %}); see {{ run.summary_path }}.{% endif %}".into(),
+            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\n\") }}{% if blocks.coverage %}\n\nvelvet-glove: file-activity coverage is incomplete; inspect the retained gaps in {{ run.summary_path }} before treating this run as exhaustive.{% endif %}".into(),
             render_empty_buckets: false,
+            block_on_operational_errors: false,
+            max_consecutive_blocks: 3,
+            excerpt_max_lines: 60,
+            excerpt_max_chars: 6_000,
         }
     }
 }
@@ -324,6 +341,14 @@ pub struct DeferredReportingPatch {
     pub master_agent: Option<String>,
     /// Optional empty-category rendering override.
     pub render_empty_buckets: Option<bool>,
+    /// Optional operational-error blocking override.
+    pub block_on_operational_errors: Option<bool>,
+    /// Optional consecutive-block cap override.
+    pub max_consecutive_blocks: Option<u32>,
+    /// Optional agent excerpt line budget override.
+    pub excerpt_max_lines: Option<u32>,
+    /// Optional agent excerpt character budget override.
+    pub excerpt_max_chars: Option<u32>,
 }
 
 impl DeferredReportingPatch {
@@ -352,6 +377,18 @@ impl DeferredReportingPatch {
         }
         if let Some(render_empty_buckets) = self.render_empty_buckets {
             reporting.render_empty_buckets = render_empty_buckets;
+        }
+        if let Some(block) = self.block_on_operational_errors {
+            reporting.block_on_operational_errors = block;
+        }
+        if let Some(max) = self.max_consecutive_blocks {
+            reporting.max_consecutive_blocks = max;
+        }
+        if let Some(lines) = self.excerpt_max_lines {
+            reporting.excerpt_max_lines = lines;
+        }
+        if let Some(chars) = self.excerpt_max_chars {
+            reporting.excerpt_max_chars = chars;
         }
     }
 }

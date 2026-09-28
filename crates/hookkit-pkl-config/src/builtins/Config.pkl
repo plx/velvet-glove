@@ -63,6 +63,17 @@ class DeferredReporting {
   masterUser: String?
   masterAgent: String?
   renderEmptyBuckets: Boolean?
+  /// Block Stop on tool crashes and configuration errors (default false:
+  /// notify the user only). Missing executables follow
+  /// settings.missingToolPolicy instead.
+  blockOnOperationalErrors: Boolean?
+  /// Allow at most this many consecutive blocks while the harness reports an
+  /// active stop hook (default 3); 0 disables the cap.
+  maxConsecutiveBlocks: UInt?
+  /// Total final-check output lines/characters quoted to the agent across all
+  /// issues (defaults 60 and 6000).
+  excerptMaxLines: UInt?
+  excerptMaxChars: UInt?
 }
 
 class FileActivity {
