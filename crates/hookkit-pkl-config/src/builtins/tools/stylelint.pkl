@@ -1,4 +1,12 @@
 /// stylelint — CSS / SCSS / Less / Sass linter and auto-fixer.
+///
+/// A malformed config file is a genuinely distinguishable operational
+/// failure (a JS exception, not exit 2 "issues"), but stylelint reports it
+/// by dumping an uncaught exception's full Node stack trace, including
+/// absolute paths into its own installed `node_modules` — outside the
+/// fixture workspace, so the harness cannot normalize them and the paths
+/// vary per machine/install. No `operational-failure` fixture is claimed
+/// for that reason (not because the failure is unclassifiable).
 
 module velvet_glove.builtins.tools.Stylelint
 
