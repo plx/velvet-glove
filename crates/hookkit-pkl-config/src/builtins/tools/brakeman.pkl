@@ -1,8 +1,13 @@
 /// Brakeman — security scanner for Ruby on Rails applications.
 ///
-/// Brakeman scans the entire Rails project rather than individual files, so
-/// the runner invokes it against the project root whenever any tracked Ruby
-/// file changes.
+/// Brakeman scans an entire Rails app rather than individual files, so the
+/// runner invokes it against the app's workspace root (the nearest ancestor
+/// directory containing a `Gemfile`) whenever any tracked Ruby or ERB file
+/// changes. `-p` must receive that same nested directory, not the overall
+/// project root: pointing brakeman at a monorepo root that isn't itself a
+/// Rails app makes it refuse to scan (`Please supply the path to a Rails
+/// application`, exit 4) instead of finding the real app one level down,
+/// verified against brakeman 8.0.6.
 
 module velvet_glove.builtins.tools.Brakeman
 
@@ -27,7 +32,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
         "--no-progress"
         "--no-summary"
         "-p"
-        new Config.ProjectRoot {}
+        new Config.Workspace {}
         new Config.ExtraArgs {}
       }
       exitCodes = new Config.ExitCodes {
