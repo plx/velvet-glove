@@ -8,10 +8,6 @@
 /// (verified against erb_lint 0.9.0). Limitation: an invalid config file
 /// exits 1, the same code used for "issues found", so an operational failure
 /// there is not distinguishable from a lint result through the exit code.
-/// When a batch mixes a fully-fixed file with one that still has issues,
-/// erb_lint's autocorrect output omits the fixed file entirely, so the
-/// runner has no positive signal to attribute it as auto-fixed; it is
-/// reported clean instead, even though its content did change on disk.
 
 module velvet_glove.builtins.tools.Erb
 

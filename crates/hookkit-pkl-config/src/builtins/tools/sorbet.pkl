@@ -7,13 +7,14 @@
 /// want to override `extraArgs` to point at specific paths.
 ///
 /// `srb tc` requires its current directory to directly contain `sorbet/`; it
-/// does not search parent directories the way rubocop or bundler do, and a
-/// missing `sorbet/` directory is reported on stdout but still exits 0 (looks
-/// clean, verified against Sorbet 0.6.13508). Without `workspaceIndicator`,
+/// does not search parent directories the way rubocop or bundler do; with no
+/// `sorbet/` directory it prints `No sorbet/ directory found` plus usage and
+/// exits 1 (verified against Sorbet 0.6.13508). Without `workspaceIndicator`,
 /// every invocation runs from the overall project root, so a nested Ruby app
-/// (its own `sorbet/config` under a subdirectory) would silently never be
-/// type-checked. `workspaceIndicator` makes the runner invoke `srb tc` from
-/// the nearest directory that actually has a `sorbet/config`. Issue exit code
+/// (its own `sorbet/config` under a subdirectory) was never type-checked and
+/// every edit to it surfaced as an operational failure instead.
+/// `workspaceIndicator` makes the runner invoke `srb tc` from the nearest
+/// directory that actually has a `sorbet/config`. Issue exit code
 /// 100 is verified; an invalid `sorbet/config` option exits 1, which is
 /// distinct from both 0 and 100 and is classified as a failure by default.
 
