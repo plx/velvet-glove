@@ -12,6 +12,17 @@ spec: Config.ToolSpec = new Config.ToolSpec {
 
   files = new Config.FileSelection {
     include = new Listing<String> { "*.pkl"; "**/*.pkl" }
+    // Velvet Glove's own project policy files (post-tool-use.pkl,
+    // post-tool-use.local.pkl, and their legacy .agent-hook-kit peers)
+    // `amends`/`import` the embedded `Config.pkl`/`Builtins.pkl` modules by
+    // relative path. Those modules are staged into the runner, not present
+    // on disk, so a plain `pkl eval` on these files always fails with
+    // "Cannot find module", misreporting a perfectly valid policy edit as a
+    // source issue. Exclude them; the runner validates policy itself.
+    exclude = new Listing<String> {
+      "**/.velvet-glove/*.pkl"
+      "**/.agent-hook-kit/*.pkl"
+    }
   }
 
   phases = new Mapping<String, Config.Phase> {
