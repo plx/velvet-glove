@@ -1,4 +1,12 @@
 /// reek — Ruby code-smell detector.
+///
+/// Batch invocation is safe: reek accepts and correctly attributes multiple
+/// file arguments (verified against reek 6.5.0). An invalid `.reek.yml`
+/// raises an error and exits 1, distinct from both `clean` (0) and `issues`
+/// (2), so it is already classified as a failure by the default `unexpected`
+/// policy. Limitation: a Ruby syntax error in a scanned file is reported on
+/// stdout as outside reek's scope but still exits 0 (looks clean), so that
+/// case cannot be distinguished from a real clean pass through the exit code.
 
 module velvet_glove.builtins.tools.Reek
 
