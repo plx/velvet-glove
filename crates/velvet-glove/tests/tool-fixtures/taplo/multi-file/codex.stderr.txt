@@ -1,0 +1,19 @@
+warning: taplo: issues remain; diagnostics: <workspace>/.velvet-glove/taplo-agent-hook/test-session_test-turn_taplo-tool_taplo-tool-issues.txt
+taplo diagnostics:
+[verify] command: taplo lint <workspace>/example.clean.toml <workspace>/example.dirty.toml
+status: Some(1)
+classification: Some(Issues)
+stderr:
+ INFO taplo:lint_files:collect_files: found files total=2 excluded=0 files=["<workspace>/example.clean.toml", "<workspace>/example.dirty.toml"] cwd="<workspace>"
+error: conflicting keys
+  ┌─ <workspace>/example.dirty.toml:2:1
+  │
+1 │ key = 1
+  │ --- duplicate found here
+2 │ key = 2
+  │ ^^^ duplicate key
+
+ERROR taplo:lint_files: invalid file error=semantic errors found path="<workspace>/example.dirty.toml"
+ERROR operation failed error=some files were not valid
+artifact: <workspace>/.velvet-glove/taplo-agent-hook/test-session_test-turn_taplo-tool_taplo-tool-issues.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

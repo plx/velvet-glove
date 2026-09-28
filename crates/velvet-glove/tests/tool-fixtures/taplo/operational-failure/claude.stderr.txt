@@ -1,0 +1,16 @@
+error: taplo: phase `verify` failed; diagnostics: <workspace>/.velvet-glove/taplo-agent-hook/test-session_taplo-tool_taplo-tool-failure.txt
+taplo failure diagnostics:
+== phase verify failed (exit Some(2)) ==
+[verify] command: taplo lint --this-flag-does-not-exist <workspace>/example.toml
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: unexpected argument '--this-flag-does-not-exist' found
+
+  tip: to pass '--this-flag-does-not-exist' as a value, use '-- --this-flag-does-not-exist'
+
+Usage: taplo lint [OPTIONS] [FILES]...
+
+For more information, try '--help'.
+artifact: <workspace>/.velvet-glove/taplo-agent-hook/test-session_taplo-tool_taplo-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

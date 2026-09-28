@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["taplo"] = (Builtins.taplo) {
+    phases {
+      ["verify"] {
+        // Exercise taplo's own usage-error exit (2) through an unrecognized
+        // flag — genuinely operational, distinguishable from a lint issue
+        // (exit 1) or unparseable TOML (also exit 1).
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}
