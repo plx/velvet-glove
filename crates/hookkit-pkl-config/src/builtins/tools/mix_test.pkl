@@ -1,7 +1,16 @@
 /// mix test — Elixir test runner.
 ///
-/// DRAFT: tests run for the whole Mix project, not per-file. The file list is
-/// only used as a gate; tests are invoked at the project root.
+/// Tests run for the whole Mix project, not per-file. The file list is only
+/// used as a gate; tests are invoked at the project root. This tool runs the
+/// project's full test suite, which is slower and more disruptive than a
+/// formatter or linter; this catalog has no default-selection mechanism, but
+/// a project's own `run` list should include it deliberately, not by reflex.
+///
+/// Verified against Elixir/mix 1.20.4: a project that fails to *compile*
+/// (e.g. a broken source file) exits 1, distinct from exit 2 for failing
+/// *tests* in an otherwise-compiling project, so the two are correctly
+/// separable (compile failure -> operational failure via the default
+/// `unexpected` policy; test failure -> issues).
 
 module velvet_glove.builtins.tools.MixTest
 
