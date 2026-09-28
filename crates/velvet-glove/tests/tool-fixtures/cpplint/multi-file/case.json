@@ -1,0 +1,1 @@
+{"outcome": "manual", "files": {"example.cpp": "manual", "example.other.cpp": "manual"}, "note": "cpplint has no diagnostic adapter for per-file attribution, so a batched invocation with any issue conservatively marks every cited file manual, even example.cpp, which cpplint itself reports clean."}

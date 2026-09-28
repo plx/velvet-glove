@@ -1,5 +1,10 @@
 /// cpplint — Google C++ style checker.
-
+///
+/// Verified at 2.0.2: style violations and a usage error (unknown flag) both
+/// exit 1, and a broken `CPPLINT.cfg` (unknown config key) only warns and
+/// still exits 0 after linting normally. There is no operational exit code
+/// distinguishable from "issues found", so no `operational-failure` fixture
+/// case is possible; see the fixture README note in this tool's directory.
 module velvet_glove.builtins.tools.CppLint
 
 import "../Config.pkl" as Config
