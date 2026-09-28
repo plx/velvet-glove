@@ -1,5 +1,11 @@
-/// clang-format — C/C++ formatter.
-
+/// clang-format — C/C++/Objective-C formatter.
+///
+/// clang-format exits 1 for a genuine formatting issue AND for every
+/// operational failure this spec can trigger without a wrapper (missing
+/// file, unrecognized flag, an invalid `.clang-format` style config) — all
+/// verified indistinguishable at 23.1.2. There is no separate operational
+/// exit code to declare, so no `operational-failure` fixture case is
+/// possible; see the fixture README note in this tool's directory.
 module velvet_glove.builtins.tools.ClangFormat
 
 import "../Config.pkl" as Config
@@ -20,6 +26,8 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       "*.hh"; "**/*.hh"
       "*.cxx"; "**/*.cxx"
       "*.hxx"; "**/*.hxx"
+      "*.m"; "**/*.m"
+      "*.mm"; "**/*.mm"
     }
   }
 
