@@ -1,0 +1,16 @@
+error: just --fmt: phase `format` failed; diagnostics: <workspace>/.velvet-glove/just-format-agent-hook/test-session_test-turn_just-format-tool_just-format-tool-failure.txt
+just --fmt failure diagnostics:
+== phase format failed (exit Some(2)) ==
+[format] command: just --fmt --unstable --this-flag-does-not-exist --justfile <workspace>/example.just
+status: Some(2)
+classification: Some(Failure)
+stderr:
+error: unexpected argument '--this-flag-does-not-exist' found
+
+  tip: to pass '--this-flag-does-not-exist' as a value, use '-- --this-flag-does-not-exist'
+
+Usage: just --fmt --unstable [ARGUMENTS]...
+
+For more information, try '--help'.
+artifact: <workspace>/.velvet-glove/just-format-agent-hook/test-session_test-turn_just-format-tool_just-format-tool-failure.txt
+hookkit: redirected user notices and diagnostics to protocol stderr

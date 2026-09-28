@@ -1,0 +1,15 @@
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["just-format"] = (Builtins.justFormat) {
+    phases {
+      ["format"] {
+        // Exercise just's own usage-error exit (2) through an unrecognized
+        // flag — genuinely operational; the format phase has no issues
+        // bucket, so any non-clean, non-zero exit is a failure here.
+        extraArgs = new Listing<String> { "--this-flag-does-not-exist" }
+      }
+    }
+  }
+}
