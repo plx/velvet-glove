@@ -1,13 +1,11 @@
 /// just-format — format a Justfile with `just --fmt --unstable`.
 ///
-/// `just --fmt --justfile <path>` only accepts a single justfile per
-/// invocation. Batching two or more cited justfiles into one `Files` argv
-/// expansion doesn't fail loudly — `just` reads the first path as the
-/// `--justfile` value and the rest as *recipe names* to run, so it either
-/// errors confusingly ("path-prefixed recipes may not be used with
-/// --justfile", confirmed empirically) or, worse, tries to run recipes
-/// instead of formatting. `phaseInvocation = "per-file"` makes the runner
-/// invoke this tool once per cited file instead.
+/// `just --fmt --justfile <path>` formats exactly one justfile. Batching two
+/// cited justfiles into one `Files` expansion makes `just` read the extra
+/// paths as recipe arguments and exit 1 ("Path-prefixed recipes may not be
+/// used with `--justfile`", just 1.45) without formatting anything, which
+/// the format phase reports as an operational failure (see the `multi-file`
+/// fixture). `phaseInvocation = "per-file"` runs one invocation per file.
 
 module velvet_glove.builtins.tools.JustFormat
 
