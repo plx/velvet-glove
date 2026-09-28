@@ -1,0 +1,2 @@
+nixpkgs-fmt: changed example.nix
+hookkit: redirected user notices and diagnostics to protocol stderr
