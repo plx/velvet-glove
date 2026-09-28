@@ -1,4 +1,8 @@
 /// standard — JavaScript Standard Style linter (no config required).
+///
+/// standard has no config file to malform; the only failure mode observed
+/// (a parse error in the target file) reports through the same exit 1 as an
+/// ordinary lint finding, so no `operational-failure` fixture is claimed.
 
 module velvet_glove.builtins.tools.StandardJs
 

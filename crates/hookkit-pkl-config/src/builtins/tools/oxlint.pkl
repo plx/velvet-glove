@@ -1,4 +1,8 @@
 /// oxlint — Oxidation compiler's Rust-based JavaScript/TypeScript linter.
+///
+/// Config-parse errors, syntax errors, and lint issues all exit 1 with no
+/// other observable signal, so an operational failure is not distinguishable
+/// from an "issues" result here; no `operational-failure` fixture is claimed.
 
 module velvet_glove.builtins.tools.Oxlint
 
