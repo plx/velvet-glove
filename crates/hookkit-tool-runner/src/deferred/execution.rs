@@ -147,8 +147,7 @@ pub(crate) fn execute_deferred_workflows(
                 continue;
             }
         }
-        let needs_remedy = (states[index].last_check == Some(CheckOutcome::Issues)
-            && !out_of_scope_only(&states[index], scheduled))
+        let needs_remedy = states[index].last_check == Some(CheckOutcome::Issues)
             || (scheduled.check.is_none()
                 && scheduled.compatibility_translation
                 && scheduled.remedy.is_some());
@@ -292,24 +291,6 @@ pub(crate) fn execute_deferred_workflows(
         .logs
         .sort_by_key(|log| (log.tool_index, log.workflow_index, log.job_index, log.phase));
     execution
-}
-
-/// Whether the most recent check's issues name only files outside this
-/// workflow's candidates. Such issues are reported but never remedied: a
-/// workspace-wide fixer would otherwise rewrite files nobody touched.
-fn out_of_scope_only(state: &WorkflowState, scheduled: &ScheduledWorkflow) -> bool {
-    let scope = scheduled
-        .job
-        .files
-        .iter()
-        .chain(state.changed_files.iter())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let bases = resolution_bases(&scheduled.job.workspace_dir, &scheduled.project_root);
-    matches!(
-        attribute(&state.last_output, &scope, &bases),
-        Attribution::OutOfScope(_)
-    )
 }
 
 /// Attribute remaining issues to the candidate (or remedy-changed) files the

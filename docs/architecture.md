@@ -93,11 +93,10 @@ ordered remedy pass. Before a workflow whose check was clean decides against a
 remedy, it reruns that check if an earlier remedy wrote into its scope (for
 example, a Ruff lint fix that leaves a file unformatted). Snapshot-discovered
 writes then invalidate intersecting target-file or workspace checks for one
-authoritative final sweep. A check whose issues name only files outside its
-candidates is not remedied, and glob- or workspace-wide remedies are
-snapshotted from the outermost directory holding the tool's workspace
-indicator, so a `cargo clippy --fix --workspace` write in a sibling crate is
-seen and reported. A remedy that fails operationally is recorded as such, but
+authoritative final sweep. Glob- and workspace-wide remedies are snapshotted
+from the outermost directory holding the tool's workspace indicator, so a
+`cargo clippy --fix --workspace` write in a sibling crate is seen and
+reported as an auto-fix rather than made silently. A remedy that fails operationally is recorded as such, but
 the final check that follows still decides its files. Identical check
 commands within one stage (the compatibility translation pairs several
 mutators with one verifier) run once.

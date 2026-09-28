@@ -886,30 +886,6 @@ fn a_failed_remedy_leaves_the_final_check_authoritative() {
 }
 
 #[test]
-fn issues_only_in_other_files_are_never_remedied() {
-    let fixture = Fixture::new("out-of-scope-no-remedy");
-    fixture.file("other.rs", "untouched\n");
-    let candidate = fixture.file("candidate.rs", "MANUAL DIRTY\n");
-    let plan = vec![scheduled(
-        &fixture,
-        0,
-        candidate.clone(),
-        "check-other",
-        Some("fix"),
-    )];
-
-    let execution = execute_deferred_workflows(&plan, 1, true);
-
-    assert_eq!(fixture.trace_lines(), vec!["check-other"]);
-    assert_eq!(
-        std::fs::read_to_string(&candidate).expect("read candidate"),
-        "MANUAL DIRTY\n"
-    );
-    assert_eq!(only_status(&execution, &candidate), Some(FileStatus::Clean));
-    assert_eq!(execution.result.out_of_scope_reports().count(), 1);
-}
-
-#[test]
 fn workspace_wide_remedies_report_writes_in_sibling_members() {
     let fixture = Fixture::new("sibling-members");
     for member in ["a", "b"] {
