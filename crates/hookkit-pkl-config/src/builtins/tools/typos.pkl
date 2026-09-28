@@ -1,4 +1,16 @@
 /// typos — source-code typo finder with autofix support.
+///
+/// Confirmed empirically (typos-cli 1.50.3) that `--write-changes` rewrites
+/// any matched substring wherever it appears, including inside an
+/// identifier: a variable named e.g. `langauge_map` is silently rewritten to
+/// `language_map` in the one file typos is pointed at, which breaks any
+/// other file that still references the old name. This is not a
+/// misconfiguration to fix in the spec — it is how `--write-changes` works
+/// upstream, exactly like `hk`'s reference step, and the same risk applies
+/// to any project-wide "fix typos" tool. Users scope it with `_typos.toml`
+/// `[default.extend-identifiers]`/`extend-exclude` the same way they would
+/// for `hk` or a pre-commit hook; Velvet Glove does not second-guess that
+/// config by narrowing `files` here.
 
 module velvet_glove.builtins.tools.Typos
 

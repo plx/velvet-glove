@@ -1,0 +1,5 @@
+{
+  "outcome": "auto-fixed",
+  "files": {"example.1-clean.md": "clean", "example.2-fixable.md": "auto-fixed"},
+  "note": "untouched.md carries a real MD013 violation and is matched by this project's own .markdownlint-cli2.jsonc `globs`, but is not cited here. It must not appear in the outcome: --no-globs is what keeps the config's globs from being unioned into the invocation on top of the cited files."
+}

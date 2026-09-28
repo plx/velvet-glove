@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "extraArgs point -D at a dictionary file that does not exist, which codespell exits 64 for (neither the tool's clean 0 nor issues 65)."}

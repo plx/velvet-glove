@@ -1,0 +1,72 @@
+/// markdownlint-cli2 — markdown linter and formatter, the config-driven
+/// successor to markdownlint-cli.
+///
+/// Verified empirically against real markdownlint-cli2 0.23.3: exits 0 clean
+/// / 1 with findings on stdout / 2 on a malformed `.markdownlint-cli2.jsonc`.
+/// `--fix` mutates only the files it reports fixed.
+///
+/// Demonstrated bug avoided: without `--no-globs`, a project
+/// `.markdownlint-cli2.jsonc`'s own top-level `globs` property is unioned
+/// with the files given on the command line, so citing only the file an
+/// agent edited can still lint (and report issues in) unrelated files the
+/// config globs happen to match — confirmed by pointing `globs` at an
+/// untouched file with a violation and seeing it appear in a run that only
+/// named a different, clean file. `--no-globs` makes the command line the
+/// sole source of files, matching every other batch tool in this catalog,
+/// while still honoring the config's style rules.
+
+module velvet_glove.builtins.tools.MarkdownlintCli2
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "markdownlint-cli2"
+  displayName = "markdownlint-cli2"
+  executable = "markdownlint-cli2"
+  installHint = "install markdownlint-cli2 with `npm install -g markdownlint-cli2`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.md"; "**/*.md"
+      "*.markdown"; "**/*.markdown"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--no-globs"
+        "--fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--no-globs"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+
+  detect = new Config.Detect {
+    indicators = new Listing<String> {
+      ".markdownlint-cli2.jsonc"; ".markdownlint-cli2.yaml"; ".markdownlint-cli2.yml"
+      ".markdownlint-cli2.cjs"; ".markdownlint-cli2.mjs"
+    }
+    role = "markdown-lint"
+  }
+}

@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "extraArgs pass an unrecognized --format value, which harper-cli exits 2 for (neither the tool's clean 0 nor issues 1)."}

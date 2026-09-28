@@ -1,0 +1,1 @@
+{"outcome": "manual", "note": "The broken link is a local relative path, so this exercises lychee's exit 2 without any network access."}

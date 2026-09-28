@@ -1,9 +1,20 @@
-/// mdschema — schema-based validator for Markdown documents.
+/// mdschema — schema-based validator for Markdown documents
+/// (github.com/jackchuka/mdschema).
 ///
-/// DRAFT: shipped without a vetted fixture because mdschema requires a
-/// project-local `.mdschema.yml` and is not commonly installed. Verified
-/// against jdx/hk's reference; not exercised by Velvet Glove fixtures
-/// yet.
+/// Verified empirically against the real `mdschema` 0.15.4 binary (`go
+/// install github.com/jackchuka/mdschema/cmd/mdschema@latest`): `check`
+/// exits 0 clean / 1 on schema violations, and per-file attribution in
+/// batched invocations is correct. Two unrelated executables share this
+/// name — macOS ships a `/usr/bin/mdschema` Spotlight metadata-schema
+/// compiler, and the npm package `mdschema` is "Generate Markdown from
+/// JSON Schema", a doc generator with no `check` command — so `installHint`
+/// is explicit about the correct one.
+///
+/// Known limitation: a malformed `.mdschema.yml` also exits 1 (same as a
+/// schema violation), so an operational failure here is misclassified as a
+/// source issue rather than caught by `exitCodes.failure`. Low impact in
+/// practice: `workspaceIndicator` means the tool never runs at all unless
+/// `.mdschema.yml` is already present and discoverable.
 
 module velvet_glove.builtins.tools.Mdschema
 
@@ -13,7 +24,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   id = "mdschema"
   displayName = "mdschema"
   executable = "mdschema"
-  installHint = "install the mdschema CLI per project documentation"
+  installHint = "install mdschema with `go install github.com/jackchuka/mdschema/cmd/mdschema@latest`"
   workspaceIndicator = ".mdschema.yml"
 
   files = new Config.FileSelection {

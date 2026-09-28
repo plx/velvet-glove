@@ -1,6 +1,13 @@
 /// Asciidoctor — AsciiDoc syntax validator and processor.
 ///
-/// DRAFT: requires Ruby; not verified against a fixture in this catalog.
+/// Verified empirically against real Asciidoctor 2.0.26: exits 0 clean / 1
+/// promoted-to-error (`--failure-level=WARNING`), covering both document
+/// problems (e.g. a missing `include::[]` target) and CLI/runtime failures
+/// (bad flag, missing input file, unloadable `-r` library) — Asciidoctor
+/// does not use a distinct exit code for the latter, so an operational
+/// failure here is not distinguishable from a source issue by exit code.
+/// `exitCodes.failure` is left empty accordingly; document this rather than
+/// invent an unverifiable split.
 
 module velvet_glove.builtins.tools.Asciidoctor
 
@@ -40,6 +47,6 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   phaseOrder = new Listing<String> { "verify" }
 
   detect = new Config.Detect {
-    note = "opt-in only: draft spec"
+    note = "opt-in only: AsciiDoc has no zero-config canonical checker and no project indicator to key off of"
   }
 }

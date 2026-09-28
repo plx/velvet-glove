@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "The project's own .markdownlint-cli2.jsonc is malformed JSONC, which markdownlint-cli2 exits 2 for (neither the tool's clean 0 nor issues 1)."}
