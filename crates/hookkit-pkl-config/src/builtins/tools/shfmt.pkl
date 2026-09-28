@@ -1,4 +1,8 @@
 /// shfmt — shell script formatter.
+///
+/// Known limitation: `-d`/`-w` return exit 1 for a formatting diff, a shell
+/// parse error, and a missing input path alike, so an operational failure is
+/// not distinguishable from a source issue by exit code alone.
 
 module velvet_glove.builtins.tools.Shfmt
 
