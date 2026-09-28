@@ -1,0 +1,190 @@
+# CI-only tool installation: the BROAD tier of the "Real-tool fixtures"
+# lane (see ../mise.toml for the CORE tier and the split's rationale).
+#
+# Installed with `continue-on-error` in the workflow: a single tool failing
+# to resolve or install here must not fail the job, and none of these IDs
+# are ever in VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS. A tool that fails to
+# install just reports a structured `executable-unavailable` skip when its
+# fixture runs. Never add an entry here to VELVET_GLOVE_FIXTURE_REQUIRED_TOOLS
+# without also promoting it to ../mise.toml.
+#
+# Mirrors the velvet-glove tool-validation sweep's isolated toolbox
+# (macOS-verified; see that sweep's TOOLBOX.md), trimmed to what the
+# scheduled lane's fixtures actually exercise and merged with its
+# per-group extras (apple-jvm-c, docs-prose, new-langs, python,
+# rust-toml-misc, shell-data).
+#
+# Not declared here, deliberately: a handful of fixture tools have no
+# reachable mise/aqua/npm/pipx/gem/cargo/go-install backend at all and stay
+# permanently unprovisioned (they report `executable-unavailable`, which is
+# fine since none are required):
+#   - nil (Nix LSP): distributed only as a Nix flake, no crates.io/npm/
+#     RubyGems package and no downloadable GitHub release asset.
+#   - nixfmt: no crates.io package; NixOS/nixfmt's only GitHub release asset
+#     is a single unlabeled file, not a per-platform archive.
+#   - nixf-diagnose: ships only inside nixpkgs' `nixf` C++ project; no
+#     package on any registry mise can reach and no GitHub release assets.
+#   - php-cs (PHP_CodeSniffer): no aqua-registry entry
+#     ("squizlabs/php_codesniffer" is unregistered); upstream ships a
+#     PHP-runtime-dependent .phar via Composer, which needs a PHP toolchain
+#     this lane does not otherwise provision.
+# `swift-format` (executable `swift`, subcommand `format`) is also not
+# declared here: on macos-latest it comes for free from the pre-installed
+# Xcode/Swift toolchain, and on ubuntu-latest no toolchain is available, so
+# it is a documented macOS-only skip either way (see the workflow).
+
+[tools]
+# ---- language / platform runtimes (needed as a base for several backends
+#      below, and because several fixture tools are their subcommands) ----
+node = "lts"                 # eslint, prettier, tsc, knip, stylelint, xo, vite-plus, ...
+python = "3.12"               # black, mypy, pipx-backed tools, python-check-ast, ...
+ruby = "3.3"                  # rubocop, sorbet, asciidoctor, ...
+go = "prefix:1.27"            # go-install-backed tools below (mirrors ../mise.toml's go)
+java = "temurin-21"           # google-java-format, ktlint, ktfmt
+erlang = "latest"             # elixir runtime dependency
+elixir = "latest"             # mix-compile, mix-fmt, mix-test
+deno = "latest"               # deno, deno-check
+zig = "prefix:0.16"           # zig-fmt
+dart = "prefix:3.13"          # dart-format
+gleam = "prefix:1.18"         # gleam-format
+cue = "prefix:0.17"           # cue-fmt
+
+# NOT declared here: `rust`. Both GitHub-hosted runner images already ship
+# a recent stable Rust toolchain, and mise's core `rust` plugin would
+# otherwise delegate to (and mutate) a shared rustup install — see
+# ../mise.toml's cargo-fmt/cargo-clippy comment for why the CORE tier
+# doesn't declare it either. The `cargo:<crate>` backend below does not
+# have this problem: it runs `cargo install --root <mise's own isolated
+# dir>` against whatever ambient cargo it finds, so it works fine against
+# the runner's preinstalled toolchain with no `rust =` entry at all.
+
+# ---- tools already in mise's curated registry (short names) ----
+betterleaks = "latest"
+biome = "latest"
+buildifier = "latest"
+dprint = "latest"
+# editorconfig-checker 4.0.x renamed its darwin release asset and mise's
+# aqua-registry definition hasn't caught up, so `latest` 404s on macOS.
+# Pinned to the last version matching the old asset names.
+editorconfig-checker = "prefix:3.11"
+ghalint = "latest"
+gitleaks = "latest"
+golines = "latest"
+google-java-format = "latest"
+harper-cli = "latest"
+# hk backs the nine hk-util fixture tools (byte-order-marker,
+# check-added-large-files, check-case-conflict,
+# check-executables-have-shebangs, check-symlinks, fix-smart-quotes,
+# mixed-line-ending, newlines, trailing-whitespace).
+hk = "latest"
+just = "prefix:1.45"
+"conda:clang-format" = "latest"   # mise's built-in conda-forge backend; prebuilt, no LLVM build needed
+ktlint = "latest"
+lychee = "latest"
+opentofu = "latest"           # provides `tofu`
+oxlint = "latest"
+pinact = "latest"
+prettier = "latest"
+revive = "latest"
+rumdl = "latest"
+# SwiftFormat (nicklockwood) ships Linux and macOS release assets, but was
+# only verified on macOS during the sweep; attempted best-effort on Linux.
+swiftformat = "latest"
+terragrunt = "latest"         # provides `terragrunt`, used by hclfmt
+tflint = "latest"
+tombi = "prefix:1.5"
+ty = "latest"
+vacuum = "latest"
+vale = "latest"
+yamlfmt = "latest"
+zizmor = "latest"
+
+# swiftlint has no official Linux release; restrict it to macOS rather than
+# fail an install attempt on every ubuntu-latest run.
+swiftlint = { version = "latest", os = ["macos"] }
+
+# ormolu: mise registry entry, verified on macOS arm64 only during the
+# sweep; the ubuntu-latest asset is unverified but attempted best-effort.
+ormolu = "prefix:0.8"
+
+# hlint has no arm64 macOS release; the macOS leg pins the x86_64 asset,
+# which runs under Rosetta 2 (pre-installed on GitHub's macos-latest
+# runners). The Linux leg uses the default (native) release asset.
+"github:ndmitchell/hlint" = [
+  { version = "prefix:3.10", os = ["linux"] },
+  { version = "prefix:3.10", os = ["macos"], asset_pattern = "hlint-*-x86_64-osx.tar.gz" },
+]
+
+# alejandra's crates.io publish is lib-only (no [[bin]]), so the cargo
+# backend can't build it. Its GitHub releases ship only Linux musl
+# binaries, so it only runs on ubuntu-latest.
+"github:kamadorueda/alejandra" = { version = "latest", os = ["linux"] }
+
+# luacheck has no aqua-registry entry and no LuaRocks-aware mise backend.
+# Its GitHub release ships a single generic "luacheck" asset that is
+# actually a Linux x86_64 ELF binary, so it only runs on ubuntu-latest.
+"github:lunarmodules/luacheck" = { version = "latest", os = ["linux"] }
+
+# ---- npm-backed tools (isolated in mise's own npm install dirs) ----
+"npm:@contextlint/cli" = "latest"   # contextlint
+"npm:dclint" = "latest"
+"npm:eslint" = "latest"
+"npm:knip" = "latest"               # knip, knip-strict (shared executable)
+"npm:ktfmt" = "latest"              # needs java (declared above)
+"npm:markdownlint-cli" = "latest"   # provides `markdownlint` (not markdownlint-cli2)
+"npm:markdownlint-cli2" = "latest"
+# mdschema is provisioned via the go-install backend below
+# (go:github.com/jackchuka/mdschema/cmd/mdschema), not npm: mise's npm
+# backend hits an internal error on the `mdschema` package.
+"npm:oxfmt" = "latest"
+"npm:pyright" = "latest"
+"npm:sort-package-json" = "latest"
+"npm:standard" = "latest"
+"npm:stylelint" = "latest"
+"npm:tsc-files" = "latest"          # tsserver
+"npm:typescript" = "latest"         # provides `tsc`
+"npm:vite-plus" = "latest"          # provides `vp` (vp-check, vp-fmt, vp-lint)
+"npm:xo" = "latest"
+
+# ---- pipx-backed tools (isolated venvs managed by mise) ----
+"pipx:bandit" = "latest"
+"pipx:black" = "latest"
+"pipx:cmakelang" = "latest"      # PyPI package is `cmakelang`; provides the `cmake-format` entrypoint
+"pipx:codespell" = "latest"
+"pipx:cpplint" = "latest"
+"pipx:flake8" = "latest"
+"pipx:isort" = "latest"
+"pipx:mypy" = "latest"
+"pipx:pylint" = "latest"
+"pipx:ryl" = "latest"
+"pipx:sqlfluff" = "latest"
+"pipx:yamllint" = "latest"
+
+# ---- gem-backed tools (isolated gem homes managed by mise) ----
+"gem:asciidoctor" = "latest"
+"gem:brakeman" = "latest"
+"gem:bundler-audit" = "latest"      # provides `bundle-audit`
+"gem:erb_lint" = "latest"
+"gem:fasterer" = "latest"
+"gem:reek" = "latest"
+"gem:rubocop" = "latest"
+"gem:sorbet" = "latest"             # provides `srb`
+"gem:sorbet-runtime" = "latest"
+"gem:standard" = "latest"           # provides `standardrb`
+
+# ---- cargo-backed tools (no prebuilt-binary backend found; built against
+#      the runner's ambient system Rust toolchain, not the `rust` above
+#      since it isn't declared here) ----
+"cargo:cargo-deny" = "prefix:0.20"
+"cargo:deadnix" = "latest"
+"cargo:nixpkgs-fmt" = "latest"
+"cargo:selene" = "latest"
+"cargo:shellharden" = "latest"
+
+# ---- go-install-backed tools (small CLIs, quick to compile with the `go`
+#      toolchain declared above) ----
+"go:github.com/jackchuka/mdschema/cmd/mdschema" = "latest"
+"go:github.com/kisielk/errcheck" = "latest"
+"go:github.com/securego/gosec/v2/cmd/gosec" = "latest"
+"go:golang.org/x/tools/cmd/goimports" = "latest"
+"go:golang.org/x/vuln/cmd/govulncheck" = "latest"
