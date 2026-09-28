@@ -21,6 +21,13 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     }
   }
 
+  // `yq -iP a.yaml b.yaml` does not rewrite each file in place: it reads
+  // *both* documents and rewrites the FIRST path given as a multi-document
+  // stream containing both, leaving every other path untouched. A batched
+  // immediate invocation across N changed files silently corrupts N-1 of
+  // them. Force one `yq` process per file so `-iP` only ever sees one path.
+  phaseInvocation = "per-file"
+
   workflows = new Mapping<String, Config.Workflow> {
     ["format"] = new Config.Workflow {
       check = new Config.WorkflowCommand {

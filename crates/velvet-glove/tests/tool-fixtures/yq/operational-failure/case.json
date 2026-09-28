@@ -1,0 +1,1 @@
+{"outcome": "operational", "note": "malformed YAML makes `yq -iP` fail to parse; the format phase has no issues bucket, so any non-clean exit is an operational failure"}
