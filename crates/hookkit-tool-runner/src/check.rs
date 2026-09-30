@@ -5,14 +5,14 @@
 //! guard, or native lowering is involved. Command logs and a `summary.json`
 //! go to a fresh directory so excerpts can point at full output.
 
+use crate::convert::resolve_run_order;
 use crate::deferred::{
     DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary, execute_deferred_workflows,
     problem_entries,
 };
 use crate::paths::{display_roots, normalize_path};
 use crate::{
-    BatchToolSummary, build_deferred_plan, record_uncovered_candidates, resolve_run_order,
-    write_deferred_artifacts,
+    BatchToolSummary, build_deferred_plan, record_uncovered_candidates, write_deferred_artifacts,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
