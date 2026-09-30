@@ -2,6 +2,7 @@
 //! tool call changed and lowers the collected result to the harness.
 
 mod diagnostics;
+mod jobs;
 mod lowering;
 mod messages;
 mod outcomes;
@@ -11,7 +12,7 @@ pub use output::{RunnerDomainOutcome, RunnerPostToolUseOutput};
 
 use crate::convert::{convert_tool_spec, resolve_run_order};
 use crate::errors::{error_summary, invalid_data};
-use crate::jobs::{ToolContext, build_jobs, invocation_jobs, run_jobs};
+use crate::jobs::{ToolContext, build_jobs, invocation_jobs};
 use crate::matcher::FileMatcher;
 use crate::paths::{display_roots, normalize_path};
 use crate::project_lock::lock_project;
@@ -24,6 +25,7 @@ use hookkit_core::RuntimeContext;
 use hookkit_file_activity::FileActivityTarget;
 use hookkit_file_activity::observe_post_tool as observe_file_activity;
 use hookkit_pkl_config::schema as pkl;
+use jobs::run_jobs;
 use lowering::{lower_domain_outcome, lowering_warning_artifact};
 use outcomes::accumulate_outcomes;
 use output::{ExcerptLimits, is_empty_output};

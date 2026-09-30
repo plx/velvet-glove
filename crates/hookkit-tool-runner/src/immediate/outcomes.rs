@@ -1,10 +1,11 @@
 //! Folding one tool's job outcomes into the immediate runner's output.
 
 use super::diagnostics::{report_with_artifact, write_diagnostics};
+use super::jobs::{ChangeState, IssueState, ToolRunOutcome};
 use super::messages::{MessageArgs, render_template, template_failure_notice};
 use super::output::{AgentFeedback, AutoFixed, PendingIssues, RunnerPostToolUseOutput};
 use crate::immediate::ToolBatchStatus;
-use crate::jobs::{ChangeState, IssueState, ToolContext, ToolRunOutcome};
+use crate::jobs::ToolContext;
 use crate::paths::rel_display;
 use hookkit_common::UserNotice;
 use hookkit_core::RuntimeContext;

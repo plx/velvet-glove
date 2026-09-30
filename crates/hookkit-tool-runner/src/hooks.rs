@@ -3,11 +3,12 @@
 use crate::deferred::run_turn_completion_input;
 use crate::errors::{activity_error, invalid_data, state_error};
 use crate::immediate::run_post_tool_input;
+use crate::paths::state_root;
 use hookkit_common::PostToolUseOutput;
 use hookkit_core::{HarnessId, RuntimeContext};
 use hookkit_file_activity::FileActivityStore;
 use hookkit_file_activity::observe_post_tool as observe_file_activity;
-use hookkit_session_state::{SessionState, StateRoot};
+use hookkit_session_state::SessionState;
 use std::path::{Path, PathBuf};
 
 /// Execution options supplied by the Velvet Glove CLI.
@@ -137,11 +138,4 @@ fn ensure_session_metadata(
     let root = state_root(state_dir);
     SessionState::ensure(ctx, root).map_err(state_error)?;
     Ok(())
-}
-
-pub(crate) fn state_root(override_dir: Option<&Path>) -> StateRoot {
-    StateRoot::new(override_dir.map_or_else(
-        || std::env::temp_dir().join("velvet-glove").join("state"),
-        Path::to_path_buf,
-    ))
 }

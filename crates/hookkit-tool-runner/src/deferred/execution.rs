@@ -1,8 +1,9 @@
 use super::attribution::{Attribution, attribute, resolution_bases, source_failure_files};
-use super::{CheckOutcome, DeferredRunResult, OperationalProblem, ToolReport};
+use super::{CheckOutcome, CommandPhase, DeferredRunResult, OperationalProblem, ToolReport};
 use crate::command::{PhaseLog, PhaseStatus, RenderedCommand, render_command, run_phase_command};
-use crate::snapshot::Snapshot;
-use crate::{CheckScope, CommandPhase, ToolPhase, ToolSpec};
+use crate::jobs::{ToolContext, ToolJob, resolve_worker_count};
+use crate::snapshot::{Snapshot, write_scope};
+use crate::spec::{CheckScope, ToolPhase, ToolSpec};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,8 +24,6 @@ pub(crate) struct ScheduledWorkflow {
     pub job: ToolJob,
     pub project_root: PathBuf,
 }
-use crate::jobs::{ToolContext, ToolJob, resolve_worker_count};
-use crate::snapshot::write_scope;
 
 impl ScheduledWorkflow {
     pub(crate) fn report_id(&self) -> String {

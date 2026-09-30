@@ -1,5 +1,6 @@
-//! Path spelling helpers: normalization, display, and command-argument forms.
+//! Path helpers: normalization, display, command-argument forms, and the default state root.
 
+use hookkit_session_state::StateRoot;
 use std::path::{Component, Path, PathBuf};
 
 /// Absolute prefixes that excerpts rewrite to project-relative paths: the
@@ -52,6 +53,13 @@ pub(crate) fn rel_display(path: &Path, project_root: &Path) -> String {
     path.strip_prefix(project_root)
         .map(slash_path)
         .unwrap_or_else(|_| slash_path(path))
+}
+
+pub(crate) fn state_root(override_dir: Option<&Path>) -> StateRoot {
+    StateRoot::new(override_dir.map_or_else(
+        || std::env::temp_dir().join("velvet-glove").join("state"),
+        Path::to_path_buf,
+    ))
 }
 
 #[cfg(test)]
