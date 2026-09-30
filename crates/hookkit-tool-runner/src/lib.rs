@@ -46,15 +46,14 @@ pub use spec::{
 };
 
 use crate::command::{PhaseLog, PhaseStatus, format_logs};
-use crate::convert::{convert_tool_spec, resolve_run_order};
+use crate::convert::resolve_run_order;
 use crate::deferred::{
-    ActivityResolution, BatchSummaryParts, BatchToolSummary, BlockMetadata,
-    apply_deferred_state_disposition, build_batch_summary, plan_deferred_state_disposition,
-    record_activity_resolution, run_id, source_gap_messages,
+    ActivityResolution, BatchSummaryParts, BatchToolSummary, BlockMetadata, PlannedDeferredTool,
+    apply_deferred_state_disposition, build_batch_summary, build_deferred_plan,
+    plan_deferred_state_disposition, record_activity_resolution, run_id, source_gap_messages,
 };
 use crate::errors::{activity_error, error_summary, invalid_data, state_error};
 use crate::immediate::run_post_tool_input;
-use crate::jobs::{build_jobs, invocation_jobs};
 use crate::paths::{display_roots, normalize_path};
 use crate::project_lock::lock_project;
 use hookkit_common::{
@@ -72,7 +71,6 @@ use hookkit_session_state::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 const BATCHED_TOOLS_FAMILY: &str = "velvet-glove.batched-tools";
@@ -789,103 +787,6 @@ fn prune_run_bundles(runs: &Path, keep: usize, current: &Path) {
     for (_, stale) in bundles.into_iter().skip(keep.saturating_sub(1)) {
         let _ = std::fs::remove_dir_all(stale);
     }
-}
-
-#[derive(Debug)]
-struct PlannedDeferredTool {
-    index: usize,
-    spec: Arc<ToolSpec>,
-    files: Vec<PathBuf>,
-}
-
-fn build_deferred_plan(
-    schemas: &[&pkl::ToolSpec],
-    candidates: &[PathBuf],
-    project_root: &Path,
-    settings: &pkl::Settings,
-) -> hookkit_core::Result<(Vec<ScheduledWorkflow>, Vec<PlannedDeferredTool>)> {
-    let mut plan = Vec::new();
-    let mut planned_tools = Vec::new();
-    for (tool_index, schema) in schemas.iter().enumerate() {
-        if !schema.enabled {
-            continue;
-        }
-        for id in &schema.workflow_order {
-            if !schema.workflows.contains_key(id) {
-                return Err(invalid_data(format!(
-                    "tool `{}` workflowOrder references unknown workflow `{id}`",
-                    schema.id
-                )));
-            }
-        }
-        let spec = Arc::new(convert_tool_spec(schema, settings));
-        let matcher = FileMatcher::new(&spec.file_selection)?;
-        let files = candidates
-            .iter()
-            .filter(|path| matcher.matches(path, project_root))
-            .cloned()
-            .collect::<Vec<_>>();
-        if files.is_empty() {
-            continue;
-        }
-        let base_jobs = build_jobs(&files, project_root, &spec);
-        if base_jobs.is_empty() {
-            continue;
-        }
-        for (workflow_index, workflow) in spec.workflows.iter().enumerate() {
-            if !workflow.enabled {
-                continue;
-            }
-            if workflow.check.is_none() && !workflow.compatibility_translation {
-                return Err(invalid_data(format!(
-                    "tool `{}` workflow `{}` requires a non-mutating check",
-                    spec.id, workflow.id
-                )));
-            }
-            if workflow
-                .check
-                .as_ref()
-                .is_some_and(|check| check.writes != WriteBehavior::None)
-            {
-                return Err(invalid_data(format!(
-                    "tool `{}` workflow `{}` check must declare writes = none",
-                    spec.id, workflow.id
-                )));
-            }
-            if workflow
-                .remedy
-                .as_ref()
-                .is_some_and(|remedy| remedy.writes == WriteBehavior::None)
-            {
-                return Err(invalid_data(format!(
-                    "tool `{}` workflow `{}` remedy must declare a write scope",
-                    spec.id, workflow.id
-                )));
-            }
-            let jobs = invocation_jobs(&base_jobs, workflow.invocation);
-            for (job_index, job) in jobs.into_iter().enumerate() {
-                plan.push(ScheduledWorkflow {
-                    tool_index,
-                    workflow_index,
-                    job_index,
-                    spec: Arc::clone(&spec),
-                    workflow_id: workflow.id.clone(),
-                    check: workflow.check.clone(),
-                    remedy: workflow.remedy.clone(),
-                    check_scope: workflow.check_scope,
-                    compatibility_translation: workflow.compatibility_translation,
-                    job,
-                    project_root: project_root.to_path_buf(),
-                });
-            }
-        }
-        planned_tools.push(PlannedDeferredTool {
-            index: tool_index,
-            spec,
-            files,
-        });
-    }
-    Ok((plan, planned_tools))
 }
 
 /// Writes one text artifact at a run-relative path and returns its absolute

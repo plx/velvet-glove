@@ -6,6 +6,7 @@ mod execution_tests;
 mod guard;
 mod lowering;
 mod model;
+mod plan;
 mod reporting;
 mod summary;
 
@@ -29,6 +30,8 @@ pub use model::{
     FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
     ToolReportRef,
 };
+pub(crate) use plan::PlannedDeferredTool;
+pub(crate) use plan::build_deferred_plan;
 pub use reporting::{IssueExcerpt, ProblemSummary};
 pub(crate) use summary::BatchSummaryParts;
 pub(crate) use summary::BatchToolSummary;

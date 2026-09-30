@@ -8,10 +8,10 @@
 use crate::convert::resolve_run_order;
 use crate::deferred::{
     BatchToolSummary, DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary,
-    execute_deferred_workflows, problem_entries,
+    build_deferred_plan, execute_deferred_workflows, problem_entries,
 };
 use crate::paths::{display_roots, normalize_path};
-use crate::{build_deferred_plan, record_uncovered_candidates, write_deferred_artifacts};
+use crate::{record_uncovered_candidates, write_deferred_artifacts};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
