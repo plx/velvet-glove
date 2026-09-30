@@ -1,4 +1,5 @@
 mod attribution;
+mod disposition;
 mod execution;
 #[cfg(all(test, unix))]
 mod execution_tests;
@@ -17,6 +18,12 @@ pub(crate) use reporting::{
     BlockReasons, DeferredReporter, RenderedBuckets, RenderedMessages, TemplateRun, problem_entries,
 };
 
+pub(crate) use disposition::ActivityResolution;
+pub(crate) use disposition::DeferredStateDisposition;
+pub(crate) use disposition::apply_deferred_state_disposition;
+pub(crate) use disposition::plan_deferred_state_disposition;
+pub(crate) use disposition::record_activity_resolution;
+pub(crate) use disposition::source_gap_messages;
 pub use model::{
     ArtifactClassification, CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult,
     FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
