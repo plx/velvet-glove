@@ -136,7 +136,7 @@ pub fn run_check(request: CheckRequest<'_>) -> Result<CheckReport, CheckError> {
 
     let log_directory = new_log_directory(request.log_root)?;
     let mut execution = {
-        let _project = crate::lock_project(&project_root);
+        let _project = crate::project_lock::lock_project(&project_root);
         execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast)
     };
     let tool_summaries = write_deferred_artifacts(
