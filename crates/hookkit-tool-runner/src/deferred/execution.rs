@@ -2,9 +2,7 @@ use super::attribution::{Attribution, attribute, resolution_bases, source_failur
 use super::{CheckOutcome, DeferredRunResult, OperationalProblem, ToolReport};
 use crate::command::{PhaseLog, PhaseStatus, RenderedCommand, render_command, run_phase_command};
 use crate::snapshot::Snapshot;
-use crate::{
-    CheckScope, CommandPhase, ToolContext, ToolJob, ToolPhase, ToolSpec, resolve_worker_count,
-};
+use crate::{CheckScope, CommandPhase, ToolPhase, ToolSpec};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +23,7 @@ pub(crate) struct ScheduledWorkflow {
     pub job: ToolJob,
     pub project_root: PathBuf,
 }
+use crate::jobs::{ToolContext, ToolJob, resolve_worker_count};
 use crate::snapshot::write_scope;
 
 impl ScheduledWorkflow {

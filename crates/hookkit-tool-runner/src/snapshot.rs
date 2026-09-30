@@ -1,8 +1,8 @@
 //! Before/after file snapshots over the paths a tool's commands may write.
 
+use crate::jobs::{ToolContext, ToolJob};
 use crate::matcher::FileMatcher;
 use crate::spec::{FileSelection, WriteBehavior};
-use crate::{ToolContext, ToolJob};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

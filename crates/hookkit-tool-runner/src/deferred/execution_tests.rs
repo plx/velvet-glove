@@ -1,9 +1,10 @@
 use super::FileStatus;
 use super::execution::{DeferredExecution, ScheduledWorkflow, execute_deferred_workflows};
 use super::model::CommandPhase;
+use crate::jobs::ToolJob;
 use crate::{
-    CheckScope, CommandArgTemplate, ExitCodePolicy, FileSelection, PhaseMode, ToolJob, ToolPhase,
-    ToolSpec, UnexpectedExitPolicy, WriteBehavior,
+    CheckScope, CommandArgTemplate, ExitCodePolicy, FileSelection, PhaseMode, ToolPhase, ToolSpec,
+    UnexpectedExitPolicy, WriteBehavior,
 };
 use std::path::PathBuf;
 use std::sync::Arc;

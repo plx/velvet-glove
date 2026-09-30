@@ -1,8 +1,8 @@
 //! Rendering, locating, and running one external command, and its phase log.
 
+use crate::jobs::{ToolContext, ToolJob};
 use crate::paths::path_arg;
 use crate::spec::{CommandArgTemplate, ExitCodePolicy, ToolPhase, UnexpectedExitPolicy};
-use crate::{ToolContext, ToolJob};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;

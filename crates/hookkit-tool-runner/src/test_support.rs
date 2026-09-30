@@ -1,6 +1,6 @@
 //! Helpers shared by the crate's unit tests.
 
-use crate::ToolJob;
+use crate::jobs::ToolJob;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
