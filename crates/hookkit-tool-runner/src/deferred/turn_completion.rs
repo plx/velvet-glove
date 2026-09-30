@@ -17,9 +17,10 @@ use super::{
 };
 use crate::convert::resolve_run_order;
 use crate::errors::{activity_error, error_summary, invalid_data, state_error};
+use crate::hooks::state_root;
 use crate::paths::{display_roots, normalize_path};
 use crate::project_lock::lock_project;
-use crate::{state_root, vcs};
+use crate::vcs;
 use hookkit_common::{TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput};
 use hookkit_core::{RuntimeContext, Utf8PathBuf};
 use hookkit_file_activity::{
