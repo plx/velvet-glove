@@ -1,4 +1,4 @@
-//! What a deferred run does with pending file activity: resolution gaps, retries, and handled baselines.
+//! Pending-activity disposition after a deferred run: gaps, retries, and baselines.
 
 use super::{CoverageGap, DeferredRunResult, FileStatus};
 use crate::errors::{activity_error, invalid_data};

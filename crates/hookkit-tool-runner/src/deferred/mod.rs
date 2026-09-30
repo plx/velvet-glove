@@ -7,6 +7,7 @@ mod guard;
 mod lowering;
 mod model;
 mod reporting;
+mod summary;
 
 pub(crate) use attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 pub(crate) use execution::{
@@ -19,7 +20,6 @@ pub(crate) use reporting::{
 };
 
 pub(crate) use disposition::ActivityResolution;
-pub(crate) use disposition::DeferredStateDisposition;
 pub(crate) use disposition::apply_deferred_state_disposition;
 pub(crate) use disposition::plan_deferred_state_disposition;
 pub(crate) use disposition::record_activity_resolution;
@@ -30,3 +30,8 @@ pub use model::{
     ToolReportRef,
 };
 pub use reporting::{IssueExcerpt, ProblemSummary};
+pub(crate) use summary::BatchSummaryParts;
+pub(crate) use summary::BatchToolSummary;
+pub(crate) use summary::BlockMetadata;
+pub(crate) use summary::build_batch_summary;
+pub(crate) use summary::run_id;

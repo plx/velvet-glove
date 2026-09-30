@@ -7,13 +7,11 @@
 
 use crate::convert::resolve_run_order;
 use crate::deferred::{
-    DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary, execute_deferred_workflows,
-    problem_entries,
+    BatchToolSummary, DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary,
+    execute_deferred_workflows, problem_entries,
 };
 use crate::paths::{display_roots, normalize_path};
-use crate::{
-    BatchToolSummary, build_deferred_plan, record_uncovered_candidates, write_deferred_artifacts,
-};
+use crate::{build_deferred_plan, record_uncovered_candidates, write_deferred_artifacts};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
