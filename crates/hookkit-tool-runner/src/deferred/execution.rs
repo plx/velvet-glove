@@ -1,9 +1,9 @@
 use super::attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 use super::{CheckOutcome, DeferredRunResult, OperationalProblem, ToolReport};
+use crate::command::{PhaseLog, PhaseStatus, RenderedCommand, render_command, run_phase_command};
 use crate::{
-    CheckScope, CommandPhase, PhaseLog, PhaseStatus, RenderedCommand, Snapshot, ToolContext,
-    ToolJob, ToolPhase, ToolSpec, render_command, resolve_worker_count, run_phase_command,
-    write_scope,
+    CheckScope, CommandPhase, Snapshot, ToolContext, ToolJob, ToolPhase, ToolSpec,
+    resolve_worker_count, write_scope,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

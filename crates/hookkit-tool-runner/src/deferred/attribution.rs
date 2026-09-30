@@ -1,8 +1,8 @@
 //! Attribute a failing check's output to the files it names.
 
 use super::execution::combined_output;
+use crate::command::{PhaseLog, PhaseStatus};
 use crate::excerpt::strip_ansi;
-use crate::{PhaseLog, PhaseStatus};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
