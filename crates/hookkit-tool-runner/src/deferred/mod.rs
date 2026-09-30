@@ -10,6 +10,7 @@ mod model;
 mod plan;
 mod reporting;
 mod summary;
+mod turn_completion;
 
 pub(crate) use attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 pub(crate) use execution::{
@@ -23,11 +24,6 @@ pub(crate) use reporting::{
 
 pub(crate) use artifacts::prune_run_bundles;
 pub(crate) use artifacts::write_deferred_artifacts;
-pub(crate) use disposition::ActivityResolution;
-pub(crate) use disposition::apply_deferred_state_disposition;
-pub(crate) use disposition::plan_deferred_state_disposition;
-pub(crate) use disposition::record_activity_resolution;
-pub(crate) use disposition::source_gap_messages;
 pub use model::{
     ArtifactClassification, CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult,
     FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
@@ -35,8 +31,6 @@ pub use model::{
 };
 pub(crate) use plan::build_deferred_plan;
 pub use reporting::{IssueExcerpt, ProblemSummary};
-pub(crate) use summary::BatchSummaryParts;
 pub(crate) use summary::BatchToolSummary;
-pub(crate) use summary::BlockMetadata;
-pub(crate) use summary::build_batch_summary;
-pub(crate) use summary::run_id;
+pub(crate) use turn_completion::record_uncovered_candidates;
+pub(crate) use turn_completion::run_turn_completion_input;
