@@ -122,7 +122,8 @@ product paths share the runtime tool model (`spec.rs`), Pkl conversion
 (`convert.rs`), file selection (`matcher.rs`), job grouping and process
 plumbing (`jobs.rs`, `command.rs`, `snapshot.rs`), the project lock (`project_lock.rs`), and small helpers
 (`paths.rs`, `errors.rs`, `excerpt.rs`, `vcs.rs`). `hooks.rs` holds the hook
-entry points and their CLI options; `lib.rs` only declares modules and
+entry points and their CLI options, `check.rs` runs the Stop pipeline for
+`velvet-glove check` outside any hook, and `lib.rs` only declares modules and
 re-exports the public API.
 
 When a builtin has no explicit `workflows`, catalog validation proves its

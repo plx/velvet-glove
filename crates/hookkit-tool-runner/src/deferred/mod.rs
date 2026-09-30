@@ -1,3 +1,6 @@
+//! Deferred Stop path: plan, execute, attribute, report, and lower batched
+//! turn-completion checks, and commit their run bundles and pending state.
+
 mod artifacts;
 mod attribution;
 mod disposition;
