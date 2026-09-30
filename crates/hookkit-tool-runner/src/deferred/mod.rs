@@ -1,3 +1,4 @@
+mod artifacts;
 mod attribution;
 mod disposition;
 mod execution;
@@ -20,6 +21,8 @@ pub(crate) use reporting::{
     BlockReasons, DeferredReporter, RenderedBuckets, RenderedMessages, TemplateRun, problem_entries,
 };
 
+pub(crate) use artifacts::prune_run_bundles;
+pub(crate) use artifacts::write_deferred_artifacts;
 pub(crate) use disposition::ActivityResolution;
 pub(crate) use disposition::apply_deferred_state_disposition;
 pub(crate) use disposition::plan_deferred_state_disposition;
@@ -30,7 +33,6 @@ pub use model::{
     FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
     ToolReportRef,
 };
-pub(crate) use plan::PlannedDeferredTool;
 pub(crate) use plan::build_deferred_plan;
 pub use reporting::{IssueExcerpt, ProblemSummary};
 pub(crate) use summary::BatchSummaryParts;

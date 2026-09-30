@@ -8,10 +8,10 @@
 use crate::convert::resolve_run_order;
 use crate::deferred::{
     BatchToolSummary, DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary,
-    build_deferred_plan, execute_deferred_workflows, problem_entries,
+    build_deferred_plan, execute_deferred_workflows, problem_entries, write_deferred_artifacts,
 };
 use crate::paths::{display_roots, normalize_path};
-use crate::{record_uncovered_candidates, write_deferred_artifacts};
+use crate::record_uncovered_candidates;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -199,6 +199,6 @@ fn new_log_directory(root: &Path) -> Result<PathBuf, CheckError> {
             directory.display()
         ))
     })?;
-    crate::prune_run_bundles(root, RETAINED_CHECK_RUNS, &directory);
+    crate::deferred::prune_run_bundles(root, RETAINED_CHECK_RUNS, &directory);
     Ok(directory)
 }
