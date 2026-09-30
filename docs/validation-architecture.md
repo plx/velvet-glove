@@ -77,8 +77,15 @@ needs three or four cases:
 - one representative issue case (name it after the issue, e.g. `unformatted`,
   `missing-import`, `type-issue`) — expect issue classification; for fixers,
   include `expected/` post-state.
-- `operational-failure` — bad config / unparseable input, expect operational
-  classification (never misread as a source issue).
+- `operational-failure` — bad or missing tool config, a crash, or a usage
+  error: something the agent cannot fix by editing its file. Expect
+  operational classification (never misread as a source issue). Skip it, with
+  a note, when the tool genuinely cannot distinguish such a failure from an
+  issue.
+- optionally `syntax-error` — the edited file itself does not parse. That is
+  the agent's to fix, so expect `manual`, with the tool's parser error in the
+  agent excerpt (a failing check that names the edited file at a location is
+  a source issue, not an operational one).
 - optionally `multi-file` — when batch/workspace behavior is materially
   different from single-file.
 
@@ -157,7 +164,7 @@ git ls-tree -r --name-only archive/tool-validation-v1 crates/velvet-glove/tests/
 Worth extracting:
 
 - **Fixture inputs and expected outputs** (clean / issue / operational-failure
-  / multi-file cases) — usually reusable nearly verbatim.
+  / syntax-error / multi-file cases) — usually reusable nearly verbatim.
 - **Semantic findings** — exit-code meanings, stdout-vs-stderr signaling,
   partial-batch mutation behavior, check-scope/invalidation subtleties. Encode
   these in the spec's declarative fields and in fixture assertions.
