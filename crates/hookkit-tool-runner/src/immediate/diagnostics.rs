@@ -9,7 +9,7 @@ use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use std::path::{Path, PathBuf};
 
 /// Default home of immediate-mode diagnostics, outside the project.
-pub(crate) fn immediate_log_directory() -> PathBuf {
+pub(super) fn immediate_log_directory() -> PathBuf {
     std::env::temp_dir()
         .join("velvet-glove")
         .join("state")
@@ -18,7 +18,7 @@ pub(crate) fn immediate_log_directory() -> PathBuf {
 
 /// Write full diagnostics to the configured `diagnosticsDirectory`, or to the
 /// default location (with a user notice) when that cannot be written.
-pub(crate) fn write_diagnostics(
+pub(super) fn write_diagnostics(
     label: &str,
     diagnostics: &str,
     context: &ToolContext<'_>,
@@ -44,7 +44,7 @@ pub(crate) fn write_diagnostics(
     write_immediate_artifact(&immediate_log_directory(), &label, diagnostics, ctx)
 }
 
-pub(crate) fn write_immediate_artifact(
+pub(super) fn write_immediate_artifact(
     directory: &Path,
     label: &str,
     text: &str,
@@ -56,7 +56,7 @@ pub(crate) fn write_immediate_artifact(
         .map_err(Into::into)
 }
 
-pub(crate) fn runner_artifact_key(ctx: &RuntimeContext<'_>, label: String) -> ArtifactKey {
+pub(super) fn runner_artifact_key(ctx: &RuntimeContext<'_>, label: String) -> ArtifactKey {
     let session = ctx
         .session_id()
         .map(ToString::to_string)
@@ -72,7 +72,7 @@ pub(crate) fn runner_artifact_key(ctx: &RuntimeContext<'_>, label: String) -> Ar
     key
 }
 
-pub(crate) fn report_with_artifact(
+pub(super) fn report_with_artifact(
     title: String,
     diagnostics: String,
     artifact_path: PathBuf,

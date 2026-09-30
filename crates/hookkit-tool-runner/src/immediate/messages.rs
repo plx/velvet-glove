@@ -9,14 +9,14 @@ use minijinja::Environment;
 use std::path::Path;
 
 /// The tool identity a message template sees.
-pub(crate) struct TemplateTool<'a> {
-    pub(crate) name: &'a str,
-    pub(crate) id: &'a str,
-    pub(crate) project_root: &'a Path,
+pub(super) struct TemplateTool<'a> {
+    pub(super) name: &'a str,
+    pub(super) id: &'a str,
+    pub(super) project_root: &'a Path,
 }
 
 impl ToolContext<'_> {
-    pub(crate) fn template_tool(&self) -> TemplateTool<'_> {
+    pub(super) fn template_tool(&self) -> TemplateTool<'_> {
         TemplateTool {
             name: &self.spec.display_name,
             id: &self.spec.id,
@@ -27,16 +27,16 @@ impl ToolContext<'_> {
 
 /// Values a message template may reference besides the tool.
 #[derive(Default)]
-pub(crate) struct MessageArgs<'a> {
-    pub(crate) changed_files: &'a [String],
-    pub(crate) issue_files: &'a [String],
-    pub(crate) diagnostics_path: Option<&'a Path>,
+pub(super) struct MessageArgs<'a> {
+    pub(super) changed_files: &'a [String],
+    pub(super) issue_files: &'a [String],
+    pub(super) diagnostics_path: Option<&'a Path>,
     /// Phase, executable, and install hint of a failed or missing command.
-    pub(crate) phase_error: Option<(&'a str, &'a str, Option<&'a str>)>,
-    pub(crate) excerpt: &'a str,
+    pub(super) phase_error: Option<(&'a str, &'a str, Option<&'a str>)>,
+    pub(super) excerpt: &'a str,
 }
 
-pub(crate) fn render_template(
+pub(super) fn render_template(
     template: &str,
     tool: &TemplateTool<'_>,
     args: &MessageArgs<'_>,
@@ -75,7 +75,7 @@ pub(crate) fn render_template(
 /// Render `template`, or the built-in `fallback` with a user notice when the
 /// configured template cannot be rendered: the agent must still hear about
 /// changed files and remaining issues.
-pub(crate) fn render_with_fallback(
+pub(super) fn render_with_fallback(
     template: &str,
     fallback: &str,
     field: &str,
@@ -89,7 +89,7 @@ pub(crate) fn render_with_fallback(
     })
 }
 
-pub(crate) fn template_failure_notice(
+pub(super) fn template_failure_notice(
     tool: &TemplateTool<'_>,
     field: &str,
     error: &HookkitError,

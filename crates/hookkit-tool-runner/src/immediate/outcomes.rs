@@ -3,7 +3,7 @@
 use super::diagnostics::{report_with_artifact, write_diagnostics};
 use super::messages::{MessageArgs, render_template, template_failure_notice};
 use super::output::{AgentFeedback, AutoFixed, PendingIssues, RunnerPostToolUseOutput};
-use crate::ToolBatchStatus;
+use crate::immediate::ToolBatchStatus;
 use crate::jobs::{ChangeState, IssueState, ToolContext, ToolRunOutcome};
 use crate::paths::rel_display;
 use hookkit_common::UserNotice;
@@ -12,7 +12,7 @@ use hookkit_pkl_config::schema as pkl;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub(crate) fn accumulate_outcomes(
+pub(super) fn accumulate_outcomes(
     outcomes: Vec<ToolRunOutcome>,
     context: &ToolContext<'_>,
     ctx: &RuntimeContext<'_>,

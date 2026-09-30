@@ -12,12 +12,12 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Debug)]
-pub(crate) struct LoweringWarningArtifact {
+pub(super) struct LoweringWarningArtifact {
     directory: PathBuf,
     key: ArtifactKey,
 }
 
-pub(crate) fn lowering_warning_artifact(
+pub(super) fn lowering_warning_artifact(
     input: &PostToolUseInput,
     ctx: &RuntimeContext<'_>,
 ) -> Option<LoweringWarningArtifact> {
@@ -138,7 +138,7 @@ fn record_antigravity_lowering_warning(
         })
 }
 
-pub(crate) fn lower_domain_outcome(
+pub(super) fn lower_domain_outcome(
     harness: &HarnessId,
     outcome: RunnerDomainOutcome,
     lowering_warning_artifact: Option<&LoweringWarningArtifact>,

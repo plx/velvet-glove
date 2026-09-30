@@ -13,12 +13,12 @@ use std::path::{Path, PathBuf};
 /// [`RunnerDomainOutcome`] and lower it with the selected harness workflow.
 #[derive(Debug, Default)]
 pub struct RunnerPostToolUseOutput {
-    pub(crate) notices: Vec<UserNotice>,
-    pub(crate) agent_feedback: Vec<AgentFeedback>,
-    pub(crate) diagnostics: Vec<DiagnosticReport>,
-    pub(crate) auto_fixed: Vec<AutoFixed>,
-    pub(crate) harness_block: Option<String>,
-    pub(crate) lowering: pkl::LoweringPolicy,
+    pub(super) notices: Vec<UserNotice>,
+    pub(super) agent_feedback: Vec<AgentFeedback>,
+    pub(super) diagnostics: Vec<DiagnosticReport>,
+    pub(super) auto_fixed: Vec<AutoFixed>,
+    pub(super) harness_block: Option<String>,
+    pub(super) lowering: pkl::LoweringPolicy,
     excerpt_limits: ExcerptLimits,
 }
 
@@ -26,7 +26,7 @@ pub struct RunnerPostToolUseOutput {
 /// excerpt is cut only once every tool has run, so all of them share the
 /// excerpt budget fairly.
 #[derive(Debug)]
-pub(crate) enum AgentFeedback {
+pub(super) enum AgentFeedback {
     Rendered(String),
     Issues(Box<PendingIssues>),
 }
@@ -34,19 +34,19 @@ pub(crate) enum AgentFeedback {
 /// A tool's remaining issues, rendered through its `issuesAgent` or
 /// `issuesChangedAgent` template once the excerpt is known.
 #[derive(Debug)]
-pub(crate) struct PendingIssues {
-    pub(crate) template: String,
+pub(super) struct PendingIssues {
+    pub(super) template: String,
     /// Built-in template used when `template` fails to render.
-    pub(crate) fallback: String,
+    pub(super) fallback: String,
     /// Which `messages` field `template` came from, for error notices.
-    pub(crate) field: &'static str,
-    pub(crate) tool: String,
-    pub(crate) tool_id: String,
-    pub(crate) project_root: PathBuf,
-    pub(crate) changed_files: Vec<String>,
-    pub(crate) issue_files: Vec<String>,
-    pub(crate) diagnostics: PathBuf,
-    pub(crate) output: String,
+    pub(super) field: &'static str,
+    pub(super) tool: String,
+    pub(super) tool_id: String,
+    pub(super) project_root: PathBuf,
+    pub(super) changed_files: Vec<String>,
+    pub(super) issue_files: Vec<String>,
+    pub(super) diagnostics: PathBuf,
+    pub(super) output: String,
 }
 
 impl PendingIssues {
@@ -79,14 +79,14 @@ impl PendingIssues {
 /// limits are the deferred reporter's (`deferredReporting.excerptMax*`) and
 /// are divided among the tools that report issues exactly as at Stop.
 #[derive(Debug, Default)]
-pub(crate) struct ExcerptLimits {
+pub(super) struct ExcerptLimits {
     lines: usize,
     chars: usize,
     roots: Vec<PathBuf>,
 }
 
 impl ExcerptLimits {
-    pub(crate) fn new(reporting: &pkl::DeferredReporting, roots: Vec<PathBuf>) -> Self {
+    pub(super) fn new(reporting: &pkl::DeferredReporting, roots: Vec<PathBuf>) -> Self {
         Self {
             lines: reporting.excerpt_max_lines as usize,
             chars: reporting.excerpt_max_chars as usize,
@@ -114,19 +114,19 @@ impl ExcerptLimits {
 
 /// Files one tool changed and left clean.
 #[derive(Debug)]
-pub(crate) struct AutoFixed {
-    pub(crate) tool: String,
-    pub(crate) files: Vec<String>,
+pub(super) struct AutoFixed {
+    pub(super) tool: String,
+    pub(super) files: Vec<String>,
     /// Whether the agent learns about it through the shared auto-fix line
     /// (the tool keeps the default `cleanChangedAgent` template).
-    pub(crate) in_agent_line: bool,
+    pub(super) in_agent_line: bool,
 }
 
 /// One terse line naming the auto-fixed files (at most
 /// [`pkl::AUTO_FIXED_LISTED_FILES`], as at Stop) and the tools that changed
 /// each: `velvet-glove auto-fixed a.py (Ruff), b.ts (Prettier); re-read
 /// before editing.`
-pub(crate) fn auto_fixed_line<'a>(
+pub(super) fn auto_fixed_line<'a>(
     entries: impl IntoIterator<Item = &'a AutoFixed>,
 ) -> Option<String> {
     let mut files = Vec::<(&str, Vec<&str>)>::new();
@@ -157,50 +157,50 @@ pub(crate) fn auto_fixed_line<'a>(
 }
 
 impl RunnerPostToolUseOutput {
-    pub(crate) fn new(lowering: pkl::LoweringPolicy) -> Self {
+    pub(super) fn new(lowering: pkl::LoweringPolicy) -> Self {
         Self {
             lowering,
             ..Self::default()
         }
     }
 
-    pub(crate) fn with_user_notice(mut self, notice: UserNotice) -> Self {
+    pub(super) fn with_user_notice(mut self, notice: UserNotice) -> Self {
         self.notices.push(notice);
         self
     }
 
     #[cfg(test)]
-    pub(crate) fn with_agent_feedback(mut self, feedback: impl Into<String>) -> Self {
+    pub(super) fn with_agent_feedback(mut self, feedback: impl Into<String>) -> Self {
         self.agent_feedback
             .push(AgentFeedback::Rendered(feedback.into()));
         self
     }
 
     #[cfg(test)]
-    pub(crate) fn with_diagnostic_report(mut self, report: DiagnosticReport) -> Self {
+    pub(super) fn with_diagnostic_report(mut self, report: DiagnosticReport) -> Self {
         self.diagnostics.push(report);
         self
     }
 
-    pub(crate) fn with_harness_block(mut self, message: impl Into<String>) -> Self {
+    pub(super) fn with_harness_block(mut self, message: impl Into<String>) -> Self {
         self.harness_block = Some(message.into());
         self
     }
 
     #[cfg(test)]
-    pub(crate) fn with_auto_fixed(mut self, auto_fixed: AutoFixed) -> Self {
+    pub(super) fn with_auto_fixed(mut self, auto_fixed: AutoFixed) -> Self {
         self.auto_fixed.push(auto_fixed);
         self
     }
 
-    pub(crate) fn with_excerpt_limits(mut self, limits: ExcerptLimits) -> Self {
+    pub(super) fn with_excerpt_limits(mut self, limits: ExcerptLimits) -> Self {
         self.excerpt_limits = limits;
         self
     }
 
     /// Render every pending issue message, dividing the excerpt budget
     /// among them. Returns the agent-facing lines in order.
-    pub(crate) fn rendered_agent_feedback(&mut self) -> Vec<String> {
+    pub(super) fn rendered_agent_feedback(&mut self) -> Vec<String> {
         let feedback = std::mem::take(&mut self.agent_feedback);
         let pending = feedback
             .iter()
@@ -254,7 +254,7 @@ pub enum RunnerDomainOutcome {
     },
 }
 
-pub(crate) fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
+pub(super) fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
     output.notices.is_empty()
         && output.agent_feedback.is_empty()
         && output.diagnostics.is_empty()
