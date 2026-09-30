@@ -265,7 +265,7 @@ pub(crate) fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format_notice;
+    use crate::immediate::lowering::format_notice;
     use crate::paths::display_roots;
 
     #[test]
