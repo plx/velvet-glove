@@ -111,10 +111,19 @@ With `failFast`, an operational failure skips only the same tool workflow's
 later remedies, so a sibling workflow of that tool still runs. Check stages retain bounded job parallelism and deterministic result
 ordering. The complex deferred policy is split across `deferred/model.rs`,
 `deferred/execution.rs`, `deferred/attribution.rs`, `deferred/reporting.rs`,
-`deferred/guard.rs`, and `deferred/lowering.rs`; `excerpt.rs` and `vcs.rs` hold
-helpers both runners can share. The main module retains CLI, state
-transaction, artifact, and immediate-runner orchestration so the two product
-paths share conversion and process plumbing.
+`deferred/guard.rs`, and `deferred/lowering.rs`. The Stop-time flow around it
+(state transaction, block decision, and commit) lives in
+`deferred/turn_completion.rs`, with `deferred/plan.rs`, `deferred/artifacts.rs`,
+`deferred/summary.rs`, and `deferred/disposition.rs` for planning, run-bundle
+artifacts, `summary.json`, and pending-state disposition. The immediate
+PostToolUse path lives in `immediate/` (entry flow, outcome folding, message
+templates, diagnostics files, and harness lowering). The two product paths
+share the runtime tool model (`spec.rs`), Pkl conversion (`convert.rs`), file
+selection (`matcher.rs`), job and process plumbing (`jobs.rs`, `command.rs`,
+`snapshot.rs`), the project lock (`project_lock.rs`), and small helpers
+(`paths.rs`, `errors.rs`, `excerpt.rs`, `vcs.rs`). `hooks.rs` holds the hook
+entry points and their CLI options; `lib.rs` only declares modules and
+re-exports the public API.
 
 When a builtin has no explicit `workflows`, catalog validation proves its
 compatibility translation has a read-only final phase before it can ship as

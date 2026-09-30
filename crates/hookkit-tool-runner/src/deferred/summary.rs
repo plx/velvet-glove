@@ -16,18 +16,18 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BatchToolSummary {
-    pub(crate) tool_id: String,
-    pub(crate) file_count: usize,
-    pub(crate) issues: bool,
-    pub(crate) operational_failure: bool,
-    pub(crate) artifacts: Vec<String>,
+    pub(super) tool_id: String,
+    pub(super) file_count: usize,
+    pub(super) issues: bool,
+    pub(super) operational_failure: bool,
+    pub(super) artifacts: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BatchRunSummary {
+pub(super) struct BatchRunSummary {
     schema_version: u32,
-    pub(crate) run: BatchRunIdentity,
+    pub(super) run: BatchRunIdentity,
     status: &'static str,
     source_entry_count: usize,
     source_entry_ids: Vec<String>,
@@ -47,8 +47,8 @@ pub(crate) struct BatchRunSummary {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BatchRunIdentity {
-    pub(crate) id: String,
+pub(super) struct BatchRunIdentity {
+    pub(super) id: String,
     project_root: PathBuf,
     summary_path: PathBuf,
     state_directory: PathBuf,
@@ -90,12 +90,12 @@ struct PlannedStateDisposition {
 /// Why the run did or did not block, including the loop guard's view.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BlockMetadata {
-    pub(crate) reasons: BlockReasons,
-    pub(crate) stop_hook_active: bool,
-    pub(crate) fingerprint: String,
-    pub(crate) blocked: bool,
-    pub(crate) guard_note: Option<String>,
+pub(super) struct BlockMetadata {
+    pub(super) reasons: BlockReasons,
+    pub(super) stop_hook_active: bool,
+    pub(super) fingerprint: String,
+    pub(super) blocked: bool,
+    pub(super) guard_note: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,23 +109,23 @@ struct RenderedMessageMetadata {
     references_summary: bool,
 }
 
-pub(crate) struct BatchSummaryParts<'a> {
-    pub(crate) run: &'a RunBundle,
-    pub(crate) project_root: &'a Path,
-    pub(crate) state_directory: &'a Path,
-    pub(crate) harness: &'a HarnessId,
-    pub(crate) status: &'static str,
-    pub(crate) rendered_messages: RenderedMessages,
-    pub(crate) lowering: StopLoweringMetadata,
-    pub(crate) block: BlockMetadata,
-    pub(crate) source: (usize, Vec<String>),
-    pub(crate) candidates: &'a [PathBuf],
-    pub(crate) tools: Vec<BatchToolSummary>,
-    pub(crate) disposition: &'a DeferredStateDisposition,
-    pub(crate) result: DeferredRunResult,
+pub(super) struct BatchSummaryParts<'a> {
+    pub(super) run: &'a RunBundle,
+    pub(super) project_root: &'a Path,
+    pub(super) state_directory: &'a Path,
+    pub(super) harness: &'a HarnessId,
+    pub(super) status: &'static str,
+    pub(super) rendered_messages: RenderedMessages,
+    pub(super) lowering: StopLoweringMetadata,
+    pub(super) block: BlockMetadata,
+    pub(super) source: (usize, Vec<String>),
+    pub(super) candidates: &'a [PathBuf],
+    pub(super) tools: Vec<BatchToolSummary>,
+    pub(super) disposition: &'a DeferredStateDisposition,
+    pub(super) result: DeferredRunResult,
 }
 
-pub(crate) fn build_batch_summary(
+pub(super) fn build_batch_summary(
     parts: BatchSummaryParts<'_>,
 ) -> hookkit_core::Result<BatchRunSummary> {
     let run_id = run_id(parts.run.directory())?;
@@ -236,7 +236,7 @@ fn files_with_status(result: &DeferredRunResult, status: FileStatus) -> Vec<Path
         .collect()
 }
 
-pub(crate) fn run_id(directory: &Path) -> hookkit_core::Result<String> {
+pub(super) fn run_id(directory: &Path) -> hookkit_core::Result<String> {
     directory
         .file_name()
         .and_then(|name| name.to_str())

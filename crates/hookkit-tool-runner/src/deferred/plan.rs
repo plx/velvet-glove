@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct PlannedDeferredTool {
-    pub(crate) index: usize,
-    pub(crate) spec: Arc<ToolSpec>,
-    pub(crate) files: Vec<PathBuf>,
+    pub(super) index: usize,
+    pub(super) spec: Arc<ToolSpec>,
+    pub(super) files: Vec<PathBuf>,
 }
 
 pub(crate) fn build_deferred_plan(

@@ -12,25 +12,23 @@ mod reporting;
 mod summary;
 mod turn_completion;
 
+pub(crate) use artifacts::{prune_run_bundles, write_deferred_artifacts};
 pub(crate) use attribution::{Attribution, attribute, resolution_bases, source_failure_files};
 pub(crate) use execution::{
     DeferredLog, ScheduledWorkflow, combined_output, execute_deferred_workflows,
 };
 pub(crate) use guard::{LoopGuardState, decide as decide_loop_guard, issue_fingerprint};
 pub(crate) use lowering::{DEFAULT_BLOCK_REASON, StopLoweringMetadata, plan_stop_lowering};
+pub(crate) use plan::build_deferred_plan;
 pub(crate) use reporting::{
     BlockReasons, DeferredReporter, RenderedBuckets, RenderedMessages, TemplateRun, problem_entries,
 };
+pub(crate) use summary::BatchToolSummary;
+pub(crate) use turn_completion::{record_uncovered_candidates, run_turn_completion_input};
 
-pub(crate) use artifacts::prune_run_bundles;
-pub(crate) use artifacts::write_deferred_artifacts;
 pub use model::{
     ArtifactClassification, CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult,
     FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
     ToolReportRef,
 };
-pub(crate) use plan::build_deferred_plan;
 pub use reporting::{IssueExcerpt, ProblemSummary};
-pub(crate) use summary::BatchToolSummary;
-pub(crate) use turn_completion::record_uncovered_candidates;
-pub(crate) use turn_completion::run_turn_completion_input;

@@ -13,22 +13,22 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
-pub(crate) struct ActivityResolution {
-    pub(crate) not_applicable_files: BTreeSet<PathBuf>,
-    pub(crate) unresolved_targets: Vec<FileActivityTarget>,
-    pub(crate) gap_messages: BTreeSet<String>,
-    pub(crate) truncated: bool,
+pub(super) struct ActivityResolution {
+    pub(super) not_applicable_files: BTreeSet<PathBuf>,
+    pub(super) unresolved_targets: Vec<FileActivityTarget>,
+    pub(super) gap_messages: BTreeSet<String>,
+    pub(super) truncated: bool,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DeferredStateDisposition {
-    pub(crate) retry_files: BTreeSet<Utf8PathBuf>,
-    pub(crate) retry_targets: Vec<FileActivityTarget>,
-    pub(crate) retry_gaps: BTreeSet<String>,
-    pub(crate) handled_files: BTreeSet<Utf8PathBuf>,
+pub(super) struct DeferredStateDisposition {
+    pub(super) retry_files: BTreeSet<Utf8PathBuf>,
+    pub(super) retry_targets: Vec<FileActivityTarget>,
+    pub(super) retry_gaps: BTreeSet<String>,
+    pub(super) handled_files: BTreeSet<Utf8PathBuf>,
 }
 
-pub(crate) fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<String> {
+pub(super) fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<String> {
     view.events()
         .iter()
         .filter_map(|record| match record.event() {
@@ -39,7 +39,7 @@ pub(crate) fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) ->
         .collect()
 }
 
-pub(crate) fn record_activity_resolution(
+pub(super) fn record_activity_resolution(
     result: &mut DeferredRunResult,
     resolution: &ActivityResolution,
 ) {
@@ -74,7 +74,7 @@ pub(crate) fn record_activity_resolution(
     }
 }
 
-pub(crate) fn plan_deferred_state_disposition(
+pub(super) fn plan_deferred_state_disposition(
     result: &DeferredRunResult,
     resolution: &ActivityResolution,
     missing_tool_policy: pkl::MissingToolPolicy,
@@ -125,7 +125,7 @@ pub(crate) fn plan_deferred_state_disposition(
     })
 }
 
-pub(crate) fn apply_deferred_state_disposition(
+pub(super) fn apply_deferred_state_disposition(
     activity_store: &FileActivityStore,
     disposition: DeferredStateDisposition,
     run_id: String,
