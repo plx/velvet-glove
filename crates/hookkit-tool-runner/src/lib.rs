@@ -12,6 +12,9 @@ mod check;
 mod deferred;
 mod errors;
 mod excerpt;
+mod paths;
+#[cfg(test)]
+mod test_support;
 mod vcs;
 
 pub use check::{CheckError, CheckReport, CheckRequest, CheckStatus, run_check};
@@ -28,6 +31,9 @@ use deferred::{
 };
 
 use crate::errors::{activity_error, error_summary, invalid_data, state_error};
+use crate::paths::{
+    absolute_from, display_roots, normalize_path, path_arg, rel_display, slash_path,
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
 use hookkit_common::{
@@ -49,7 +55,7 @@ use hookkit_session_state::{
 use minijinja::Environment;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1097,16 +1103,6 @@ struct FailureContext<'a> {
     project_root: &'a Path,
     display_roots: &'a [PathBuf],
     policy: CommitPolicy,
-}
-
-/// Absolute prefixes that excerpts rewrite to project-relative paths: the
-/// canonical project root and the spelling the harness or config used.
-fn display_roots(canonical: &Path, spelled: &Path) -> Vec<PathBuf> {
-    let mut roots = vec![canonical.to_path_buf()];
-    if spelled != canonical {
-        roots.push(spelled.to_path_buf());
-    }
-    roots
 }
 
 impl DeferredCommit<'_, '_> {
@@ -4458,55 +4454,14 @@ fn display_command(program: &str, args: &[String]) -> String {
         .join(" ")
 }
 
-fn path_arg(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
-fn absolute_from(path: &Path, base: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        base.join(path)
-    }
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
-        return canonical;
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
-}
-
-fn slash_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn rel_display(path: &Path, project_root: &Path) -> String {
-    path.strip_prefix(project_root)
-        .map(slash_path)
-        .unwrap_or_else(|_| slash_path(path))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use hookkit_core::EventSpec as _;
     use proptest::prelude::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::paths::{display_roots, path_arg};
+    use crate::test_support::{job_with_file, unique_test_directory};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -4897,17 +4852,6 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    fn unique_test_directory(label: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "velvet-glove-runner-{label}-{}-{nanos}",
-            std::process::id()
-        ))
-    }
-
     #[test]
     fn nearest_workspace_indicator_resolves_nested_indicators_to_their_own_directory() {
         // A single-component indicator (e.g. "Cargo.toml") sitting directly in
@@ -5255,7 +5199,9 @@ mod tests {
             prop_assert!(actual <= job_count);
             prop_assert_eq!(actual == 0, job_count == 0);
         }
+    }
 
+    proptest! {
         /// Property: overlapping exit-code policy lists have a documented
         /// precedence (clean, then issues, then failure), and unlisted values
         /// use exactly the configured fallback.
@@ -5291,36 +5237,6 @@ mod tests {
             };
 
             prop_assert_eq!(classify_exit_code(&policy, code), expected);
-        }
-
-        /// Property: lexical normalization for not-yet-created output paths is
-        /// idempotent, absolute, and cannot retain traversal above root.
-        #[test]
-        fn non_existing_output_path_normalization_is_stable(
-            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
-        ) {
-            let path = PathBuf::from(format!(
-                "/hookkit-property-path-that-does-not-exist/{}/{}",
-                std::process::id(),
-                segments.join("/")
-            ));
-            let once = normalize_path(&path);
-            let twice = normalize_path(&once);
-
-            prop_assert_eq!(&once, &twice);
-            prop_assert!(once.is_absolute());
-            let contains_traversal = once.components().any(|component| {
-                matches!(component, Component::CurDir | Component::ParentDir)
-            });
-            prop_assert!(!contains_traversal);
-        }
-    }
-
-    fn job_with_file(root: &Path, name: &str) -> ToolJob {
-        ToolJob {
-            workspace_dir: root.to_path_buf(),
-            workspace_indicator: None,
-            files: vec![root.join(name)],
         }
     }
 
