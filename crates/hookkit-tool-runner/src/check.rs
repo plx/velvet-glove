@@ -5,14 +5,14 @@
 //! guard, or native lowering is involved. Command logs and a `summary.json`
 //! go to a fresh directory so excerpts can point at full output.
 
+use crate::convert::resolve_run_order;
 use crate::deferred::{
-    DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary, execute_deferred_workflows,
-    problem_entries,
+    BatchToolSummary, DeferredReporter, DeferredRunResult, IssueExcerpt, ProblemSummary,
+    build_deferred_plan, execute_deferred_workflows, problem_entries, prune_run_bundles,
+    record_uncovered_candidates, write_deferred_artifacts,
 };
-use crate::{
-    BatchToolSummary, build_deferred_plan, display_roots, normalize_path,
-    record_uncovered_candidates, resolve_run_order, write_deferred_artifacts,
-};
+use crate::paths::{display_roots, normalize_path};
+use crate::project_lock::lock_project;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -135,7 +135,7 @@ pub fn run_check(request: CheckRequest<'_>) -> Result<CheckReport, CheckError> {
 
     let log_directory = new_log_directory(request.log_root)?;
     let mut execution = {
-        let _project = crate::lock_project(&project_root);
+        let _project = lock_project(&project_root);
         execute_deferred_workflows(&plan, settings.jobs, settings.fail_fast)
     };
     let tool_summaries = write_deferred_artifacts(
@@ -200,6 +200,6 @@ fn new_log_directory(root: &Path) -> Result<PathBuf, CheckError> {
             directory.display()
         ))
     })?;
-    crate::prune_run_bundles(root, RETAINED_CHECK_RUNS, &directory);
+    prune_run_bundles(root, RETAINED_CHECK_RUNS, &directory);
     Ok(directory)
 }
