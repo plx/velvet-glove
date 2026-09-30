@@ -10,6 +10,7 @@
 
 mod check;
 mod deferred;
+mod errors;
 mod excerpt;
 mod vcs;
 
@@ -26,6 +27,7 @@ use deferred::{
     plan_stop_lowering, resolution_bases, source_failure_files,
 };
 
+use crate::errors::{activity_error, error_summary, invalid_data, state_error};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
 use hookkit_common::{
@@ -1984,19 +1986,11 @@ fn failure_messages(headline: &str, detail: &str, log: &Path, blocking: bool) ->
     }
 }
 
-fn state_error(error: hookkit_session_state::StateError) -> HookkitError {
-    std::io::Error::other(error).into()
-}
-
 fn state_root(override_dir: Option<&Path>) -> StateRoot {
     StateRoot::new(override_dir.map_or_else(
         || std::env::temp_dir().join("velvet-glove").join("state"),
         Path::to_path_buf,
     ))
-}
-
-fn activity_error(error: hookkit_file_activity::FileActivityError) -> HookkitError {
-    std::io::Error::other(error).into()
 }
 
 /// Run an exact aligned input through the Pkl-driven runner.
@@ -2296,29 +2290,6 @@ struct AutoFixed {
     /// Whether the agent learns about it through the shared auto-fix line
     /// (the tool keeps the default `cleanChangedAgent` template).
     in_agent_line: bool,
-}
-
-/// Longest configuration or tool error summary echoed in a user notice.
-const ERROR_SUMMARY_CHARS: usize = 300;
-
-/// One-line summary of an error: its first line, plus the first informative
-/// line after it when the first only introduces the detail (`pkl eval failed
-/// for <file>:` followed by Pkl's `–– Pkl Error ––` banner and message).
-fn error_summary(detail: &str) -> String {
-    let mut lines = detail
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty());
-    let first = lines.next().unwrap_or_default();
-    let summary = match first.strip_suffix(':') {
-        Some(head) => match lines.find(|line| !line.starts_with("––") && !line.starts_with("--"))
-        {
-            Some(next) => format!("{head}: {}", next.trim_start_matches("- ")),
-            None => head.to_owned(),
-        },
-        None => first.to_owned(),
-    };
-    excerpt::clip(&summary, 1, ERROR_SUMMARY_CHARS).text
 }
 
 /// One terse line naming the auto-fixed files (at most
@@ -4529,10 +4500,6 @@ fn rel_display(path: &Path, project_root: &Path) -> String {
         .unwrap_or_else(|_| slash_path(path))
 }
 
-fn invalid_data(message: String) -> HookkitError {
-    std::io::Error::new(std::io::ErrorKind::InvalidData, message).into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4683,23 +4650,6 @@ mod tests {
             String::from_utf8_lossy(emission.stderr()).trim_end(),
             "velvet-glove auto-fixed src/a.py (Ruff); re-read before editing.\nCustom rewrote web/c.ts\nvelvet-glove could not run ESLint (eslint not found)."
         );
-    }
-
-    #[test]
-    fn error_summaries_keep_the_informative_line() {
-        assert_eq!(
-            error_summary(
-                "pkl eval failed for /p/.velvet-glove/post-tool-use.pkl:\n–– Pkl Error ––\nExpected value of type `Int`, but got type `String`.\n\n2 | jobs = \"x\"\n"
-            ),
-            "pkl eval failed for /p/.velvet-glove/post-tool-use.pkl: Expected value of type `Int`, but got type `String`."
-        );
-        assert_eq!(
-            error_summary(
-                "invalid Velvet Glove configuration:\n- ruff (ruff): invalid file glob `src/{a`"
-            ),
-            "invalid Velvet Glove configuration: ruff (ruff): invalid file glob `src/{a`"
-        );
-        assert_eq!(error_summary("plain failure"), "plain failure");
     }
 
     fn emitted_json(output: PostToolUseOutput) -> (serde_json::Value, Vec<u8>) {
